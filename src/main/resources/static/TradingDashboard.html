@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Algo Mission Control</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --text-main: #e0e0e0;
+            --accent-blue: #007acc;
+            --btn-green: #28a745;
+            --btn-yellow: #ffc107;
+            --btn-red: #dc3545;
+            --btn-darkred: #8b0000;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            margin: 0;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        .dashboard {
+            background-color: var(--panel-bg);
+            padding: 16px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            width: 100%;
+            height: calc(100vh - 20px);
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        h2 {
+            margin: 0;
+            color: var(--accent-blue);
+            border-bottom: 1px solid #333;
+            padding-bottom: 8px;
+            text-align: center;
+        }
+
+        .top-section {
+            display: grid;
+            grid-template-columns: 1.1fr 1.3fr;
+            gap: 12px;
+            align-items: start;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .status-box {
+            background-color: #2a2a2a;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: monospace;
+            text-align: left;
+            font-size: 13px;
+            line-height: 1.5;
+            min-height: 180px;
+        }
+
+        .status-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .btn-refresh {
+            background-color: var(--accent-blue);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .btn-refresh:hover {
+            background-color: #005f9e;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-running { background-color: var(--btn-green); box-shadow: 0 0 8px var(--btn-green); }
+        .status-paused { background-color: var(--btn-yellow); box-shadow: 0 0 8px var(--btn-yellow); }
+        .status-killed { background-color: var(--btn-red); box-shadow: 0 0 8px var(--btn-red); }
+        .status-offline { background-color: gray; }
+
+        .btn {
+            display: inline-block;
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-resume { background-color: var(--btn-green); }
+        .btn-resume:hover { background-color: #218838; }
+
+        .btn-pause { background-color: var(--btn-yellow); color: #333; }
+        .btn-pause:hover { background-color: #e0a800; }
+
+        .btn-cancel { background-color: var(--accent-blue); }
+        .btn-cancel:hover { background-color: #005f9e; }
+
+        .btn-flatten { background-color: var(--btn-red); }
+        .btn-flatten:hover { background-color: #c82333; }
+
+        .btn-kill { background-color: var(--btn-darkred); border: 2px solid red; }
+        .btn-kill:hover { background-color: red; }
+
+        .input-symbol {
+            width: 100%;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background-color: #2a2a2a;
+            color: var(--text-main);
+            box-sizing: border-box;
+            text-transform: uppercase;
+        }
+
+        .controls-panel {
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            padding: 12px;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .symbol-row {
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: 1fr 220px;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .streams-grid {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .stream-pane {
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            padding: 10px;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stream-title {
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: var(--accent-blue);
+        }
+
+        .log-area {
+            font-size: 12px;
+            color: #bdbdbd;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            background-color: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            font-family: monospace;
+            text-align: left;
+            white-space: pre-wrap;
+        }
+
+        @media (max-width: 1100px) {
+            .top-section,
+            .summary-grid,
+            .streams-grid,
+            .controls-panel,
+            .symbol-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <h2>Algo Mission Control</h2>
+
+    <div class="top-section">
+        <div class="summary-grid">
+            <div class="status-box" id="statusBox">
+                <div class="status-header">
+                    <div><span id="connIndicator" class="status-indicator status-offline"></span><span id="connText">Connecting to API...</span></div>
+                    <button class="btn-refresh" onclick="fetchStatus()">Refresh Status</button>
+                </div>
+                <div><b>Status Path:</b> <span id="statusPathText">N/A</span></div>
+                <div style="margin-top:10px;"><b>State:</b> <span id="stateText">Unknown</span></div>
+                <div><b>Symbol:</b> <span id="symbolText">Unknown</span></div>
+                <div><b>Position:</b> <span id="posText">0</span></div>
+                <div><b>Order InFlight:</b> <span id="orderInflightText">false</span></div>
+                <div><b>Order Placed:</b> <span id="orderPlacedText">false</span></div>
+                <div><b>Orders Today:</b> <span id="ordersTodayText">0</span></div>
+                <div><b>Last Order:</b> <span id="lastOrderText">N/A</span></div>
+                <div><b>Last Avg Fill:</b> <span id="lastAvgFillText">N/A</span></div>
+            </div>
+
+            <div class="status-box" id="healthBox">
+                <div class="status-header">
+                    <div><b>Health & Metrics</b></div>
+                    <button class="btn-refresh" onclick="fetchHealthAndMetrics()">Refresh HM</button>
+                </div>
+                <div><b>Health:</b> <span id="healthStatusText">Unknown</span></div>
+                <div><b>IBKR Health:</b> <span id="ibkrHealthText">Unknown</span></div>
+                <div><b>Metric IBKR Connected:</b> <span id="metricIbkrConnectedText">N/A</span></div>
+                <div><b>Metric Open Orders:</b> <span id="metricOpenOrdersText">N/A</span></div>
+                <div><b>Metric Daily Submitted:</b> <span id="metricDailySubmittedText">N/A</span></div>
+                <div><b>Metric Strategy Enabled:</b> <span id="metricStrategyEnabledText">N/A</span></div>
+            </div>
+        </div>
+
+        <div class="controls-panel">
+            <button class="btn btn-resume" onclick="sendCommand('/resume')">▶ START / RESUME TRADING</button>
+            <button class="btn btn-pause" onclick="sendCommand('/pause')">⏸ PAUSE TRADING</button>
+            <button class="btn btn-cancel" onclick="sendCommand('/cancel-open-orders')">✖ CANCEL OPEN ORDERS</button>
+            <button class="btn btn-cancel" onclick="sendGetCommand('/clear-locks')">🔓 CLEAR STRATEGY LOCKS</button>
+            <button class="btn btn-flatten" onclick="sendCommand('/flatten')">⚠ PANIC FLATTEN POSITION</button>
+            <button class="btn btn-kill" onclick="sendCommand('/kill-switch/true')">☢ ENGAGE KILL SWITCH</button>
+            <button class="btn btn-resume" onclick="sendCommand('/kill-switch/false')">✅ DISENGAGE KILL SWITCH</button>
+
+            <div class="symbol-row">
+                <input id="symbolInput" class="input-symbol" type="text" placeholder="Enter symbol (e.g. TSLA)" maxlength="10">
+                <button class="btn btn-cancel" onclick="switchSymbol()">🔁 SWITCH SYMBOL</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="streams-grid">
+        <div class="stream-pane">
+            <div class="stream-title">Trade Stream</div>
+            <div class="log-area" id="tradeLogArea">Ready.</div>
+        </div>
+        <div class="stream-pane">
+            <div class="stream-title">App Stream</div>
+            <div class="log-area" id="appLogArea">Ready.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const BASE_ORIGIN = (window.location.origin && window.location.origin.startsWith("http"))
+        ? window.location.origin
+        : "http://localhost:8080";
+    const API_BASE = `${BASE_ORIGIN}/api/control`;
+    const STATUS_PATH = `${API_BASE}/status`;
+    const LOG_STREAM_PATH = `${API_BASE}/logs/stream`;
+    const APP_LOG_STREAM_PATH = `${API_BASE}/logs/app/stream`;
+    const ACTUATOR_BASE = `${BASE_ORIGIN}/actuator`;
+    const MAX_LOG_LINES = 250;
+
+    let logStream = null;
+    let appLogStream = null;
+    let streamErrorLogged = false;
+    let appStreamErrorLogged = false;
+    const tradeLogLines = [];
+    const appLogLines = [];
+
+    document.getElementById("statusPathText").innerText = STATUS_PATH;
+
+    function renderLogLines(logAreaId, lines) {
+        const logArea = document.getElementById(logAreaId);
+        logArea.innerText = lines.join("\n");
+        logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    function appendTradeLogLine(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        tradeLogLines.push(`[${timestamp}] ${message}`);
+        if (tradeLogLines.length > MAX_LOG_LINES) {
+            tradeLogLines.splice(0, tradeLogLines.length - MAX_LOG_LINES);
+        }
+        renderLogLines("tradeLogArea", tradeLogLines);
+    }
+
+    function appendAppLogLine(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        appLogLines.push(`[${timestamp}] ${message}`);
+        if (appLogLines.length > MAX_LOG_LINES) {
+            appLogLines.splice(0, appLogLines.length - MAX_LOG_LINES);
+        }
+        renderLogLines("appLogArea", appLogLines);
+    }
+
+    function startLogStream() {
+        if (logStream) {
+            logStream.close();
+        }
+
+        appendTradeLogLine(`Connecting log stream: ${LOG_STREAM_PATH}`);
+        logStream = new EventSource(LOG_STREAM_PATH);
+
+        logStream.addEventListener("meta", (event) => {
+            streamErrorLogged = false;
+            appendTradeLogLine(event.data);
+        });
+
+        logStream.addEventListener("log", (event) => {
+            streamErrorLogged = false;
+            appendTradeLogLine(event.data);
+        });
+
+        logStream.onerror = () => {
+            if (!streamErrorLogged) {
+                appendTradeLogLine("Log stream temporarily disconnected. Reconnecting...");
+                streamErrorLogged = true;
+            }
+        };
+    }
+
+    function startAppLogStream() {
+        if (appLogStream) {
+            appLogStream.close();
+        }
+
+        appendAppLogLine(`Connecting app log stream: ${APP_LOG_STREAM_PATH}`);
+        appLogStream = new EventSource(APP_LOG_STREAM_PATH);
+
+        appLogStream.addEventListener("meta", (event) => {
+            appStreamErrorLogged = false;
+            appendAppLogLine(event.data);
+        });
+
+        appLogStream.addEventListener("log", (event) => {
+            appStreamErrorLogged = false;
+            appendAppLogLine(event.data);
+        });
+
+        appLogStream.onerror = () => {
+            if (!appStreamErrorLogged) {
+                appendAppLogLine("App log stream temporarily disconnected. Reconnecting...");
+                appStreamErrorLogged = true;
+            }
+        };
+    }
+
+    // Update the UI based on the JSON response from your Spring Boot controller
+    function updateUI(statusObj) {
+        document.getElementById("connIndicator").className = "status-indicator status-running";
+        document.getElementById("connText").innerText = "API Connected";
+
+        let stateStr = "RUNNING";
+        document.getElementById("connIndicator").className = "status-indicator status-running";
+
+        const isPaused = (typeof statusObj.isPaused === 'boolean')
+            ? statusObj.isPaused
+            : (statusObj.strategyEnabled === false);
+        const killSwitchEngaged = (typeof statusObj.killSwitchEngaged === 'boolean')
+            ? statusObj.killSwitchEngaged
+            : (statusObj.killSwitch === true);
+
+        if (isPaused) {
+            stateStr = "PAUSED";
+            document.getElementById("connIndicator").className = "status-indicator status-paused";
+        }
+        if (killSwitchEngaged) {
+            stateStr = "KILL SWITCH ENGAGED";
+            document.getElementById("connIndicator").className = "status-indicator status-killed";
+        }
+
+        document.getElementById("stateText").innerText = stateStr;
+        document.getElementById("symbolText").innerText = statusObj.currentSymbol || statusObj.symbol || "N/A";
+        document.getElementById("posText").innerText = statusObj.currentPosition || "0";
+        document.getElementById("orderInflightText").innerText = String(statusObj.orderInFlight ?? false);
+        document.getElementById("orderPlacedText").innerText = String(statusObj.orderPlaced ?? false);
+        document.getElementById("ordersTodayText").innerText = String(statusObj.ordersPlacedToday ?? statusObj.dailySubmittedOrders ?? 0);
+
+        const lastOrderId = statusObj.lastPlacedOrderId;
+        const lastOrderAction = statusObj.lastPlacedOrderAction || "";
+        const lastOrderQty = statusObj.lastPlacedOrderQuantity || 0;
+        if (typeof lastOrderId === 'number' && lastOrderId >= 0) {
+            document.getElementById("lastOrderText").innerText = `${lastOrderId} ${lastOrderAction} x${lastOrderQty}`;
+        } else {
+            document.getElementById("lastOrderText").innerText = "N/A";
+        }
+
+        const lastAvgFill = Number(statusObj.lastOrderAvgFillPrice ?? 0);
+        document.getElementById("lastAvgFillText").innerText = lastAvgFill > 0
+            ? lastAvgFill.toFixed(4)
+            : "N/A";
+    }
+
+    // Polling function to check status every 2 seconds
+    async function fetchStatus() {
+        try {
+            const response = await fetch(STATUS_PATH);
+            if (response.ok) {
+                const data = await response.json();
+                updateUI(data);
+            } else {
+                throw new Error("Server returned " + response.status);
+            }
+        } catch (error) {
+            document.getElementById("connIndicator").className = "status-indicator status-offline";
+            document.getElementById("connText").innerText = "API Offline / Disconnected";
+            document.getElementById("stateText").innerText = "Unknown";
+        }
+    }
+
+    async function fetchMetric(metricName) {
+        const response = await fetch(`${ACTUATOR_BASE}/metrics/${encodeURIComponent(metricName)}`);
+        if (!response.ok) {
+            throw new Error(`metric ${metricName} unavailable`);
+        }
+        const data = await response.json();
+        if (!data || !Array.isArray(data.measurements) || data.measurements.length === 0) {
+            return null;
+        }
+        const first = data.measurements[0];
+        return typeof first.value === 'number' ? first.value : null;
+    }
+
+    async function fetchHealthAndMetrics() {
+        try {
+            const healthResp = await fetch(`${ACTUATOR_BASE}/health`);
+            if (healthResp.ok) {
+                const health = await healthResp.json();
+                document.getElementById("healthStatusText").innerText = health.status || "UNKNOWN";
+
+                const ibkrStatus = health?.components?.ibkrHealthIndicator?.status
+                    || health?.components?.ibkr?.status
+                    || "N/A";
+                document.getElementById("ibkrHealthText").innerText = ibkrStatus;
+            } else {
+                document.getElementById("healthStatusText").innerText = `HTTP ${healthResp.status}`;
+                document.getElementById("ibkrHealthText").innerText = "N/A";
+            }
+        } catch (error) {
+            document.getElementById("healthStatusText").innerText = "Unavailable";
+            document.getElementById("ibkrHealthText").innerText = "Unavailable";
+        }
+
+        try {
+            const [ibkrConnected, openOrders, dailySubmitted, strategyEnabled] = await Promise.all([
+                fetchMetric("trading.ibkr.connected"),
+                fetchMetric("trading.orders.open"),
+                fetchMetric("trading.orders.daily_submitted"),
+                fetchMetric("trading.strategy.enabled")
+            ]);
+
+            document.getElementById("metricIbkrConnectedText").innerText = ibkrConnected ?? "N/A";
+            document.getElementById("metricOpenOrdersText").innerText = openOrders ?? "N/A";
+            document.getElementById("metricDailySubmittedText").innerText = dailySubmitted ?? "N/A";
+            document.getElementById("metricStrategyEnabledText").innerText = strategyEnabled ?? "N/A";
+        } catch (error) {
+            document.getElementById("metricIbkrConnectedText").innerText = "Unavailable";
+            document.getElementById("metricOpenOrdersText").innerText = "Unavailable";
+            document.getElementById("metricDailySubmittedText").innerText = "Unavailable";
+            document.getElementById("metricStrategyEnabledText").innerText = "Unavailable";
+        }
+    }
+
+    // Function to send POST commands to your Spring Boot controller
+    async function sendCommand(endpoint) {
+        appendAppLogLine(`Sending command: ${endpoint}...`);
+        
+        try {
+            const response = await fetch(`${API_BASE}${endpoint}`, {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                appendAppLogLine(`Success: ${data.message}`);
+                if (data.status) {
+                    updateUI(data.status);
+                } else {
+                    fetchStatus(); // Force a refresh if status wasn't included
+                }
+            } else {
+                appendAppLogLine(`Error: HTTP ${response.status}`);
+            }
+        } catch (error) {
+            appendAppLogLine(`Network Error: Could not reach bot.`);
+        }
+    }
+
+    async function sendGetCommand(endpoint) {
+        appendAppLogLine(`Sending command: ${endpoint}...`);
+
+        try {
+            const response = await fetch(`${API_BASE}${endpoint}`);
+
+            if (response.ok) {
+                const data = await response.json();
+                appendAppLogLine(`Success: ${data.message || 'command completed'}`);
+                if (data.status) {
+                    updateUI(data.status);
+                } else {
+                    fetchStatus();
+                }
+            } else {
+                appendAppLogLine(`Error: HTTP ${response.status}`);
+            }
+        } catch (error) {
+            appendAppLogLine(`Network Error: Could not reach bot.`);
+        }
+    }
+
+    async function switchSymbol() {
+        const input = document.getElementById("symbolInput");
+        const nextSymbol = (input.value || "").trim().toUpperCase();
+
+        if (!nextSymbol) {
+            appendAppLogLine("Please enter a symbol first.");
+            return;
+        }
+
+        appendAppLogLine(`Switching symbol to ${nextSymbol}...`);
+        try {
+            const response = await fetch(`${API_BASE}/switch/${encodeURIComponent(nextSymbol)}`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                appendAppLogLine(`Success: ${data.message || 'symbol switched'}`);
+                if (data.status) {
+                    updateUI(data.status);
+                } else {
+                    fetchStatus();
+                }
+                input.value = nextSymbol;
+            } else {
+                appendAppLogLine(`Error: HTTP ${response.status}`);
+            }
+        } catch (error) {
+            appendAppLogLine(`Network Error: Could not reach bot.`);
+        }
+    }
+
+    // Start polling the status immediately
+    startLogStream();
+    startAppLogStream();
+    fetchStatus();
+    fetchHealthAndMetrics();
+    setInterval(fetchStatus, 2000); // Check every 2 seconds
+    setInterval(fetchHealthAndMetrics, 5000); // Check health/metrics every 5 seconds
+</script>
+
+</body>
+</html>
