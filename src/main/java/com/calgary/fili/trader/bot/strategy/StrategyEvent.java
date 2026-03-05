@@ -57,6 +57,22 @@ public abstract class StrategyEvent {
         }
     }
 
+    public static class QuoteSnapshotEvent extends StrategyEvent {
+        public final double bidPrice;
+        public final double askPrice;
+        public final long bidSize;
+        public final long askSize;
+        public final double shortableShares;
+
+        public QuoteSnapshotEvent(double bidPrice, double askPrice, long bidSize, long askSize, double shortableShares) {
+            this.bidPrice = bidPrice;
+            this.askPrice = askPrice;
+            this.bidSize = bidSize;
+            this.askSize = askSize;
+            this.shortableShares = shortableShares;
+        }
+    }
+
     public static class OrderSubmittedEvent extends StrategyEvent {
         public final int orderId;
         public final String action;

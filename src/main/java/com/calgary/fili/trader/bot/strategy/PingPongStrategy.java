@@ -19,7 +19,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -32,6 +34,13 @@ public class PingPongStrategy implements TradingStrategy {
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final DateTimeFormatter MARKET_TS_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV");
     private static final Logger log = LoggerFactory.getLogger(PingPongStrategy.class);
+    private static final boolean USE_RSI_PRE_GATES = Boolean.parseBoolean(System.getProperty("strategy.useRsiPreGate", "false"));
+    private static final double RSI_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiLongExitThreshold", "50.0"));
+    private static final double RSI_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortExitThreshold", "50.0"));
+    private static final double RSI_LONG_ENTRY_OPEN_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiLongEntryOpenThreshold", "34.0"));
+    private static final double RSI_LONG_ENTRY_REGULAR_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiLongEntryRegularThreshold", "40.0"));
+    private static final double RSI_SHORT_ENTRY_OPEN_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortEntryOpenThreshold", "66.0"));
+    private static final double RSI_SHORT_ENTRY_REGULAR_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortEntryRegularThreshold", "60.0"));
 
     public record StrategyState(double lastPrice, int tradeCount, boolean enabled, boolean isArmed, boolean isVolatile, double yesterdayClose) {}
 
@@ -41,6 +50,7 @@ public class PingPongStrategy implements TradingStrategy {
     // Core Risk Parameters
     private final int tradeQuantity;
     private final int maxTrades;
+    private final int rsiPeriod;
     private final double stopLossPercentage;
     private final double maxDailyDrawdown;
 
@@ -109,7 +119,33 @@ public class PingPongStrategy implements TradingStrategy {
     private long latestCallVolume = 0L;
     private long prevPutVolume = 0L;
     private long prevCallVolume = 0L;
+    private double latestBidPrice = 0.0;
+    private double latestAskPrice = 0.0;
+    private long latestBidSize = 0L;
+    private long latestAskSize = 0L;
+    private double latestShortableShares = 0.0;
     private boolean optionVolumeWarningLogged = false;
+
+    // Extended features state (safe to keep even if model uses base 23 features).
+    private final Map<Integer, Double> minuteVolumeBaseline = new HashMap<>();
+    private final Deque<Double> returnWindow20 = new ArrayDeque<>();
+    private final Deque<Double> realizedVolWindow100 = new ArrayDeque<>();
+    private final Deque<Double> spreadWindow100 = new ArrayDeque<>();
+    private LocalDate featureSessionDate = null;
+    private int openingRangeBarsCount = 0;
+    private double openingRangeHigh = 0.0;
+    private double openingRangeLow = 0.0;
+
+    // --- 30-SECOND AGGREGATION BUCKET ---
+    private static final int BARS_PER_30S_BUCKET = 6;
+    private int bucketCount = 0;
+    private long bucketEpoch = 0L;
+    private double bucketOpen = 0.0;
+    private double bucketHigh = 0.0;
+    private double bucketLow = Double.MAX_VALUE;
+    private double bucketClose = 0.0;
+    private long bucketVolume = 0L;
+    private double bucketWapSum = 0.0;
 
 
     // Latency Tracking
@@ -247,6 +283,7 @@ public class PingPongStrategy implements TradingStrategy {
         this.symbol = symbol;
         this.tradeQuantity = tradeQuantity;
         this.maxTrades = maxTrades;
+        this.rsiPeriod = Math.max(2, rsiPeriod);
         this.stopLossPercentage = Math.max(0.0001, stopLossPercentage);
         this.maxDailyDrawdown = Math.max(1.0, maxDailyDrawdown);
 
@@ -302,6 +339,8 @@ public class PingPongStrategy implements TradingStrategy {
                     handleTapeTrade(e.tradePrice, e.tradeSize, e.bidPrice, e.askPrice);
                 } else if (event instanceof StrategyEvent.OptionVolumeEvent e) {
                     handleOptionVolumeUpdate(e.putVolume, e.callVolume);
+                } else if (event instanceof StrategyEvent.QuoteSnapshotEvent e) {
+                    handleQuoteSnapshot(e.bidPrice, e.askPrice, e.bidSize, e.askSize, e.shortableShares);
                 } else if (event instanceof StrategyEvent.OrderSubmittedEvent e) {
                     handleOrderSubmitted(e.orderId, e.action, e.quantity);
                 } else if (event instanceof StrategyEvent.OrderProgressEvent e) {
@@ -426,9 +465,21 @@ public class PingPongStrategy implements TradingStrategy {
         eventQueue.offer(new StrategyEvent.OptionVolumeEvent(putVolume, callVolume));
     }
 
+    public void onQuoteSnapshot(double bidPrice, double askPrice, long bidSize, long askSize, double shortableShares) {
+        eventQueue.offer(new StrategyEvent.QuoteSnapshotEvent(bidPrice, askPrice, bidSize, askSize, shortableShares));
+    }
+
     private void handleOptionVolumeUpdate(long putVolume, long callVolume) {
         latestPutVolume = Math.max(0L, putVolume);
         latestCallVolume = Math.max(0L, callVolume);
+    }
+
+    private void handleQuoteSnapshot(double bidPrice, double askPrice, long bidSize, long askSize, double shortableShares) {
+        latestBidPrice = Math.max(0.0, bidPrice);
+        latestAskPrice = Math.max(0.0, askPrice);
+        latestBidSize = Math.max(0L, bidSize);
+        latestAskSize = Math.max(0L, askSize);
+        latestShortableShares = Math.max(0.0, shortableShares);
     }
 
     private void handleTapeTrade(double tradePrice, long tradeSize, double bidPrice, double askPrice) {
@@ -507,7 +558,7 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     // =========================================================================
-    // STREAM 2: THE BRAIN (5-Second Bars for AI Evaluation)
+    // STREAM 2: THE BRAIN (5-second feed aggregated into 30-second AI bars)
     // =========================================================================
     public void on5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
         eventQueue.offer(new StrategyEvent.BarEvent(time, open, high, low, close, volume, wap));
@@ -517,17 +568,84 @@ public class PingPongStrategy implements TradingStrategy {
         this.currentTickArrivalTime = System.currentTimeMillis();
         this.lastPrice = close;
         flowData("STRATEGY.BAR", "symbol=" + symbol + " epoch=" + time + " ohlc=" + open + "/" + high + "/" + low + "/" + close + " vol=" + volume + " wap=" + wap);
+
+        if (bucketCount == 0) {
+            bucketEpoch = time;
+            bucketOpen = open;
+            bucketHigh = high;
+            bucketLow = low;
+            bucketClose = close;
+            bucketVolume = volume;
+            bucketWapSum = wap * volume;
+        } else {
+            bucketHigh = Math.max(bucketHigh, high);
+            bucketLow = Math.min(bucketLow, low);
+            bucketClose = close;
+            bucketVolume += volume;
+            bucketWapSum += (wap * volume);
+        }
+
+        bucketCount++;
+
+        if (bucketCount == BARS_PER_30S_BUCKET) {
+            double finalWap = bucketVolume > 0 ? (bucketWapSum / bucketVolume) : bucketClose;
+            System.out.printf(
+                ">>> [30s BUCKET] epoch=%d ohlc=%.2f/%.2f/%.2f/%.2f vol=%d vwap=%.4f%n",
+                bucketEpoch, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap
+            );
+            process30SecondBar(bucketEpoch, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap);
+
+            bucketCount = 0;
+            bucketEpoch = 0L;
+            bucketOpen = 0.0;
+            bucketHigh = 0.0;
+            bucketLow = Double.MAX_VALUE;
+            bucketClose = 0.0;
+            bucketVolume = 0L;
+            bucketWapSum = 0.0;
+        }
+    }
+
+    private void process30SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
         
         this.currentMarketTime = LocalDateTime.ofEpochSecond(time, 0, ZoneOffset.UTC)
                               .atZone(ZoneId.of("UTC"))
                               .withZoneSameInstant(ZoneId.of("America/New_York")) // LOCKED TO ET
                                               .toLocalDateTime();
 
+        LocalDate barDate = this.currentMarketTime.toLocalDate();
+        if (featureSessionDate == null || !featureSessionDate.equals(barDate)) {
+            featureSessionDate = barDate;
+            openingRangeBarsCount = 0;
+            openingRangeHigh = 0.0;
+            openingRangeLow = 0.0;
+            returnWindow20.clear();
+            realizedVolWindow100.clear();
+            spreadWindow100.clear();
+        }
+
         this.barOpen = open;
         this.barHigh = high;
         this.barLow = low;
         this.barClose = close;
         this.barVolume = volume;
+
+        if (openingRangeBarsCount < 10) {
+            openingRangeHigh = openingRangeBarsCount == 0 ? barHigh : Math.max(openingRangeHigh, barHigh);
+            openingRangeLow = openingRangeBarsCount == 0 ? barLow : Math.min(openingRangeLow, barLow);
+            openingRangeBarsCount++;
+        }
+
+        int minuteOfDay = (currentMarketTime.getHour() * 60) + currentMarketTime.getMinute();
+        double baselineVol = minuteVolumeBaseline.getOrDefault(minuteOfDay, (double) Math.max(1L, barVolume));
+        minuteVolumeBaseline.put(minuteOfDay, (0.95 * baselineVol) + (0.05 * Math.max(1L, barVolume)));
+
+        double spread = 0.0;
+        if (latestBidPrice > 0.0 && latestAskPrice > 0.0 && latestAskPrice >= latestBidPrice) {
+            spread = latestAskPrice - latestBidPrice;
+        }
+        spreadWindow100.addLast(spread);
+        if (spreadWindow100.size() > 100) spreadWindow100.removeFirst();
 
         double typicalPrice = (barHigh + barLow + barClose) / 3.0;
         cumPv += (typicalPrice * barVolume);
@@ -554,12 +672,12 @@ public class PingPongStrategy implements TradingStrategy {
             double change = barClose - prevBarClose;
             double gain = Math.max(0, change);
             double loss = Math.max(0, -change);
-            if (barsCount < 14) {
-                avgGain += gain / 14.0;
-                avgLoss += loss / 14.0;
+            if (barsCount < rsiPeriod) {
+                avgGain += gain / (double) rsiPeriod;
+                avgLoss += loss / (double) rsiPeriod;
             } else {
-                avgGain = (avgGain * 13.0 + gain) / 14.0;
-                avgLoss = (avgLoss * 13.0 + loss) / 14.0;
+                avgGain = (avgGain * (rsiPeriod - 1.0) + gain) / (double) rsiPeriod;
+                avgLoss = (avgLoss * (rsiPeriod - 1.0) + loss) / (double) rsiPeriod;
             }
         }
 
@@ -573,6 +691,16 @@ public class PingPongStrategy implements TradingStrategy {
         if (prevBarClose > 0) {
             double tr = Math.max(barHigh - barLow, Math.max(Math.abs(barHigh - prevBarClose), Math.abs(barLow - prevBarClose)));
             atr12 = (atr12 == 0) ? tr : (atr12 * 11.0 + tr) / 12.0;
+
+            double barReturn = (barClose - prevBarClose) / prevBarClose;
+            returnWindow20.addLast(barReturn);
+            if (returnWindow20.size() > 20) returnWindow20.removeFirst();
+
+            if (returnWindow20.size() > 1) {
+                double realizedVol = stdDev(returnWindow20);
+                realizedVolWindow100.addLast(realizedVol);
+                if (realizedVolWindow100.size() > 100) realizedVolWindow100.removeFirst();
+            }
         }
 
         prevBarClose = barClose;
@@ -600,7 +728,7 @@ public class PingPongStrategy implements TradingStrategy {
         flowCondition("STRATEGY.WARMUP", "CIRCUIT_BREAKER_CLEAR", !circuitBreakerTripped, "symbol=" + symbol + " circuitBreakerTripped=" + circuitBreakerTripped);
 
         System.out.printf(
-            ">>> [5s DIAGNOSTIC] Vol=%d CumVol=%d VWAP=%.2f MACD=%.6f ATR=%.6f%n",
+            ">>> [30s DIAGNOSTIC] Vol=%d CumVol=%d VWAP=%.2f MACD=%.6f ATR=%.6f%n",
             barVolume, cumVol, vwap, macdDiff, atr12
         );
 
@@ -612,6 +740,13 @@ public class PingPongStrategy implements TradingStrategy {
             flowAnalyze("STRATEGY->AI", "Dispatching AI evaluation symbol=" + symbol + " time=" + currentMarketTime + " close=" + barClose);
             askArtificialIntelligence();
         }
+    }
+
+    private double stdDev(Deque<Double> values) {
+        if (values == null || values.size() < 2) return 0.0;
+        double mean = values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+        double var = values.stream().mapToDouble(v -> Math.pow(v - mean, 2)).sum() / (values.size() - 1);
+        return Math.sqrt(Math.max(0.0, var));
     }
 
     private void askArtificialIntelligence() {
@@ -637,17 +772,16 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.GATE", "YESTERDAY_CLOSE_AVAILABLE", false, "symbol=" + symbol + " yesterdayClose=" + yesterdayClose);
         }
 
-        float[] features = construct23Features(currentRsi);
+        float[] features = constructModelFeatures(currentRsi);
         flowData("AI.INPUT", "symbol=" + symbol + " features=" + Arrays.toString(features));
 
         // ==========================================
         // SCENARIO 1: WE ARE ALREADY LONG
         // ==========================================
         if (currentPosition > 0) {
-            // We use a loose RSI filter for exits. If RSI is above 40 and AI spots a top, we exit.
-            boolean rsiGate = currentRsi > 55.0;
+            boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi > RSI_LONG_EXIT_THRESHOLD;
             boolean modelReady = longExitAi != null;
-            flowCondition("AI.LONG.EXIT", "RSI_GT_40", rsiGate, "symbol=" + symbol + " rsi=" + currentRsi);
+            flowCondition("AI.LONG.EXIT", "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + RSI_LONG_EXIT_THRESHOLD);
             flowCondition("AI.LONG.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " model=longExitAi");
             boolean shouldExitLong = false;
             if (rsiGate && modelReady) {
@@ -666,10 +800,9 @@ public class PingPongStrategy implements TradingStrategy {
         // SCENARIO 2: WE ARE ALREADY SHORT
         // ==========================================
         if (currentPosition < 0) {
-            // Loose RSI filter. If RSI is below 60 and AI spots a bounce, we cover.
-            boolean rsiGate = currentRsi < 45.0;
+            boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi < RSI_SHORT_EXIT_THRESHOLD;
             boolean modelReady = shortExitAi != null;
-            flowCondition("AI.SHORT.EXIT", "RSI_LT_60", rsiGate, "symbol=" + symbol + " rsi=" + currentRsi);
+            flowCondition("AI.SHORT.EXIT", "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + RSI_SHORT_EXIT_THRESHOLD);
             flowCondition("AI.SHORT.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " model=shortExitAi");
             boolean shouldExitShort = false;
             if (rsiGate && modelReady) {
@@ -693,10 +826,10 @@ public class PingPongStrategy implements TradingStrategy {
             if (qty <= 0) return;
 
             // --- DIP BUYING (LONG ENTRY) ---
-            double longThreshold = (currentHour == 9) ? 25.0 : 30.0;
-            boolean longRsiGate = currentRsi < longThreshold;
+            double longThreshold = (currentHour == 9) ? RSI_LONG_ENTRY_OPEN_THRESHOLD : RSI_LONG_ENTRY_REGULAR_THRESHOLD;
+            boolean longRsiGate = !USE_RSI_PRE_GATES || currentRsi < longThreshold;
             boolean longModelReady = longEntryAi != null;
-            flowCondition("AI.LONG.ENTRY", "RSI_BELOW_THRESHOLD", longRsiGate, "symbol=" + symbol + " rsi=" + currentRsi + " threshold=" + longThreshold);
+            flowCondition("AI.LONG.ENTRY", "RSI_PRE_GATE", longRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + longThreshold);
             flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " model=longEntryAi");
             boolean shouldEnterLong = false;
             if (longRsiGate && longModelReady) {
@@ -711,10 +844,10 @@ public class PingPongStrategy implements TradingStrategy {
             }
 
             // --- RIP SELLING (SHORT ENTRY) ---
-            double shortThreshold = (currentHour == 9) ? 75.0 : 70.0;
-            boolean shortRsiGate = currentRsi > shortThreshold;
+            double shortThreshold = (currentHour == 9) ? RSI_SHORT_ENTRY_OPEN_THRESHOLD : RSI_SHORT_ENTRY_REGULAR_THRESHOLD;
+            boolean shortRsiGate = !USE_RSI_PRE_GATES || currentRsi > shortThreshold;
             boolean shortModelReady = shortEntryAi != null;
-            flowCondition("AI.SHORT.ENTRY", "RSI_ABOVE_THRESHOLD", shortRsiGate, "symbol=" + symbol + " rsi=" + currentRsi + " threshold=" + shortThreshold);
+            flowCondition("AI.SHORT.ENTRY", "RSI_PRE_GATE", shortRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + shortThreshold);
             flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " model=shortEntryAi");
             boolean shouldEnterShort = false;
             if (shortRsiGate && shortModelReady) {
@@ -741,7 +874,7 @@ public class PingPongStrategy implements TradingStrategy {
         return currentRsi;
     }
 
-    private float[] construct23Features(double currentRsi) {
+    private float[] constructModelFeatures(double currentRsi) {
         float f_dist_vwap = (float) ((barClose - vwap) / vwap);
 
         double bbMean = bbWindow.stream().mapToDouble(d -> d).average().orElse(barClose);
@@ -802,6 +935,41 @@ public class PingPongStrategy implements TradingStrategy {
             f_vol_bid_ratio = (float) currentBarVolBid / (float) barVolume;
         }
 
+        // --- Optional extended tail features; AiPredictor will trim for 23-feature models. ---
+        int minuteOfDay = (currentMarketTime.getHour() * 60) + currentMarketTime.getMinute();
+        double baselineVol = minuteVolumeBaseline.getOrDefault(minuteOfDay, (double) Math.max(1L, barVolume));
+        float f_rel_volume_30s = (float) (barVolume / (baselineVol + 1.0));
+
+        double realizedVol20 = returnWindow20.size() > 1 ? stdDev(returnWindow20) : 0.0;
+        float f_realized_vol_20 = (float) realizedVol20;
+        double volMean = realizedVolWindow100.stream().mapToDouble(Double::doubleValue).average().orElse(realizedVol20);
+        double volStd = stdDev(realizedVolWindow100);
+        float f_realized_vol_z = volStd > 0.0 ? (float) ((realizedVol20 - volMean) / volStd) : 0.0f;
+
+        float f_dist_or_high_atr = (openingRangeHigh > 0.0 && atr12 > 0.0)
+            ? (float) ((openingRangeHigh - barClose) / atr12)
+            : 0.0f;
+        float f_dist_or_low_atr = (openingRangeLow > 0.0 && atr12 > 0.0)
+            ? (float) ((barClose - openingRangeLow) / atr12)
+            : 0.0f;
+
+        double spread = (latestBidPrice > 0.0 && latestAskPrice > 0.0 && latestAskPrice >= latestBidPrice)
+            ? latestAskPrice - latestBidPrice : 0.0;
+        double mid = (latestBidPrice > 0.0 && latestAskPrice > 0.0)
+            ? (latestBidPrice + latestAskPrice) / 2.0 : barClose;
+        float f_spread_pct = (mid > 0.0) ? (float) (spread / mid) : 0.0f;
+        double spreadMean = spreadWindow100.stream().mapToDouble(Double::doubleValue).average().orElse(spread);
+        double spreadStd = stdDev(spreadWindow100);
+        float f_spread_z = spreadStd > 0.0 ? (float) ((spread - spreadMean) / spreadStd) : 0.0f;
+
+        float f_l1_imbalance = (latestBidSize + latestAskSize) > 0
+            ? (float) ((latestBidSize - latestAskSize) / (double) (latestBidSize + latestAskSize))
+            : 0.0f;
+
+        float f_signed_flow_30s = (currentBarVolAsk + currentBarVolBid) > 0
+            ? (float) ((currentBarVolAsk - currentBarVolBid) / (double) (currentBarVolAsk + currentBarVolBid))
+            : 0.0f;
+
         // Return the exact 23-feature array matching Python
         return new float[] {
             f_dist_vwap, f_bb_lower_dist, f_bb_upper_dist, f_macd_diff,
@@ -810,7 +978,10 @@ public class PingPongStrategy implements TradingStrategy {
             f_time_of_day, 
             f_dist_swing_high, f_dist_swing_low, f_is_new_high, f_is_new_low,
             f_dist_whole_num, f_is_green, f_put_call_ratio,
-            f_vol_ask_ratio, f_vol_bid_ratio
+            f_vol_ask_ratio, f_vol_bid_ratio,
+            f_rel_volume_30s, f_realized_vol_20, f_realized_vol_z,
+            f_dist_or_high_atr, f_dist_or_low_atr,
+            f_spread_pct, f_spread_z, f_l1_imbalance, f_signed_flow_30s
         };
     }
 

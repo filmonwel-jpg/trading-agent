@@ -37,7 +37,7 @@ __pycache__/
 *.py[cod]
 
 ### Runtime / local state ###
-runtime/
+runtime/git checkout 
 
 ### Generated logs and backtests ###
 backtest_trades_log*.csv
