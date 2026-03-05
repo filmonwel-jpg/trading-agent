@@ -13,6 +13,8 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class HistoricalBacktester extends IBKRTrader {
@@ -98,6 +100,7 @@ public class HistoricalBacktester extends IBKRTrader {
         try (BufferedReader br = new BufferedReader(new FileReader(csvFilePath))) {
             String line;
             boolean isHeader = true;
+            Map<String, Integer> columnIndex = new HashMap<>();
             LocalDate previousDate = null;
             Double previousDayFinalClose = null;
             double lastSeenClose = 0.0;
@@ -108,6 +111,13 @@ public class HistoricalBacktester extends IBKRTrader {
 
             while ((line = br.readLine()) != null) {
                 if (isHeader) {
+                    String[] headers = line.split(",");
+                    for (int i = 0; i < headers.length; i++) {
+                        String key = headers[i] == null ? "" : headers[i].trim().toLowerCase();
+                        if (!key.isEmpty()) {
+                            columnIndex.put(key, i);
+                        }
+                    }
                     isHeader = false;
                     continue;
                 }
@@ -123,16 +133,32 @@ public class HistoricalBacktester extends IBKRTrader {
                     continue;
                 }
 
+                int tsIndex = getColumnIndex(columnIndex, "timestamp", 0);
+                int openIndex = getColumnIndex(columnIndex, "open", 1);
+                int highIndex = getColumnIndex(columnIndex, "high", 2);
+                int lowIndex = getColumnIndex(columnIndex, "low", 3);
+                int closeIndex = getColumnIndex(columnIndex, "close", 4);
+                int volumeIndex = getColumnIndex(columnIndex, "volume", 5);
+                int wapIndex = getColumnIndex(columnIndex, "wap", 6);
+                int yCloseIndex = getColumnIndex(columnIndex, "yesterdayclose", 8);
+                int bidIndex = getColumnIndex(columnIndex, "bid", 9);
+                int askIndex = getColumnIndex(columnIndex, "ask", 10);
+                int bidSizeIndex = getColumnIndex(columnIndex, "bidsize", 11);
+                int askSizeIndex = getColumnIndex(columnIndex, "asksize", 12);
+                int putVolIndex = getColumnIndex(columnIndex, "putvol", 13);
+                int callVolIndex = getColumnIndex(columnIndex, "callvol", 14);
+                int shortableIndex = getColumnIndex(columnIndex, "shortableshares", 15);
+
                 LocalDateTime rowDateTime;
                 try {
-                    rowDateTime = parseInputTimestamp(values[0]);
+                    rowDateTime = parseInputTimestamp(getCell(values, tsIndex));
                 } catch (Exception exception) {
                     if (!parseErrorPrinted) {
-                        flowError("BACKTEST.PARSE", "Date parse error on row timestamp='" + values[0] + "' | " + exception.getMessage());
+                        flowError("BACKTEST.PARSE", "Date parse error on row timestamp='" + getCell(values, tsIndex) + "' | " + exception.getMessage());
                         parseErrorPrinted = true;
                     }
                     skippedRows++;
-                    flowCondition("BACKTEST.ROW", "TIMESTAMP_PARSE", false, "raw='" + values[0] + "'");
+                    flowCondition("BACKTEST.ROW", "TIMESTAMP_PARSE", false, "raw='" + getCell(values, tsIndex) + "'");
                     continue;
                 }
 
@@ -152,18 +178,36 @@ public class HistoricalBacktester extends IBKRTrader {
                     continue;
                 }
 
-                double open = Double.parseDouble(values[1]);
-                double high = Double.parseDouble(values[2]);
-                double low = Double.parseDouble(values[3]);
-                double close = Double.parseDouble(values[4]);
-                long volume = (long) Double.parseDouble(values[5]);
-                double wap = Double.parseDouble(values[6]);
+                double open = parseDoubleOrDefault(values, openIndex, 0.0);
+                double high = parseDoubleOrDefault(values, highIndex, 0.0);
+                double low = parseDoubleOrDefault(values, lowIndex, 0.0);
+                double close = parseDoubleOrDefault(values, closeIndex, 0.0);
+                long volume = parseLongOrDefault(values, volumeIndex, 0L);
+                double wap = parseDoubleOrDefault(values, wapIndex, close);
+
+                double bid = parseDoubleOrDefault(values, bidIndex, 0.0);
+                double ask = parseDoubleOrDefault(values, askIndex, 0.0);
+                long bidSize = parseLongOrDefault(values, bidSizeIndex, 0L);
+                long askSize = parseLongOrDefault(values, askSizeIndex, 0L);
+                long putVol = parseLongOrDefault(values, putVolIndex, 0L);
+                long callVol = parseLongOrDefault(values, callVolIndex, 0L);
+                double shortableShares = parseDoubleOrDefault(values, shortableIndex, 0.0);
                 
                 // If the CSV has Yesterday's Close as the 9th column (index 8), parse it. Otherwise use the rolling close.
-                if (values.length > 8) {
-                    double yClose = Double.parseDouble(values[8]);
+                if (hasUsableCell(values, yCloseIndex)) {
+                    double yClose = parseDoubleOrDefault(values, yCloseIndex, 0.0);
                     flowCondition("BACKTEST.DATA", "YESTERDAY_CLOSE_VALID", yClose > 0.0, "value=" + yClose);
                     testStrategy.setYesterdayClose(yClose);
+                    queuedStrategyWork = true;
+                }
+
+                if (putVol > 0L || callVol > 0L) {
+                    testStrategy.onOptionVolumeUpdate(putVol, callVol);
+                    queuedStrategyWork = true;
+                }
+
+                if (bid > 0.0 || ask > 0.0 || bidSize > 0L || askSize > 0L || shortableShares > 0.0) {
+                    testStrategy.onQuoteSnapshot(bid, ask, bidSize, askSize, shortableShares);
                     queuedStrategyWork = true;
                 }
 
@@ -265,12 +309,12 @@ public class HistoricalBacktester extends IBKRTrader {
             symbol,
             0.0025,     // gapPercentage
             100000,     // tradeAmount: FORCE $100,000 per trade
-            2000,       // maxTrades: Allow up to 2000 trades a day
+            2000,       // maxTrades: keep high; trade frequency controlled by RSI pre-gates and AI
             true,       // autoRegimeEnabled: ON
             300,        // regimeWindowTicks
-            60,         // rsiPeriod
+            14,         // rsiPeriod
             0.001,      // reversalPercentage: 0.1% profit target
-            0.004,      // stopLossPercentage: 0.4% stop loss
+            0.0030,     // stopLossPercentage: 0.30% hard stop (aligned to ENTRY_RISK_PCT)
             5000.0,     // maxDailyDrawdown
             1.20,       // minDirectionalMove
             0.70        // trendStrengthThreshold
@@ -306,6 +350,44 @@ public class HistoricalBacktester extends IBKRTrader {
 
         ZonedDateTime marketTs = ZonedDateTime.parse(raw, BACKTEST_TS_MARKET);
         return marketTs.withZoneSameInstant(MARKET_ZONE).toLocalDateTime();
+    }
+
+    private static int getColumnIndex(Map<String, Integer> index, String key, int fallback) {
+        Integer found = index.get(key);
+        return found != null ? found : fallback;
+    }
+
+    private static String getCell(String[] values, int index) {
+        if (index < 0 || index >= values.length) {
+            return "";
+        }
+        return values[index] == null ? "" : values[index].trim();
+    }
+
+    private static boolean hasUsableCell(String[] values, int index) {
+        return index >= 0 && index < values.length && values[index] != null && !values[index].trim().isEmpty();
+    }
+
+    private static double parseDoubleOrDefault(String[] values, int index, double fallback) {
+        if (!hasUsableCell(values, index)) {
+            return fallback;
+        }
+        try {
+            return Double.parseDouble(values[index].trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static long parseLongOrDefault(String[] values, int index, long fallback) {
+        if (!hasUsableCell(values, index)) {
+            return fallback;
+        }
+        try {
+            return (long) Double.parseDouble(values[index].trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     // Forces the CSV loop to perfectly match the AI's processing speed

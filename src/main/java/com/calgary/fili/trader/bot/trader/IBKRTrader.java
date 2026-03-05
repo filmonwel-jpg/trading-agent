@@ -36,6 +36,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     private double yesterdayClose = 0.0;
     private double currentBidPrice = 0.0;
     private double currentAskPrice = 0.0;
+    private long currentBidSize = 0L;
+    private long currentAskSize = 0L;
+    private double latestShortableShares = 0.0;
     private long latestPutVolume = 0L;
     private long latestCallVolume = 0L;
     private volatile int lastPlacedOrderId = -1;
@@ -152,9 +155,11 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     private void subscribeToMarketData() {
         Contract contract = buildStockContract();
         flowData("IBKR.SUBSCRIBE", "contract symbol=" + symbol + " secType=STK exchange=SMART currency=USD");
-        client.reqMktData(marketDataRequestId, contract, "100", false, false, null);
+        client.reqMktData(marketDataRequestId, contract, "100,104,236", false, false, null);
         client.reqRealTimeBars(marketDataRequestId + 1, contract, 5, "TRADES", false, null);
-        flowInfo("IBKR.SUBSCRIBE", "Subscribed to DUAL STREAM tickReqId=" + marketDataRequestId + " barReqId=" + (marketDataRequestId + 1));
+        client.reqTickByTickData(marketDataRequestId + 3, contract, "AllLast", 0, false);
+        client.reqTickByTickData(marketDataRequestId + 4, contract, "BidAsk", 0, false);
+        flowInfo("IBKR.SUBSCRIBE", "Subscribed streams mktDataReqId=" + marketDataRequestId + " barReqId=" + (marketDataRequestId + 1) + " allLastReqId=" + (marketDataRequestId + 3) + " bidAskReqId=" + (marketDataRequestId + 4));
     }
 
     private Contract buildStockContract() {
@@ -265,12 +270,18 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         if (field == 1) {
             this.currentBidPrice = price;
             flowData("IBKR.TICK", "field=1 bid=" + price);
+            if (shopStrategy != null) {
+                shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
+            }
             return;
         }
 
         if (field == 2) {
             this.currentAskPrice = price;
             flowData("IBKR.TICK", "field=2 ask=" + price);
+            if (shopStrategy != null) {
+                shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
+            }
             return;
         }
 
@@ -691,9 +702,65 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     private void flowError(String tag, String msg) { log.error(">>> [ERROR][{}] {}", tag, msg); }
 
     // ===== Full EWrapper boilerplate =====
-    @Override public void tickSize(int tickerId, int field, Decimal size) {}
-    @Override public void tickString(int tickerId, int tickType, String value) {}
-    @Override public void tickGeneric(int tickerId, int tickType, double value) {}
+    @Override
+    public void tickSize(int tickerId, int field, Decimal size) {
+        if (tickerId != marketDataRequestId) return;
+
+        long sizeVal = 0L;
+        if (size != null && size.value() != null) {
+            sizeVal = Math.max(0L, size.value().longValue());
+        }
+
+        // IB standard tickType ids used directly for resilience.
+        if (field == 0) { // BID_SIZE
+            currentBidSize = sizeVal;
+        } else if (field == 3) { // ASK_SIZE
+            currentAskSize = sizeVal;
+        } else if (field == 29) { // OPTION_CALL_VOLUME
+            latestCallVolume = sizeVal;
+            if (shopStrategy != null) shopStrategy.onOptionVolumeUpdate(latestPutVolume, latestCallVolume);
+        } else if (field == 30) { // OPTION_PUT_VOLUME
+            latestPutVolume = sizeVal;
+            if (shopStrategy != null) shopStrategy.onOptionVolumeUpdate(latestPutVolume, latestCallVolume);
+        }
+
+        if (shopStrategy != null) {
+            shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
+        }
+    }
+    @Override
+    public void tickString(int tickerId, int tickType, String value) {
+        if (tickerId != marketDataRequestId) return;
+
+        // RT_VOLUME fallback payload: price;size;time;totalVolume;vwap;singleTrade
+        if (tickType == 48 && value != null && !value.isBlank() && shopStrategy != null) {
+            try {
+                String[] parts = value.split(";");
+                if (parts.length >= 2) {
+                    double price = Double.parseDouble(parts[0]);
+                    long size = (long) Double.parseDouble(parts[1]);
+                    if (price > 0.0 && size > 0L) {
+                        shopStrategy.onTapeTrade(price, size, currentBidPrice, currentAskPrice);
+                    }
+                }
+            } catch (Exception ignored) {
+                flowCondition("IBKR.TICK", "RT_VOLUME_PARSE", false, "value=" + value);
+            }
+        }
+    }
+
+    @Override
+    public void tickGeneric(int tickerId, int tickType, double value) {
+        if (tickerId != marketDataRequestId) return;
+
+        // SHORTABLE is commonly delivered as generic tick type 46.
+        if (tickType == 46 && value > 0.0) {
+            latestShortableShares = value;
+            if (shopStrategy != null) {
+                shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
+            }
+        }
+    }
     @Override public void tickOptionComputation(int tickerId, int field, int tickAttrib, double impliedVol, double delta, double optPrice, double pvDividend, double gamma, double vega, double theta, double undPrice) {}
     @Override public void tickEFP(int tickerId, int tickType, double basisPoints, String formattedBasisPoints, double impliedFuture, int holdDays, String futureLastTradeDate, double dividendImpact, double dividendsToLastTradeDate) {}
     @Override public void openOrder(int orderId, Contract contract, Order order, OrderState orderState) {}
@@ -760,8 +827,38 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Override public void historicalTicks(int reqId, java.util.List<HistoricalTick> ticks, boolean done) {}
     @Override public void historicalTicksBidAsk(int reqId, java.util.List<HistoricalTickBidAsk> ticks, boolean done) {}
     @Override public void historicalTicksLast(int reqId, java.util.List<HistoricalTickLast> ticks, boolean done) {}
-    @Override public void tickByTickAllLast(int reqId, int tickType, long time, double price, Decimal size, TickAttribLast tickAttribLast, String exchange, String specialConditions) {}
-    @Override public void tickByTickBidAsk(int reqId, long time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, TickAttribBidAsk tickAttribBidAsk) {}
+    @Override
+    public void tickByTickAllLast(int reqId, int tickType, long time, double price, Decimal size, TickAttribLast tickAttribLast, String exchange, String specialConditions) {
+        if (reqId != marketDataRequestId + 3) return;
+        if (shopStrategy == null || !positionSyncComplete) return;
+
+        long tradeSize = 0L;
+        if (size != null && size.value() != null) {
+            tradeSize = Math.max(0L, size.value().longValue());
+        }
+        if (price <= 0.0 || tradeSize <= 0L) return;
+
+        shopStrategy.onTapeTrade(price, tradeSize, currentBidPrice, currentAskPrice);
+    }
+
+    @Override
+    public void tickByTickBidAsk(int reqId, long time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, TickAttribBidAsk tickAttribBidAsk) {
+        if (reqId != marketDataRequestId + 4) return;
+
+        currentBidPrice = bidPrice > 0.0 ? bidPrice : currentBidPrice;
+        currentAskPrice = askPrice > 0.0 ? askPrice : currentAskPrice;
+
+        if (bidSize != null && bidSize.value() != null) {
+            currentBidSize = Math.max(0L, bidSize.value().longValue());
+        }
+        if (askSize != null && askSize.value() != null) {
+            currentAskSize = Math.max(0L, askSize.value().longValue());
+        }
+
+        if (shopStrategy != null) {
+            shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
+        }
+    }
     @Override public void tickByTickMidPoint(int reqId, long time, double midPoint) {}
     @Override public void orderBound(long orderId, int apiClientId, int apiParentId) {}
     @Override public void completedOrder(Contract contract, Order order, OrderState orderState) {}

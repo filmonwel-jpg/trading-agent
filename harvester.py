@@ -29,7 +29,17 @@ tickers = {}
 bars_dict = {}
 ticks_dict = {}
 bar_state_by_symbol = {}
-WARMUP_HEADER = ['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'WAP', 'Count', 'YesterdayClose']
+WARMUP_HEADER = [
+    'Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'WAP', 'Count', 'YesterdayClose',
+    'Bid', 'Ask', 'BidSize', 'AskSize', 'PutVol', 'CallVol', 'ShortableShares'
+]
+TICK_HEADER = [
+    'time', 'price', 'size',
+    'bid', 'ask', 'bid_size', 'ask_size',
+    'last', 'last_size', 'mid', 'spread',
+    'put_vol', 'call_vol', 'shortable_shares',
+    'volume', 'vwap', 'bbo_exchange', 'last_exchange'
+]
 
 
 def safe_num(val, default=0.0):
@@ -37,6 +47,13 @@ def safe_num(val, default=0.0):
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return default
     return val
+
+
+def safe_str(val, default=''):
+    if val is None:
+        return default
+    text = str(val).strip()
+    return text if text else default
 
 
 def to_market_dt(raw_dt):
@@ -78,7 +95,7 @@ def normalize_warmup_csv(csv_path):
     has_header = first_cell in ('epoch', 'timestamp')
     data_rows = rows[1:] if has_header else rows
 
-    needs_upgrade = (not has_header) or (first != WARMUP_HEADER) or any(len(r) < 9 for r in data_rows)
+    needs_upgrade = (not has_header) or (first != WARMUP_HEADER) or any(len(r) < len(WARMUP_HEADER) for r in data_rows)
     if not needs_upgrade:
         return
 
@@ -175,6 +192,7 @@ def normalize_warmup_csv(csv_path):
             f"{(wap_val if wap_val > 0 else close_val):.18f}",
             str(int(float(count_raw))) if str(count_raw).strip() else '0',
             yclose_raw,
+            '0', '0', '0', '0', '0', '0', '0'
         ])
 
         last_close = close_val
@@ -220,6 +238,14 @@ def create_bar_callback(sym, csv_path, ticker_obj):
             bar_count = int(safe_num(getattr(bar, 'barCount', getattr(bar, 'count', None)), 0))
             y_close = safe_num(getattr(ticker_obj, 'close', None), 0.0)
 
+            bid = safe_num(getattr(ticker_obj, 'bid', None), 0.0)
+            ask = safe_num(getattr(ticker_obj, 'ask', None), 0.0)
+            bid_size = safe_num(getattr(ticker_obj, 'bidSize', None), 0.0)
+            ask_size = safe_num(getattr(ticker_obj, 'askSize', None), 0.0)
+            put_vol = int(safe_num(getattr(ticker_obj, 'putVolume', None), 0))
+            call_vol = int(safe_num(getattr(ticker_obj, 'callVolume', None), 0))
+            shortable = safe_num(getattr(ticker_obj, 'shortableShares', None), 0.0)
+
             with open(csv_path, 'a', newline='') as f:
                 csv.writer(f).writerow([
                     market_ts,
@@ -231,6 +257,13 @@ def create_bar_callback(sym, csv_path, ticker_obj):
                     f"{safe_num(bar_wap if bar_wap > 0 else bar.close):.18f}",
                     bar_count,
                     f"{safe_num(y_close if y_close > 0 else state['yesterday_close']):.4f}",
+                    f"{bid:.4f}",
+                    f"{ask:.4f}",
+                    f"{bid_size:.0f}",
+                    f"{ask_size:.0f}",
+                    put_vol,
+                    call_vol,
+                    f"{shortable:.0f}",
                 ])
 
             state['last_close'] = safe_num(bar.close)
@@ -250,14 +283,25 @@ def create_tick_callback(sym, csv_path, ticker_obj):
         tick = ticker.ticks[-1]
         current_bid = safe_num(ticker_obj.bid)
         current_ask = safe_num(ticker_obj.ask)
+        current_bid_size = safe_num(getattr(ticker_obj, 'bidSize', None), 0.0)
+        current_ask_size = safe_num(getattr(ticker_obj, 'askSize', None), 0.0)
         put_vol = int(safe_num(ticker_obj.putVolume, 0))
         call_vol = int(safe_num(ticker_obj.callVolume, 0))
         shortable = safe_num(ticker_obj.shortableShares, 0.0)
 
+        last_price = safe_num(getattr(ticker_obj, 'last', None), 0.0)
+        last_size = safe_num(getattr(ticker_obj, 'lastSize', None), 0.0)
+        mid = (current_bid + current_ask) / 2.0 if current_bid > 0 and current_ask > 0 else safe_num(last_price, 0.0)
+        spread = (current_ask - current_bid) if current_bid > 0 and current_ask > 0 else 0.0
+        volume = safe_num(getattr(ticker_obj, 'volume', None), 0.0)
+        vwap = safe_num(getattr(ticker_obj, 'vwap', None), 0.0)
+        bbo_exchange = safe_str(getattr(ticker_obj, 'bboExchange', ''), '')
+        last_exchange = safe_str(getattr(ticker_obj, 'lastExchange', ''), '')
+
         tick_time = tick.time if tick.time is not None else ticker.time
         tick_price = safe_num(getattr(tick, 'price', None))
         tick_size = safe_num(getattr(tick, 'size', None))
-        exchange = getattr(tick, 'exchange', '')
+        exchange = safe_str(getattr(tick, 'exchange', ''), '')
 
         if tick_price <= 0 or tick_size <= 0:
             skipped_invalid_ticks += 1
@@ -272,10 +316,19 @@ def create_tick_callback(sym, csv_path, ticker_obj):
                 tick_size,
                 current_bid,
                 current_ask,
+                current_bid_size,
+                current_ask_size,
+                last_price,
+                last_size,
+                mid,
+                spread,
                 put_vol,
                 call_vol,
                 shortable,
-                exchange
+                volume,
+                vwap,
+                bbo_exchange,
+                exchange or last_exchange
             ])
     return onTickUpdate
 
@@ -292,10 +345,19 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
         tick_size = safe_num(ticker_obj.lastSize)
         current_bid = safe_num(ticker_obj.bid)
         current_ask = safe_num(ticker_obj.ask)
+        current_bid_size = safe_num(getattr(ticker_obj, 'bidSize', None), 0.0)
+        current_ask_size = safe_num(getattr(ticker_obj, 'askSize', None), 0.0)
         put_vol = int(safe_num(ticker_obj.putVolume, 0))
         call_vol = int(safe_num(ticker_obj.callVolume, 0))
         shortable = safe_num(ticker_obj.shortableShares, 0.0)
-        exchange = safe_num(getattr(ticker_obj, 'bboExchange', ''), '')
+        last_price = safe_num(getattr(ticker_obj, 'last', None), 0.0)
+        last_size = safe_num(getattr(ticker_obj, 'lastSize', None), 0.0)
+        mid = (current_bid + current_ask) / 2.0 if current_bid > 0 and current_ask > 0 else safe_num(last_price, 0.0)
+        spread = (current_ask - current_bid) if current_bid > 0 and current_ask > 0 else 0.0
+        volume = safe_num(getattr(ticker_obj, 'volume', None), 0.0)
+        vwap = safe_num(getattr(ticker_obj, 'vwap', None), 0.0)
+        bbo_exchange = safe_str(getattr(ticker_obj, 'bboExchange', ''), '')
+        last_exchange = safe_str(getattr(ticker_obj, 'lastExchange', ''), '')
 
         if tick_time is None or tick_price <= 0 or tick_size <= 0:
             skipped_invalid_ticks += 1
@@ -315,10 +377,19 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
                 tick_size,
                 current_bid,
                 current_ask,
+                current_bid_size,
+                current_ask_size,
+                last_price,
+                last_size,
+                mid,
+                spread,
                 put_vol,
                 call_vol,
                 shortable,
-                exchange
+                volume,
+                vwap,
+                bbo_exchange,
+                last_exchange
             ])
 
     return onMktDataUpdate
@@ -348,7 +419,7 @@ for sym in symbols:
 
     if not os.path.exists(tick_csv):
         with open(tick_csv, 'w', newline='') as f:
-            csv.writer(f).writerow(['time', 'price', 'size', 'bid', 'ask', 'put_vol', 'call_vol', 'shortable_shares', 'exchange'])
+            csv.writer(f).writerow(TICK_HEADER)
 
     # 1. State Tracker (BBO, Options, Shortable Shares)
     tickers[sym] = ib.reqMktData(contract, '100,104,236', snapshot=False, regulatorySnapshot=False)
