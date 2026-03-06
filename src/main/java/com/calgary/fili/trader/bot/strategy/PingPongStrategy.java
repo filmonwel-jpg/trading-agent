@@ -125,6 +125,8 @@ public class PingPongStrategy implements TradingStrategy {
     private long latestAskSize = 0L;
     private double latestShortableShares = 0.0;
     private boolean optionVolumeWarningLogged = false;
+    private int greenStreak = 0;
+    private int redStreak = 0;
 
     // Extended features state (safe to keep even if model uses base 23 features).
     private final Map<Integer, Double> minuteVolumeBaseline = new HashMap<>();
@@ -622,6 +624,8 @@ public class PingPongStrategy implements TradingStrategy {
             returnWindow20.clear();
             realizedVolWindow100.clear();
             spreadWindow100.clear();
+            greenStreak = 0;
+            redStreak = 0;
         }
 
         this.barOpen = open;
@@ -629,6 +633,14 @@ public class PingPongStrategy implements TradingStrategy {
         this.barLow = low;
         this.barClose = close;
         this.barVolume = volume;
+
+        if (barClose >= barOpen) {
+            greenStreak++;
+            redStreak = 0;
+        } else {
+            redStreak++;
+            greenStreak = 0;
+        }
 
         if (openingRangeBarsCount < 10) {
             openingRangeHigh = openingRangeBarsCount == 0 ? barHigh : Math.max(openingRangeHigh, barHigh);
@@ -924,6 +936,8 @@ public class PingPongStrategy implements TradingStrategy {
         double nearestWhole = Math.round(barClose);
         float f_dist_whole_num = (float) Math.abs(barClose - nearestWhole);
         float f_is_green = (barClose >= barOpen) ? 1.0f : -1.0f;
+        float f_green_streak = (float) greenStreak;
+        float f_red_streak = (float) redStreak;
         
         float f_put_call_ratio = currentPutCallRatio;
         float f_vol_ask_ratio = 0.33f;
@@ -970,14 +984,14 @@ public class PingPongStrategy implements TradingStrategy {
             ? (float) ((currentBarVolAsk - currentBarVolBid) / (double) (currentBarVolAsk + currentBarVolBid))
             : 0.0f;
 
-        // Return the exact 23-feature array matching Python
+        // Return the exact 25-feature array matching Python
         return new float[] {
             f_dist_vwap, f_bb_lower_dist, f_bb_upper_dist, f_macd_diff,
             f_body_size, f_lower_wick, f_upper_wick, f_atr_norm,
             f_dist_sma, f_dist_high, f_dist_low, f_rsi, f_gap_from_prev_close,
             f_time_of_day, 
             f_dist_swing_high, f_dist_swing_low, f_is_new_high, f_is_new_low,
-            f_dist_whole_num, f_is_green, f_put_call_ratio,
+            f_dist_whole_num, f_is_green, f_green_streak, f_red_streak, f_put_call_ratio,
             f_vol_ask_ratio, f_vol_bid_ratio,
             f_rel_volume_30s, f_realized_vol_20, f_realized_vol_z,
             f_dist_or_high_atr, f_dist_or_low_atr,
@@ -1060,6 +1074,8 @@ public class PingPongStrategy implements TradingStrategy {
         dayLow = 0.0;
         cumPv = 0.0;
         cumVol = 0;
+        greenStreak = 0;
+        redStreak = 0;
 
         // FIX: Do NOT clear bbWindow, smaWindow, highWindow, lowWindow, avgGain, ema12, etc.
         // Python trains on continuous data across days. Java must maintain indicator memory across the night gap!

@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory;
 
 public class AiPredictor {
     private static final Logger log = LoggerFactory.getLogger(AiPredictor.class);
-    private static final int DEFAULT_EXPECTED_FEATURES = 23;
+    private static final int DEFAULT_EXPECTED_FEATURES = 25;
     
     private final OrtEnvironment env;
     private final OrtSession session;
@@ -55,7 +55,7 @@ public class AiPredictor {
             this.expectedFeatureCount = detectedFeatures > 0 ? detectedFeatures : DEFAULT_EXPECTED_FEATURES;
             flowInfo("AI.INIT", "Successfully loaded model=" + modelFileName);
             flowData("AI.INIT", "model=" + modelFileName + " input=" + inputName + " expectedFeatures=" + expectedFeatureCount);
-            if (expectedFeatureCount == 23 || expectedFeatureCount == 32) {
+            if (expectedFeatureCount == 25 || expectedFeatureCount == 34) {
                 flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", true, "model=" + modelFileName + " expected=" + expectedFeatureCount);
             } else {
                 flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", false, "model=" + modelFileName + " expected=" + expectedFeatureCount + " note=will trim/pad from strategy vector");

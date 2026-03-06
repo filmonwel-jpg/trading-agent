@@ -206,7 +206,25 @@ def calculate_features(df):
 
     # WHOLE NUMBER & CANDLE DIRECTION
     df['f_dist_whole_num'] = np.abs(df['Close'] - np.round(df['Close']))
-    df['f_is_green'] = np.where(df['Close'] >= df['Open'], 1.0, -1.0)
+    is_green = df['Close'] >= df['Open']
+    df['f_is_green'] = np.where(is_green, 1.0, -1.0)
+    # Consecutive candle streaks (per day)
+    df['is_red'] = (df['Close'] < df['Open']).astype(int)
+    df['is_green'] = (df['Close'] >= df['Open']).astype(int)
+
+    def _streak(series):
+        streak = 0
+        out = []
+        for val in series:
+            if val:
+                streak += 1
+            else:
+                streak = 0
+            out.append(streak)
+        return pd.Series(out, index=series.index)
+
+    df['f_red_streak'] = df.groupby('Date', sort=False)['is_red'].apply(_streak).reset_index(level=0, drop=True)
+    df['f_green_streak'] = df.groupby('Date', sort=False)['is_green'].apply(_streak).reset_index(level=0, drop=True)
     
     # Use real order-flow/options fields when present, else safe defaults.
     if {'BidVol', 'Volume'}.issubset(df.columns):
@@ -510,8 +528,8 @@ def main():
         'f_body_size', 'f_lower_wick', 'f_upper_wick', 'f_atr_norm',
         'f_dist_sma', 'f_dist_high', 'f_dist_low', 'f_rsi', 'f_gap_from_prev_close',
         'f_time_of_day', 'f_dist_swing_high', 'f_dist_swing_low', 'f_is_new_high', 
-        'f_is_new_low', 'f_dist_whole_num', 'f_is_green', 'f_put_call_ratio',
-        'f_vol_ask_ratio', 'f_vol_bid_ratio'
+        'f_is_new_low', 'f_dist_whole_num', 'f_is_green', 'f_green_streak',
+        'f_red_streak', 'f_put_call_ratio', 'f_vol_ask_ratio', 'f_vol_bid_ratio'
     ]
 
     extended_feature_cols = [
@@ -542,7 +560,8 @@ def main():
         exported_path = "-"
         if result['model'] is not None:
             versioned_path = versioned_out_dir / filename
-            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=filename)
+            resources_path = Path("src") / "main" / "resources" / filename
+            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=str(resources_path))
             exported_path = str(versioned_path)
 
         score_rows.append({
