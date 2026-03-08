@@ -9,6 +9,7 @@ import ai.onnxruntime.TensorInfo;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +23,8 @@ public class AiPredictor {
     private final String modelFileName;
     private final String inputName;
     private final int expectedFeatureCount;
+
+    public record PredictionOutcome(boolean predictedPositive, double positiveProbability) {}
 
     public AiPredictor(String modelFileName) throws Exception {
         this.modelFileName = modelFileName;
@@ -64,11 +67,33 @@ public class AiPredictor {
     }
 
     public boolean predict(float[] features) {
+        return predict(features, 0.50);
+    }
+
+    public boolean predict(float[] features, double threshold) {
+        PredictionOutcome outcome = predictOutcome(features);
+        boolean decision = outcome.positiveProbability() >= threshold;
+        flowCondition(
+            "AI.RESPONSE",
+            "PREDICTION_POSITIVE",
+            decision,
+            "model=" + modelFileName
+                + " prob=" + String.format("%.4f", outcome.positiveProbability())
+                + " threshold=" + String.format("%.4f", threshold)
+        );
+        return decision;
+    }
+
+    public double predictProbability(float[] features) {
+        return predictOutcome(features).positiveProbability();
+    }
+
+    public PredictionOutcome predictOutcome(float[] features) {
         boolean validFeatures = features != null && features.length > 0;
         flowCondition("AI.INPUT", "FEATURE_VECTOR_PRESENT", validFeatures, "model=" + modelFileName + " featureCount=" + (features == null ? 0 : features.length));
         if (!validFeatures) {
             flowError("AI.INPUT", "Features cannot be null or empty model=" + modelFileName);
-            return false;
+            return new PredictionOutcome(false, 0.0);
         }
 
         try {
@@ -77,21 +102,145 @@ public class AiPredictor {
             try (OnnxTensor tensor = OnnxTensor.createTensor(env, inputMatrix)) {
                 flowAnalyze("AI.REQUEST", "model=" + modelFileName + " running prediction featureCount=" + normalizedFeatures.length);
                 flowData("AI.REQUEST", "model=" + modelFileName + " features=" + Arrays.toString(normalizedFeatures));
-                OrtSession.Result result = session.run(Collections.singletonMap(inputName, tensor));
-                long[] labels = (long[]) result.get(0).getValue();
-                boolean decision = labels.length > 0 && labels[0] == 1L;
-                flowCondition("AI.RESPONSE", "PREDICTION_LABEL_AVAILABLE", labels.length > 0, "model=" + modelFileName + " labelsLength=" + labels.length);
-                flowCondition("AI.RESPONSE", "PREDICTION_POSITIVE", decision, "model=" + modelFileName + " label=" + (labels.length > 0 ? labels[0] : -1));
-                return decision;
+                try (OrtSession.Result result = session.run(Collections.singletonMap(inputName, tensor))) {
+                    long label = extractLabel(result);
+                    Double prob = extractPositiveClassProbability(result);
+
+                    // Fallback for models that only emit labels.
+                    double positiveProb;
+                    if (prob != null) {
+                        positiveProb = clampProbability(prob);
+                    } else if (label >= 0) {
+                        positiveProb = (label == 1L) ? 1.0 : 0.0;
+                    } else {
+                        positiveProb = 0.0;
+                    }
+
+                    boolean decision = positiveProb >= 0.50;
+                    flowCondition("AI.RESPONSE", "PREDICTION_LABEL_AVAILABLE", label >= 0, "model=" + modelFileName + " label=" + label);
+                    flowData("AI.RESPONSE", "model=" + modelFileName + " positiveProb=" + String.format("%.4f", positiveProb));
+                    return new PredictionOutcome(decision, positiveProb);
+                }
             }
         } catch (Exception e) {
             flowError("AI.RESPONSE", "Prediction failed model=" + modelFileName + " reason=" + e.getMessage());
-            return false;
+            return new PredictionOutcome(false, 0.0);
         }
     }
 
     public boolean shouldBuyDip(float[] features) {
         return predict(features);
+    }
+
+    private long extractLabel(OrtSession.Result result) {
+        for (int i = 0; i < result.size(); i++) {
+            Object value;
+            try {
+                value = result.get(i).getValue();
+            } catch (Exception e) {
+                flowError("AI.RESPONSE", "Failed reading ONNX label output model=" + modelFileName + " idx=" + i + " reason=" + e.getMessage());
+                continue;
+            }
+            if (value instanceof long[] labels && labels.length > 0) {
+                return labels[0];
+            }
+            if (value instanceof Long[] labels && labels.length > 0 && labels[0] != null) {
+                return labels[0];
+            }
+            if (value instanceof int[] labels && labels.length > 0) {
+                return labels[0];
+            }
+            if (value instanceof Integer[] labels && labels.length > 0 && labels[0] != null) {
+                return labels[0];
+            }
+        }
+        return -1;
+    }
+
+    private Double extractPositiveClassProbability(OrtSession.Result result) {
+        for (int i = 0; i < result.size(); i++) {
+            Object value;
+            try {
+                value = result.get(i).getValue();
+            } catch (Exception e) {
+                flowError("AI.RESPONSE", "Failed reading ONNX probability output model=" + modelFileName + " idx=" + i + " reason=" + e.getMessage());
+                continue;
+            }
+            Double extracted = extractProbabilityFromValue(value);
+            if (extracted != null) {
+                return extracted;
+            }
+        }
+        return null;
+    }
+
+    private Double extractProbabilityFromValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        if (value instanceof float[][] probs2d && probs2d.length > 0 && probs2d[0].length > 0) {
+            return probs2d[0].length > 1 ? (double) probs2d[0][1] : (double) probs2d[0][0];
+        }
+        if (value instanceof double[][] probs2d && probs2d.length > 0 && probs2d[0].length > 0) {
+            return probs2d[0].length > 1 ? probs2d[0][1] : probs2d[0][0];
+        }
+        if (value instanceof float[] probs1d && probs1d.length > 0) {
+            return probs1d.length > 1 ? (double) probs1d[1] : (double) probs1d[0];
+        }
+        if (value instanceof double[] probs1d && probs1d.length > 0) {
+            return probs1d.length > 1 ? probs1d[1] : probs1d[0];
+        }
+
+        if (value instanceof List<?> list && !list.isEmpty()) {
+            Object first = list.get(0);
+            if (first instanceof Map<?, ?> map) {
+                return extractProbabilityFromMap(map);
+            }
+        }
+
+        if (value instanceof Map<?, ?> map) {
+            return extractProbabilityFromMap(map);
+        }
+
+        return null;
+    }
+
+    private Double extractProbabilityFromMap(Map<?, ?> map) {
+        Object classOneVal = null;
+
+        if (map.containsKey(1L)) {
+            classOneVal = map.get(1L);
+        } else if (map.containsKey(1)) {
+            classOneVal = map.get(1);
+        } else if (map.containsKey("1")) {
+            classOneVal = map.get("1");
+        }
+
+        if (classOneVal instanceof Number n) {
+            return n.doubleValue();
+        }
+
+        if (map.size() == 2) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                Object key = entry.getKey();
+                Object val = entry.getValue();
+                if (val instanceof Number n) {
+                    if ("1".equals(String.valueOf(key))) {
+                        return n.doubleValue();
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private double clampProbability(double p) {
+        if (Double.isNaN(p) || Double.isInfinite(p)) {
+            return 0.0;
+        }
+        return Math.max(0.0, Math.min(1.0, p));
     }
 
     private float[] normalizeFeatures(float[] features) {

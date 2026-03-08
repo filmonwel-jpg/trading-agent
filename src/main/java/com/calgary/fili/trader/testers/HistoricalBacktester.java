@@ -319,8 +319,27 @@ public class HistoricalBacktester extends IBKRTrader {
             1.20,       // minDirectionalMove
             0.70        // trendStrengthThreshold
         );
+        testStrategy.setAiThresholds(
+            parseThresholdProperty("trading.ai.long-entry-threshold", 0.68),
+            parseThresholdProperty("trading.ai.short-entry-threshold", 0.63),
+            parseThresholdProperty("trading.ai.long-exit-threshold", 0.61),
+            parseThresholdProperty("trading.ai.short-exit-threshold", 0.63)
+        );
         testStrategy.setMaxVolatilityPercent(10.0);
         testStrategy.setPositionSynced(true);
+    }
+
+    private static double parseThresholdProperty(String key, double fallback) {
+        String raw = System.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            double parsed = Double.parseDouble(raw.trim());
+            return Math.max(0.0, Math.min(1.0, parsed));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     @Override

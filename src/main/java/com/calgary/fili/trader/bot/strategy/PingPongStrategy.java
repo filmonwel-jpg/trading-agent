@@ -41,6 +41,10 @@ public class PingPongStrategy implements TradingStrategy {
     private static final double RSI_LONG_ENTRY_REGULAR_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiLongEntryRegularThreshold", "40.0"));
     private static final double RSI_SHORT_ENTRY_OPEN_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortEntryOpenThreshold", "66.0"));
     private static final double RSI_SHORT_ENTRY_REGULAR_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortEntryRegularThreshold", "60.0"));
+    private static final double DEFAULT_LONG_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longEntryThreshold", "0.68"));
+    private static final double DEFAULT_SHORT_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortEntryThreshold", "0.63"));
+    private static final double DEFAULT_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longExitThreshold", "0.61"));
+    private static final double DEFAULT_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortExitThreshold", "0.63"));
 
     public record StrategyState(double lastPrice, int tradeCount, boolean enabled, boolean isArmed, boolean isVolatile, double yesterdayClose) {}
 
@@ -127,6 +131,10 @@ public class PingPongStrategy implements TradingStrategy {
     private boolean optionVolumeWarningLogged = false;
     private int greenStreak = 0;
     private int redStreak = 0;
+    private volatile double longEntryProbabilityThreshold = DEFAULT_LONG_ENTRY_THRESHOLD;
+    private volatile double shortEntryProbabilityThreshold = DEFAULT_SHORT_ENTRY_THRESHOLD;
+    private volatile double longExitProbabilityThreshold = DEFAULT_LONG_EXIT_THRESHOLD;
+    private volatile double shortExitProbabilityThreshold = DEFAULT_SHORT_EXIT_THRESHOLD;
 
     // Extended features state (safe to keep even if model uses base 23 features).
     private final Map<Integer, Double> minuteVolumeBaseline = new HashMap<>();
@@ -321,8 +329,44 @@ public class PingPongStrategy implements TradingStrategy {
         this.eventProcessorThread = new Thread(this::processEvents);
         this.eventProcessorThread.setName("Strategy-Actor-Thread-" + symbol);
         this.eventProcessorThread.start();
+
+        flowData(
+            "AI.CONFIG",
+            "symbol=" + symbol
+                + " thresholds longEntry=" + formatProb(longEntryProbabilityThreshold)
+                + " shortEntry=" + formatProb(shortEntryProbabilityThreshold)
+                + " longExit=" + formatProb(longExitProbabilityThreshold)
+                + " shortExit=" + formatProb(shortExitProbabilityThreshold)
+        );
         
         hotloadWarmupData();
+    }
+
+    public void setAiThresholds(double longEntry, double shortEntry, double longExit, double shortExit) {
+        this.longEntryProbabilityThreshold = clampProbability(longEntry, DEFAULT_LONG_ENTRY_THRESHOLD);
+        this.shortEntryProbabilityThreshold = clampProbability(shortEntry, DEFAULT_SHORT_ENTRY_THRESHOLD);
+        this.longExitProbabilityThreshold = clampProbability(longExit, DEFAULT_LONG_EXIT_THRESHOLD);
+        this.shortExitProbabilityThreshold = clampProbability(shortExit, DEFAULT_SHORT_EXIT_THRESHOLD);
+
+        flowData(
+            "AI.CONFIG",
+            "symbol=" + symbol
+                + " thresholds longEntry=" + formatProb(longEntryProbabilityThreshold)
+                + " shortEntry=" + formatProb(shortEntryProbabilityThreshold)
+                + " longExit=" + formatProb(longExitProbabilityThreshold)
+                + " shortExit=" + formatProb(shortExitProbabilityThreshold)
+        );
+    }
+
+    private double clampProbability(double threshold, double fallback) {
+        if (Double.isNaN(threshold) || Double.isInfinite(threshold)) {
+            return fallback;
+        }
+        return Math.max(0.0, Math.min(1.0, threshold));
+    }
+
+    private String formatProb(double value) {
+        return String.format("%.4f", value);
     }
 
     private void processEvents() {
@@ -797,13 +841,23 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.LONG.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " model=longExitAi");
             boolean shouldExitLong = false;
             if (rsiGate && modelReady) {
-                shouldExitLong = longExitAi.predict(features);
-                flowCondition("AI.LONG.EXIT", "AI_PREDICTS_EXIT", shouldExitLong, "symbol=" + symbol + " rsi=" + currentRsi + " close=" + barClose);
+                double prob = longExitAi.predictProbability(features);
+                shouldExitLong = prob >= longExitProbabilityThreshold;
+                flowCondition(
+                    "AI.LONG.EXIT",
+                    "AI_PREDICTS_EXIT",
+                    shouldExitLong,
+                    "symbol=" + symbol
+                        + " rsi=" + currentRsi
+                        + " close=" + barClose
+                        + " prob=" + formatProb(prob)
+                        + " threshold=" + formatProb(longExitProbabilityThreshold)
+                );
             }
             if (shouldExitLong) {
                 flowInfo("AI.LONG.EXIT", "Top detector signaled exit. Taking LONG profits symbol=" + symbol);
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "SELL", barClose, Math.abs(currentPosition), "FAST_LMT");
+                parent.placeTrade(symbol, "SELL", barClose, Math.abs(currentPosition), "MKT");
             }
             return; 
         }
@@ -818,13 +872,23 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.SHORT.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " model=shortExitAi");
             boolean shouldExitShort = false;
             if (rsiGate && modelReady) {
-                shouldExitShort = shortExitAi.predict(features);
-                flowCondition("AI.SHORT.EXIT", "AI_PREDICTS_EXIT", shouldExitShort, "symbol=" + symbol + " rsi=" + currentRsi + " close=" + barClose);
+                double prob = shortExitAi.predictProbability(features);
+                shouldExitShort = prob >= shortExitProbabilityThreshold;
+                flowCondition(
+                    "AI.SHORT.EXIT",
+                    "AI_PREDICTS_EXIT",
+                    shouldExitShort,
+                    "symbol=" + symbol
+                        + " rsi=" + currentRsi
+                        + " close=" + barClose
+                        + " prob=" + formatProb(prob)
+                        + " threshold=" + formatProb(shortExitProbabilityThreshold)
+                );
             }
             if (shouldExitShort) {
                 flowInfo("AI.SHORT.EXIT", "Bottom detector signaled cover. Covering SHORT symbol=" + symbol);
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "BUY", barClose, Math.abs(currentPosition), "FAST_LMT");
+                parent.placeTrade(symbol, "BUY", barClose, Math.abs(currentPosition), "MKT");
             }
             return; 
         }
@@ -845,8 +909,19 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " model=longEntryAi");
             boolean shouldEnterLong = false;
             if (longRsiGate && longModelReady) {
-                shouldEnterLong = longEntryAi.predict(features);
-                flowCondition("AI.LONG.ENTRY", "AI_PREDICTS_ENTRY", shouldEnterLong, "symbol=" + symbol + " rsi=" + currentRsi + " close=" + barClose + " qty=" + qty);
+                double prob = longEntryAi.predictProbability(features);
+                shouldEnterLong = prob >= longEntryProbabilityThreshold;
+                flowCondition(
+                    "AI.LONG.ENTRY",
+                    "AI_PREDICTS_ENTRY",
+                    shouldEnterLong,
+                    "symbol=" + symbol
+                        + " rsi=" + currentRsi
+                        + " close=" + barClose
+                        + " qty=" + qty
+                        + " prob=" + formatProb(prob)
+                        + " threshold=" + formatProb(longEntryProbabilityThreshold)
+                );
             }
             if (shouldEnterLong) {
                 flowInfo("AI.LONG.ENTRY", "Dip buyer firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
@@ -863,8 +938,19 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " model=shortEntryAi");
             boolean shouldEnterShort = false;
             if (shortRsiGate && shortModelReady) {
-                shouldEnterShort = shortEntryAi.predict(features);
-                flowCondition("AI.SHORT.ENTRY", "AI_PREDICTS_ENTRY", shouldEnterShort, "symbol=" + symbol + " rsi=" + currentRsi + " close=" + barClose + " qty=" + qty);
+                double prob = shortEntryAi.predictProbability(features);
+                shouldEnterShort = prob >= shortEntryProbabilityThreshold;
+                flowCondition(
+                    "AI.SHORT.ENTRY",
+                    "AI_PREDICTS_ENTRY",
+                    shouldEnterShort,
+                    "symbol=" + symbol
+                        + " rsi=" + currentRsi
+                        + " close=" + barClose
+                        + " qty=" + qty
+                        + " prob=" + formatProb(prob)
+                        + " threshold=" + formatProb(shortEntryProbabilityThreshold)
+                );
             }
             if (shouldEnterShort) {
                 flowInfo("AI.SHORT.ENTRY", "Rip seller firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));

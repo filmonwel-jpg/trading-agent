@@ -75,6 +75,10 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.reversal-percentage:0.0005}") private double reversalPercentage;
     @Value("${trading.stop-loss-percentage:0.01}") private double stopLossPercentage;
     @Value("${trading.max-daily-drawdown:500.0}") private double maxDailyDrawdown;
+    @Value("${trading.ai.long-entry-threshold:0.68}") private double aiLongEntryThreshold;
+    @Value("${trading.ai.short-entry-threshold:0.63}") private double aiShortEntryThreshold;
+    @Value("${trading.ai.long-exit-threshold:0.61}") private double aiLongExitThreshold;
+    @Value("${trading.ai.short-exit-threshold:0.63}") private double aiShortExitThreshold;
     @Value("${trading.market-data-request-id:1001}") private int marketDataRequestId;
     @Value("${trading.risk.max-order-notional:25000}") private double maxOrderNotional;
     @Value("${trading.risk.max-daily-orders:40}") private int maxDailyOrders;
@@ -136,6 +140,8 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             meterRegistry.gauge("trading.connection.status", this, IBKRTrader::getConnectionStatus);
             meterRegistry.gauge("trading.reconnection.attempts", this, IBKRTrader::getReconnectionAttempts);
         }
+
+        shopStrategy.setAiThresholds(aiLongEntryThreshold, aiShortEntryThreshold, aiLongExitThreshold, aiShortExitThreshold);
 
         if (this.yesterdayClose > 0) {
             shopStrategy.setYesterdayClose(this.yesterdayClose);
