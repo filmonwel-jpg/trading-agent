@@ -260,13 +260,13 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Override
     public void tickPrice(int tickerId, int field, double price, TickAttrib attribs) {
         boolean expectedTicker = tickerId == marketDataRequestId;
-        flowCondition("IBKR.TICK", "EXPECTED_TICKER_ID", expectedTicker, "tickerId=" + tickerId + " expected=" + marketDataRequestId + " field=" + field);
+        flowConditionDebug("IBKR.TICK", "EXPECTED_TICKER_ID", expectedTicker, "tickerId=" + tickerId + " expected=" + marketDataRequestId + " field=" + field);
         if (!expectedTicker) return;
 
         if (field == 9) {
             this.yesterdayClose = price;
-            flowCondition("IBKR.TICK", "YESTERDAY_CLOSE_VALID", price > 0.0, "value=" + price);
-            flowData("IBKR.TICK", "field=9 yesterdayClose=" + price);
+            flowConditionDebug("IBKR.TICK", "YESTERDAY_CLOSE_VALID", price > 0.0, "value=" + price);
+            flowDataDebug("IBKR.TICK", "field=9 yesterdayClose=" + price);
             if (shopStrategy != null) {
                 shopStrategy.setYesterdayClose(price);
             }
@@ -276,7 +276,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
         if (field == 1) {
             this.currentBidPrice = price;
-            flowData("IBKR.TICK", "field=1 bid=" + price);
+            flowDataDebug("IBKR.TICK", "field=1 bid=" + price);
             if (shopStrategy != null) {
                 shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
             }
@@ -285,7 +285,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
         if (field == 2) {
             this.currentAskPrice = price;
-            flowData("IBKR.TICK", "field=2 ask=" + price);
+            flowDataDebug("IBKR.TICK", "field=2 ask=" + price);
             if (shopStrategy != null) {
                 shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
             }
@@ -296,7 +296,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             if (Math.abs(price - this.currentLastPrice) > 0.001) {
                 this.currentLastPrice = price;
                 boolean canForward = shopStrategy != null && positionSyncComplete;
-                flowCondition("IBKR->AI.TICK", "FORWARD_TICK_TO_STRATEGY", canForward, "lastPrice=" + price + " positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
+                flowConditionDebug("IBKR->AI.TICK", "FORWARD_TICK_TO_STRATEGY", canForward, "lastPrice=" + price + " positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
                 if (canForward) {
                     shopStrategy.onTickForExitsOnly(price);
                 }
@@ -707,6 +707,8 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     private void flowCondition(String tag, String check, boolean pass, String context) { log.info(">>> [FLOW][COND][{}] {}={} | {}", tag, check, pass ? "PASS" : "FAIL", context); }
     private void flowAnalyze(String tag, String msg) { log.info(">>> [FLOW][ANALYZE][{}] {}", tag, msg); }
     private void flowError(String tag, String msg) { log.error(">>> [ERROR][{}] {}", tag, msg); }
+    private void flowDataDebug(String tag, String msg) { log.debug(">>> [FLOW][DATA][{}] {}", tag, msg); }
+    private void flowConditionDebug(String tag, String check, boolean pass, String context) { log.debug(">>> [FLOW][COND][{}] {}={} | {}", tag, check, pass ? "PASS" : "FAIL", context); }
 
     // ===== Full EWrapper boilerplate =====
     @Override
@@ -751,7 +753,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
                     }
                 }
             } catch (Exception ignored) {
-                flowCondition("IBKR.TICK", "RT_VOLUME_PARSE", false, "value=" + value);
+                flowConditionDebug("IBKR.TICK", "RT_VOLUME_PARSE", false, "value=" + value);
             }
         }
     }
