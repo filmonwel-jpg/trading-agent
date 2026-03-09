@@ -79,6 +79,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.ai.short-entry-threshold:0.63}") private double aiShortEntryThreshold;
     @Value("${trading.ai.long-exit-threshold:0.61}") private double aiLongExitThreshold;
     @Value("${trading.ai.short-exit-threshold:0.63}") private double aiShortExitThreshold;
+    @Value("${trading.ai.regime-threshold:0.50}") private double aiRegimeThreshold;
     @Value("${trading.market-data-request-id:1001}") private int marketDataRequestId;
     @Value("${trading.risk.max-order-notional:25000}") private double maxOrderNotional;
     @Value("${trading.risk.max-daily-orders:40}") private int maxDailyOrders;
@@ -141,7 +142,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             meterRegistry.gauge("trading.reconnection.attempts", this, IBKRTrader::getReconnectionAttempts);
         }
 
-        shopStrategy.setAiThresholds(aiLongEntryThreshold, aiShortEntryThreshold, aiLongExitThreshold, aiShortExitThreshold);
+        shopStrategy.setAiThresholds(aiLongEntryThreshold, aiShortEntryThreshold, aiLongExitThreshold, aiShortExitThreshold, aiRegimeThreshold);
 
         if (this.yesterdayClose > 0) {
             shopStrategy.setYesterdayClose(this.yesterdayClose);

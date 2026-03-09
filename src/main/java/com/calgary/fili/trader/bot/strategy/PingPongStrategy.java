@@ -31,6 +31,12 @@ import org.slf4j.LoggerFactory;
 
 public class PingPongStrategy implements TradingStrategy {
 
+    private enum MarketRegime {
+        CHOPPY,
+        TREND,
+        VOLATILE
+    }
+
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final DateTimeFormatter MARKET_TS_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV");
     private static final Logger log = LoggerFactory.getLogger(PingPongStrategy.class);
@@ -45,6 +51,9 @@ public class PingPongStrategy implements TradingStrategy {
     private static final double DEFAULT_SHORT_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortEntryThreshold", "0.63"));
     private static final double DEFAULT_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longExitThreshold", "0.61"));
     private static final double DEFAULT_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortExitThreshold", "0.63"));
+    private static final double DEFAULT_REGIME_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.regimeThreshold", "0.50"));
+    private static final int OPEN30_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.open30MinBars", "12"));
+    private static final int REGULAR_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.regularMinBars", "60"));
 
     public record StrategyState(double lastPrice, int tradeCount, boolean enabled, boolean isArmed, boolean isVolatile, double yesterdayClose) {}
 
@@ -63,6 +72,24 @@ public class PingPongStrategy implements TradingStrategy {
     private AiPredictor shortEntryAi;
     private AiPredictor longExitAi;
     private AiPredictor shortExitAi;
+    private AiPredictor regimeClassifierAi;
+    private AiPredictor choppyLongEntryAi;
+    private AiPredictor choppyShortEntryAi;
+    private AiPredictor choppyLongExitAi;
+    private AiPredictor choppyShortExitAi;
+    private AiPredictor trendLongEntryAi;
+    private AiPredictor trendShortEntryAi;
+    private AiPredictor trendLongExitAi;
+    private AiPredictor trendShortExitAi;
+    private AiPredictor volatileLongEntryAi;
+    private AiPredictor volatileShortEntryAi;
+    private AiPredictor volatileLongExitAi;
+    private AiPredictor volatileShortExitAi;
+    private AiPredictor open30LongEntryAi;
+    private AiPredictor open30ShortEntryAi;
+    private AiPredictor open30LongExitAi;
+    private AiPredictor open30ShortExitAi;
+    private volatile MarketRegime lastDetectedRegime = MarketRegime.CHOPPY;
 
     // Actor Model Event Queue
     private final LinkedBlockingQueue<StrategyEvent> eventQueue = new LinkedBlockingQueue<>();
@@ -135,6 +162,7 @@ public class PingPongStrategy implements TradingStrategy {
     private volatile double shortEntryProbabilityThreshold = DEFAULT_SHORT_ENTRY_THRESHOLD;
     private volatile double longExitProbabilityThreshold = DEFAULT_LONG_EXIT_THRESHOLD;
     private volatile double shortExitProbabilityThreshold = DEFAULT_SHORT_EXIT_THRESHOLD;
+    private volatile double regimeProbabilityThreshold = DEFAULT_REGIME_THRESHOLD;
 
     // Extended features state (safe to keep even if model uses base 23 features).
     private final Map<Integer, Double> minuteVolumeBaseline = new HashMap<>();
@@ -326,6 +354,24 @@ public class PingPongStrategy implements TradingStrategy {
             this.shortExitAi = null;
         }
 
+        this.regimeClassifierAi = tryLoadOptionalModel("regime_classifier.onnx", "Market regime classifier unavailable. Falling back to CHOPPY.");
+        this.choppyLongEntryAi = tryLoadOptionalModel("choppy_long_entry.onnx", "Choppy long-entry model unavailable. Using base model.");
+        this.choppyShortEntryAi = tryLoadOptionalModel("choppy_short_entry.onnx", "Choppy short-entry model unavailable. Using base model.");
+        this.choppyLongExitAi = tryLoadOptionalModel("choppy_long_exit.onnx", "Choppy long-exit model unavailable. Using base model.");
+        this.choppyShortExitAi = tryLoadOptionalModel("choppy_short_exit.onnx", "Choppy short-exit model unavailable. Using base model.");
+        this.trendLongEntryAi = tryLoadOptionalModel("trend_long_entry.onnx", "Trend long-entry model unavailable. Using base model.");
+        this.trendShortEntryAi = tryLoadOptionalModel("trend_short_entry.onnx", "Trend short-entry model unavailable. Using base model.");
+        this.trendLongExitAi = tryLoadOptionalModel("trend_long_exit.onnx", "Trend long-exit model unavailable. Using base model.");
+        this.trendShortExitAi = tryLoadOptionalModel("trend_short_exit.onnx", "Trend short-exit model unavailable. Using base model.");
+        this.volatileLongEntryAi = tryLoadOptionalModel("volatile_long_entry.onnx", "Volatile long-entry model unavailable. Using base model.");
+        this.volatileShortEntryAi = tryLoadOptionalModel("volatile_short_entry.onnx", "Volatile short-entry model unavailable. Using base model.");
+        this.volatileLongExitAi = tryLoadOptionalModel("volatile_long_exit.onnx", "Volatile long-exit model unavailable. Using base model.");
+        this.volatileShortExitAi = tryLoadOptionalModel("volatile_short_exit.onnx", "Volatile short-exit model unavailable. Using base model.");
+        this.open30LongEntryAi = tryLoadOptionalModel("open30_long_entry.onnx", "Open30 long-entry model unavailable. Using regime/base model.");
+        this.open30ShortEntryAi = tryLoadOptionalModel("open30_short_entry.onnx", "Open30 short-entry model unavailable. Using regime/base model.");
+        this.open30LongExitAi = tryLoadOptionalModel("open30_long_exit.onnx", "Open30 long-exit model unavailable. Using regime/base model.");
+        this.open30ShortExitAi = tryLoadOptionalModel("open30_short_exit.onnx", "Open30 short-exit model unavailable. Using regime/base model.");
+
         this.eventProcessorThread = new Thread(this::processEvents);
         this.eventProcessorThread.setName("Strategy-Actor-Thread-" + symbol);
         this.eventProcessorThread.start();
@@ -337,16 +383,104 @@ public class PingPongStrategy implements TradingStrategy {
                 + " shortEntry=" + formatProb(shortEntryProbabilityThreshold)
                 + " longExit=" + formatProb(longExitProbabilityThreshold)
                 + " shortExit=" + formatProb(shortExitProbabilityThreshold)
+                + " regime=" + formatProb(regimeProbabilityThreshold)
         );
         
         hotloadWarmupData();
     }
 
+    private AiPredictor tryLoadOptionalModel(String modelName, String fallbackLog) {
+        try {
+            return new AiPredictor(modelName);
+        } catch (Exception e) {
+            flowInfo("AI.INIT", fallbackLog + " model=" + modelName + " reason=" + e.getMessage());
+            return null;
+        }
+    }
+
+    private AiPredictor modelForRegime(MarketRegime regime, AiPredictor baseModel, AiPredictor choppyModel, AiPredictor trendModel, AiPredictor volatileModel) {
+        if (regime == MarketRegime.CHOPPY && choppyModel != null) {
+            return choppyModel;
+        }
+        if (regime == MarketRegime.TREND && trendModel != null) {
+            return trendModel;
+        }
+        if (regime == MarketRegime.VOLATILE && volatileModel != null) {
+            return volatileModel;
+        }
+        return baseModel;
+    }
+
+    private MarketRegime detectMarketRegime(float[] regimeFeatures) {
+        if (regimeClassifierAi == null) {
+            return MarketRegime.CHOPPY;
+        }
+
+        AiPredictor.ClassPredictionOutcome outcome = regimeClassifierAi.predictClassWithConfidence(regimeFeatures, 0);
+        int predicted = outcome.classLabel();
+        double confidence = outcome.confidence();
+
+        if (confidence < regimeProbabilityThreshold) {
+            flowCondition(
+                "AI.REGIME",
+                "CONFIDENCE_THRESHOLD_MET",
+                false,
+                "symbol=" + symbol
+                    + " predictedLabel=" + predicted
+                    + " confidence=" + formatProb(confidence)
+                    + " threshold=" + formatProb(regimeProbabilityThreshold)
+                    + " fallback=CHOPPY"
+            );
+            lastDetectedRegime = MarketRegime.CHOPPY;
+            return MarketRegime.CHOPPY;
+        }
+
+        flowCondition(
+            "AI.REGIME",
+            "CONFIDENCE_THRESHOLD_MET",
+            true,
+            "symbol=" + symbol
+                + " predictedLabel=" + predicted
+                + " confidence=" + formatProb(confidence)
+                + " threshold=" + formatProb(regimeProbabilityThreshold)
+        );
+
+        MarketRegime detected = switch (predicted) {
+            case 1 -> MarketRegime.TREND;
+            case 2 -> MarketRegime.VOLATILE;
+            default -> MarketRegime.CHOPPY;
+        };
+
+        lastDetectedRegime = detected;
+        flowData(
+            "AI.REGIME",
+            "symbol=" + symbol
+                + " detectedRegime=" + detected
+                + " label=" + predicted
+                + " confidence=" + formatProb(confidence)
+        );
+        return detected;
+    }
+
+    private boolean isOpeningThirtyMinutes() {
+        if (currentMarketTime == null) {
+            return false;
+        }
+        int hour = currentMarketTime.getHour();
+        int minute = currentMarketTime.getMinute();
+        return hour == 9 && minute >= 30;
+    }
+
     public void setAiThresholds(double longEntry, double shortEntry, double longExit, double shortExit) {
+        setAiThresholds(longEntry, shortEntry, longExit, shortExit, DEFAULT_REGIME_THRESHOLD);
+    }
+
+    public void setAiThresholds(double longEntry, double shortEntry, double longExit, double shortExit, double regimeThreshold) {
         this.longEntryProbabilityThreshold = clampProbability(longEntry, DEFAULT_LONG_ENTRY_THRESHOLD);
         this.shortEntryProbabilityThreshold = clampProbability(shortEntry, DEFAULT_SHORT_ENTRY_THRESHOLD);
         this.longExitProbabilityThreshold = clampProbability(longExit, DEFAULT_LONG_EXIT_THRESHOLD);
         this.shortExitProbabilityThreshold = clampProbability(shortExit, DEFAULT_SHORT_EXIT_THRESHOLD);
+        this.regimeProbabilityThreshold = clampProbability(regimeThreshold, DEFAULT_REGIME_THRESHOLD);
 
         flowData(
             "AI.CONFIG",
@@ -355,6 +489,7 @@ public class PingPongStrategy implements TradingStrategy {
                 + " shortEntry=" + formatProb(shortEntryProbabilityThreshold)
                 + " longExit=" + formatProb(longExitProbabilityThreshold)
                 + " shortExit=" + formatProb(shortExitProbabilityThreshold)
+                + " regime=" + formatProb(regimeProbabilityThreshold)
         );
     }
 
@@ -778,7 +913,16 @@ public class PingPongStrategy implements TradingStrategy {
             }
         }
 
-        flowCondition("STRATEGY.WARMUP", "BARS_GT_60", barsCount > 60, "symbol=" + symbol + " barsCount=" + barsCount);
+        boolean openingThirty = isOpeningThirtyMinutes();
+        int requiredBars = openingThirty ? OPEN30_MIN_BARS : REGULAR_MIN_BARS;
+        boolean barsReadyForProfile = barsCount > requiredBars;
+
+        flowCondition(
+            "STRATEGY.WARMUP",
+            "BARS_READY_FOR_PROFILE",
+            barsReadyForProfile,
+            "symbol=" + symbol + " barsCount=" + barsCount + " required=" + requiredBars + " profile=" + (openingThirty ? "OPEN30" : "REGULAR")
+        );
         flowCondition("STRATEGY.WARMUP", "NO_INFLIGHT_ORDER", !inFlightOrder, "symbol=" + symbol + " inFlightOrder=" + inFlightOrder);
         flowCondition("STRATEGY.WARMUP", "STRATEGY_ENABLED", enabled, "symbol=" + symbol + " enabled=" + enabled);
         flowCondition("STRATEGY.WARMUP", "CIRCUIT_BREAKER_CLEAR", !circuitBreakerTripped, "symbol=" + symbol + " circuitBreakerTripped=" + circuitBreakerTripped);
@@ -791,8 +935,7 @@ public class PingPongStrategy implements TradingStrategy {
         currentBarVolAsk = 0L;
         currentBarVolBid = 0L;
 
-        // Changed warmup from 300 to 60 to match the longest window (smaWindow / highWindow)
-        if (barsCount > 60 && !inFlightOrder && enabled && !circuitBreakerTripped) {
+        if (barsReadyForProfile && !inFlightOrder && enabled && !circuitBreakerTripped) {
             flowAnalyze("STRATEGY->AI", "Dispatching AI evaluation symbol=" + symbol + " time=" + currentMarketTime + " close=" + barClose);
             askArtificialIntelligence();
         }
@@ -829,19 +972,41 @@ public class PingPongStrategy implements TradingStrategy {
         }
 
         float[] features = constructModelFeatures(currentRsi);
+        float[] regimeFeatures = constructRegimeClassifierFeatures(features);
         flowData("AI.INPUT", "symbol=" + symbol + " features=" + Arrays.toString(features));
+
+        boolean openingThirty = isOpeningThirtyMinutes();
+        MarketRegime activeRegime = openingThirty ? MarketRegime.CHOPPY : detectMarketRegime(regimeFeatures);
+        AiPredictor activeLongEntryAi;
+        AiPredictor activeShortEntryAi;
+        AiPredictor activeLongExitAi;
+        AiPredictor activeShortExitAi;
+
+        if (openingThirty) {
+            activeLongEntryAi = open30LongEntryAi != null ? open30LongEntryAi : longEntryAi;
+            activeShortEntryAi = open30ShortEntryAi != null ? open30ShortEntryAi : shortEntryAi;
+            activeLongExitAi = open30LongExitAi != null ? open30LongExitAi : longExitAi;
+            activeShortExitAi = open30ShortExitAi != null ? open30ShortExitAi : shortExitAi;
+            flowData("AI.ROUTER", "symbol=" + symbol + " profile=OPEN30");
+        } else {
+            activeLongEntryAi = modelForRegime(activeRegime, longEntryAi, choppyLongEntryAi, trendLongEntryAi, volatileLongEntryAi);
+            activeShortEntryAi = modelForRegime(activeRegime, shortEntryAi, choppyShortEntryAi, trendShortEntryAi, volatileShortEntryAi);
+            activeLongExitAi = modelForRegime(activeRegime, longExitAi, choppyLongExitAi, trendLongExitAi, volatileLongExitAi);
+            activeShortExitAi = modelForRegime(activeRegime, shortExitAi, choppyShortExitAi, trendShortExitAi, volatileShortExitAi);
+            flowData("AI.ROUTER", "symbol=" + symbol + " profile=REGIME activeRegime=" + activeRegime);
+        }
 
         // ==========================================
         // SCENARIO 1: WE ARE ALREADY LONG
         // ==========================================
         if (currentPosition > 0) {
             boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi > RSI_LONG_EXIT_THRESHOLD;
-            boolean modelReady = longExitAi != null;
+            boolean modelReady = activeLongExitAi != null;
             flowCondition("AI.LONG.EXIT", "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + RSI_LONG_EXIT_THRESHOLD);
-            flowCondition("AI.LONG.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " model=longExitAi");
+            flowCondition("AI.LONG.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldExitLong = false;
             if (rsiGate && modelReady) {
-                double prob = longExitAi.predictProbability(features);
+                double prob = activeLongExitAi.predictProbability(features);
                 shouldExitLong = prob >= longExitProbabilityThreshold;
                 flowCondition(
                     "AI.LONG.EXIT",
@@ -867,12 +1032,12 @@ public class PingPongStrategy implements TradingStrategy {
         // ==========================================
         if (currentPosition < 0) {
             boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi < RSI_SHORT_EXIT_THRESHOLD;
-            boolean modelReady = shortExitAi != null;
+            boolean modelReady = activeShortExitAi != null;
             flowCondition("AI.SHORT.EXIT", "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + RSI_SHORT_EXIT_THRESHOLD);
-            flowCondition("AI.SHORT.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " model=shortExitAi");
+            flowCondition("AI.SHORT.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldExitShort = false;
             if (rsiGate && modelReady) {
-                double prob = shortExitAi.predictProbability(features);
+                double prob = activeShortExitAi.predictProbability(features);
                 shouldExitShort = prob >= shortExitProbabilityThreshold;
                 flowCondition(
                     "AI.SHORT.EXIT",
@@ -904,12 +1069,12 @@ public class PingPongStrategy implements TradingStrategy {
             // --- DIP BUYING (LONG ENTRY) ---
             double longThreshold = (currentHour == 9) ? RSI_LONG_ENTRY_OPEN_THRESHOLD : RSI_LONG_ENTRY_REGULAR_THRESHOLD;
             boolean longRsiGate = !USE_RSI_PRE_GATES || currentRsi < longThreshold;
-            boolean longModelReady = longEntryAi != null;
+            boolean longModelReady = activeLongEntryAi != null;
             flowCondition("AI.LONG.ENTRY", "RSI_PRE_GATE", longRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + longThreshold);
-            flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " model=longEntryAi");
+            flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldEnterLong = false;
             if (longRsiGate && longModelReady) {
-                double prob = longEntryAi.predictProbability(features);
+                double prob = activeLongEntryAi.predictProbability(features);
                 shouldEnterLong = prob >= longEntryProbabilityThreshold;
                 flowCondition(
                     "AI.LONG.ENTRY",
@@ -933,12 +1098,12 @@ public class PingPongStrategy implements TradingStrategy {
             // --- RIP SELLING (SHORT ENTRY) ---
             double shortThreshold = (currentHour == 9) ? RSI_SHORT_ENTRY_OPEN_THRESHOLD : RSI_SHORT_ENTRY_REGULAR_THRESHOLD;
             boolean shortRsiGate = !USE_RSI_PRE_GATES || currentRsi > shortThreshold;
-            boolean shortModelReady = shortEntryAi != null;
+            boolean shortModelReady = activeShortEntryAi != null;
             flowCondition("AI.SHORT.ENTRY", "RSI_PRE_GATE", shortRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + shortThreshold);
-            flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " model=shortEntryAi");
+            flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldEnterShort = false;
             if (shortRsiGate && shortModelReady) {
-                double prob = shortEntryAi.predictProbability(features);
+                double prob = activeShortEntryAi.predictProbability(features);
                 shouldEnterShort = prob >= shortEntryProbabilityThreshold;
                 flowCondition(
                     "AI.SHORT.ENTRY",
@@ -970,6 +1135,42 @@ public class PingPongStrategy implements TradingStrategy {
             currentRsi = 100.0;
         }
         return currentRsi;
+    }
+
+    private float[] constructRegimeClassifierFeatures(float[] baseFeatures) {
+        if (baseFeatures == null || baseFeatures.length == 0) {
+            return new float[0];
+        }
+
+        // Must match train_30s_models.py build_regime_feature_subset() exclusions.
+        // Excluded in trainer: f_macd_diff, f_atr_norm, f_dist_sma, f_rsi,
+        // f_realized_vol_20, f_realized_vol_z (f_spread_z is not in base-30 schema).
+        if (baseFeatures.length < 30) {
+            flowCondition(
+                "AI.REGIME",
+                "BASE_FEATURE_VECTOR_LEN_GE_30",
+                false,
+                "symbol=" + symbol + " actualLen=" + baseFeatures.length + " expectedLen=30"
+            );
+            return baseFeatures;
+        }
+
+        int[] includeIdx = new int[] {
+            0, 1, 2,
+            4, 5, 6,
+            9, 10,
+            12, 13,
+            14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+            28, 29
+        };
+
+        float[] regimeFeatures = new float[includeIdx.length];
+        for (int i = 0; i < includeIdx.length; i++) {
+            regimeFeatures[i] = baseFeatures[includeIdx[i]];
+        }
+
+        flowData("AI.REGIME", "symbol=" + symbol + " regimeFeatureCount=" + regimeFeatures.length + " baseFeatureCount=" + baseFeatures.length);
+        return regimeFeatures;
     }
 
     private float[] constructModelFeatures(double currentRsi) {
@@ -1035,7 +1236,7 @@ public class PingPongStrategy implements TradingStrategy {
             f_vol_bid_ratio = (float) currentBarVolBid / (float) barVolume;
         }
 
-        // --- Optional extended tail features; AiPredictor will trim for 23-feature models. ---
+        // --- Extended features ---
         int minuteOfDay = (currentMarketTime.getHour() * 60) + currentMarketTime.getMinute();
         double baselineVol = minuteVolumeBaseline.getOrDefault(minuteOfDay, (double) Math.max(1L, barVolume));
         float f_rel_volume_30s = (float) (barVolume / (baselineVol + 1.0));
@@ -1070,7 +1271,8 @@ public class PingPongStrategy implements TradingStrategy {
             ? (float) ((currentBarVolAsk - currentBarVolBid) / (double) (currentBarVolAsk + currentBarVolBid))
             : 0.0f;
 
-        // Return the exact 25-feature array matching Python
+        // Base schema: 30 features (legacy 25 + first 5 extended core features).
+        // Remaining microstructure tail features stay computed for optional 34-feature models.
         return new float[] {
             f_dist_vwap, f_bb_lower_dist, f_bb_upper_dist, f_macd_diff,
             f_body_size, f_lower_wick, f_upper_wick, f_atr_norm,
@@ -1080,8 +1282,7 @@ public class PingPongStrategy implements TradingStrategy {
             f_dist_whole_num, f_is_green, f_green_streak, f_red_streak, f_put_call_ratio,
             f_vol_ask_ratio, f_vol_bid_ratio,
             f_rel_volume_30s, f_realized_vol_20, f_realized_vol_z,
-            f_dist_or_high_atr, f_dist_or_low_atr,
-            f_spread_pct, f_spread_z, f_l1_imbalance, f_signed_flow_30s
+            f_dist_or_high_atr, f_dist_or_low_atr
         };
     }
 
@@ -1115,7 +1316,8 @@ public class PingPongStrategy implements TradingStrategy {
 
         double slippagePerShare = 0.03; // Conservative modeling
 
-        int prevAbsPos = Math.abs(currentPosition);
+        int prevPosition = currentPosition;
+        int prevAbsPos = Math.abs(prevPosition);
         int newPos = ("BUY".equalsIgnoreCase(action))
             ? currentPosition + filledDelta
             : currentPosition - filledDelta;
@@ -1129,8 +1331,10 @@ public class PingPongStrategy implements TradingStrategy {
             double exitPenalty = "SELL".equalsIgnoreCase(action) ? -slippagePerShare : slippagePerShare;
             double adjustedExitPrice = avgFillPrice + exitPenalty;
 
-            double direction = "SELL".equalsIgnoreCase(action) ? 1.0 : -1.0;
-            double tradePnL = (adjustedExitPrice - avgEntryPrice) * filledDelta * direction;
+            // Use prior position sign so long/short realized PnL signs remain correct.
+            double tradePnL = prevPosition > 0
+                ? (adjustedExitPrice - avgEntryPrice) * filledDelta
+                : (avgEntryPrice - adjustedExitPrice) * filledDelta;
 
             dailyNetPnL += tradePnL;
             totalNetPnL += tradePnL;
@@ -1268,6 +1472,23 @@ public class PingPongStrategy implements TradingStrategy {
         if (shortEntryAi != null) shortEntryAi.close();
         if (longExitAi != null) longExitAi.close();
         if (shortExitAi != null) shortExitAi.close();
+        if (regimeClassifierAi != null) regimeClassifierAi.close();
+        if (choppyLongEntryAi != null) choppyLongEntryAi.close();
+        if (choppyShortEntryAi != null) choppyShortEntryAi.close();
+        if (choppyLongExitAi != null) choppyLongExitAi.close();
+        if (choppyShortExitAi != null) choppyShortExitAi.close();
+        if (trendLongEntryAi != null) trendLongEntryAi.close();
+        if (trendShortEntryAi != null) trendShortEntryAi.close();
+        if (trendLongExitAi != null) trendLongExitAi.close();
+        if (trendShortExitAi != null) trendShortExitAi.close();
+        if (volatileLongEntryAi != null) volatileLongEntryAi.close();
+        if (volatileShortEntryAi != null) volatileShortEntryAi.close();
+        if (volatileLongExitAi != null) volatileLongExitAi.close();
+        if (volatileShortExitAi != null) volatileShortExitAi.close();
+        if (open30LongEntryAi != null) open30LongEntryAi.close();
+        if (open30ShortEntryAi != null) open30ShortEntryAi.close();
+        if (open30LongExitAi != null) open30LongExitAi.close();
+        if (open30ShortExitAi != null) open30ShortExitAi.close();
         flowInfo("STRATEGY.STOP", "Strategy stopped symbol=" + symbol);
     }
 
@@ -1294,7 +1515,7 @@ public class PingPongStrategy implements TradingStrategy {
     public boolean isRegimeAllowsTrading() { return enabled && !circuitBreakerTripped && tradeCount < maxTrades; }
     public boolean isArmed() { return allowNewEntries && currentPosition == 0; }
     public boolean isCircuitBreakerTripped() { return circuitBreakerTripped; }
-    public boolean isVolatile() { return false; }
+    public boolean isVolatile() { return lastDetectedRegime == MarketRegime.VOLATILE; }
     public void setGapPercentage(double gapPercentage) {}
     public void setReversalPercentage(double reversalPercentage) {}
     public void setMaxVolatilityPercent(double maxVolatilityPercent) {}

@@ -3,8 +3,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import precision_score, recall_score
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import precision_score, recall_score, accuracy_score
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 import warnings
@@ -12,7 +11,7 @@ warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION: THE 4-MODEL PARAMETERS ---
 # CHANGED: Now pointing to the new 30-second aggregated data
-CSV_FILE = r"C:\data harvested\TSLA_30Sec_Historical_Bulk.csv"
+CSV_FILE = Path(__file__).resolve().parent / "TSLA_30Sec_Historical_Bulk_fromTrainer.csv"
 
 # Hybrid targets for Entries (best overall from 3-way comparison)
 ENTRY_PROFIT_PCT = 0.0014    # +0.14%
@@ -27,14 +26,40 @@ FUTURE_WINDOW_BARS = 10
 
 # Walk-Forward Settings
 N_SPLITS = 5                 # Number of sliding windows to test
+DAY_GAP_BETWEEN_TRAIN_TEST = 0  # Optional day embargo between train and test folds.
 
-# Keep Java compatibility by default (23 features). Turn on to train richer models.
+# Keep Java compatibility by default (30 features: legacy 25 + 5 extended core features).
+# Turn on to include the remaining 4 extended microstructure features.
 USE_EXTENDED_FEATURES = False
 
+REGIME_LABEL_TO_ID = {
+    'choppy': 0,
+    'trend': 1,
+    'volatile': 2,
+}
+
+REGIME_ID_TO_LABEL = {v: k for k, v in REGIME_LABEL_TO_ID.items()}
+
+MIN_REGIME_ROWS = 1200
+MIN_REGIME_SIGNALS = 25
+MIN_OPEN30_ROWS = 800
+MIN_OPEN30_SIGNALS = 20
+
 # Threshold optimization on probabilities
-MIN_RECALL = 0.05
-MIN_PRED_POS_RATE = 0.02
+# Slightly stricter floors reduce fold collapse where thresholding predicts almost no positives.
+MIN_RECALL = 0.10
+MIN_PRED_POS_RATE = 0.04
 THRESHOLD_GRID = np.arange(0.30, 0.91, 0.02)
+# Adaptive thresholding controls (relative to calibration label prevalence).
+MIN_POS_FRACTION_OF_BASE = 0.20
+TARGET_POS_FRACTION_OF_BASE = 0.35
+
+# RandomForest settings tuned to avoid probability saturation at 0/1.
+RF_N_ESTIMATORS = 220
+RF_MAX_DEPTH = 8
+RF_MIN_SAMPLES_SPLIT = 40
+RF_MIN_SAMPLES_LEAF = 20
+RF_MAX_FEATURES = 'sqrt'
 
 # Volatility regime multipliers by hour bucket (TSLA 30s observations)
 # open: 9-10 ET, midday: 11-14 ET, close: 15 ET
@@ -43,6 +68,46 @@ REGIME_MULTIPLIERS = {
     'midday': {'entry_profit': 0.90, 'entry_risk': 0.90, 'exit_drop': 0.90, 'exit_risk': 0.90},
     'close': {'entry_profit': 1.00, 'entry_risk': 1.00, 'exit_drop': 1.00, 'exit_risk': 1.00},
 }
+
+
+def build_rf_classifier(random_state=42):
+    return RandomForestClassifier(
+        n_estimators=RF_N_ESTIMATORS,
+        max_depth=RF_MAX_DEPTH,
+        min_samples_split=RF_MIN_SAMPLES_SPLIT,
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF,
+        max_features=RF_MAX_FEATURES,
+        class_weight='balanced_subsample',
+        random_state=random_state,
+        n_jobs=-1,
+    )
+
+
+def filter_raw_to_regular_session(raw_df):
+    parsed = raw_df.copy()
+    ts_str = parsed['Timestamp'].astype(str).str.strip()
+    parsed_ts = pd.to_datetime(
+        ts_str,
+        format='%Y%m%d %H:%M:%S America/New_York',
+        errors='coerce'
+    )
+    if parsed_ts.isna().any():
+        fallback = pd.to_datetime(ts_str, errors='coerce')
+        parsed_ts = parsed_ts.fillna(fallback)
+    if parsed_ts.isna().any():
+        bad_samples = ts_str[parsed_ts.isna()].head(3).tolist()
+        raise ValueError(f"Unable to parse some Timestamp values. Examples: {bad_samples}")
+
+    parsed['Timestamp'] = parsed_ts
+    h = parsed['Timestamp'].dt.hour
+    m = parsed['Timestamp'].dt.minute
+
+    # Regular trading session only: 09:30 <= t < 16:00 ET.
+    rth_mask = ((h > 9) | ((h == 9) & (m >= 30))) & (h < 16)
+    filtered = parsed[rth_mask].copy()
+
+    print(f">>> Regular-session filter applied: kept {len(filtered)}/{len(raw_df)} rows (09:30-15:59 ET).")
+    return filtered
 
 
 def _hour_bucket(hour):
@@ -68,6 +133,9 @@ def calculate_features(df):
     if df['Timestamp'].isna().any():
         bad_samples = ts_str[df['Timestamp'].isna()].head(3).tolist()
         raise ValueError(f"Unable to parse some Timestamp values. Examples: {bad_samples}")
+
+    # Keep row order strictly chronological for all walk-forward folds.
+    df = df.sort_values('Timestamp').reset_index(drop=True)
 
     df['Date'] = df['Timestamp'].dt.date
     
@@ -271,6 +339,7 @@ def generate_labels(df):
     closes = df['Close'].values
     highs = df['High'].values
     lows = df['Low'].values
+    dates = df['Date'].values
     hours = df['Hour'].values
     atr_norm = (df['ATR_12'] / df['Close']).replace([np.inf, -np.inf], np.nan).fillna(0.0010).values
 
@@ -282,6 +351,7 @@ def generate_labels(df):
     usable = n - FUTURE_WINDOW_BARS
     for i in range(usable):
         ep, er, xd, xr = _adaptive_thresholds(hours[i], atr_norm[i])
+        current_date = dates[i]
 
         c = closes[i]
         le_tp = c * (1.0 + ep)
@@ -297,6 +367,9 @@ def generate_labels(df):
         sx_sl = c * (1.0 - xr)
 
         for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+            # Never let a label look into the next trading day.
+            if dates[j] != current_date:
+                break
             h = highs[j]
             l = lows[j]
 
@@ -313,6 +386,8 @@ def generate_labels(df):
                     break
 
         for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+            if dates[j] != current_date:
+                break
             h = highs[j]
             l = lows[j]
 
@@ -328,6 +403,8 @@ def generate_labels(df):
                 break
 
         for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+            if dates[j] != current_date:
+                break
             h = highs[j]
             l = lows[j]
 
@@ -343,6 +420,8 @@ def generate_labels(df):
                 break
 
         for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+            if dates[j] != current_date:
+                break
             h = highs[j]
             l = lows[j]
 
@@ -366,6 +445,242 @@ def generate_labels(df):
     return df
 
 
+def assign_market_regime(df):
+    """
+    Heuristic regime labels used to train the regime classifier:
+    - volatile: high ATR / realized vol / spread stress
+    - trend: directional extension with momentum (non-volatile)
+    - choppy: everything else
+    """
+    labeled = df.copy()
+
+    atr_q70 = labeled['f_atr_norm'].quantile(0.70)
+    vol_q70 = labeled['f_realized_vol_20'].quantile(0.70)
+
+    # Normalize trend intensity by ATR to avoid raw price-scale bias.
+    trend_extension = (labeled['Close'] - labeled['SMA_60']).abs() / (labeled['ATR_12'] + 1e-9)
+    momentum_strength = labeled['f_macd_diff'].abs() / (labeled['f_atr_norm'] + 1e-9)
+    rsi_directional = (labeled['f_rsi'] > 58.0) | (labeled['f_rsi'] < 42.0)
+
+    volatile_mask = (
+        (labeled['f_atr_norm'] >= atr_q70)
+        | (labeled['f_realized_vol_20'] >= vol_q70)
+        | (labeled['f_realized_vol_z'] >= 1.0)
+        | (labeled['f_spread_z'] >= 1.5)
+    )
+
+    trend_mask = (
+        ~volatile_mask
+        & ((trend_extension >= 1.20) | (momentum_strength >= 1.00))
+        & rsi_directional
+    )
+
+    labeled['MarketRegime'] = 'choppy'
+    labeled.loc[trend_mask, 'MarketRegime'] = 'trend'
+    labeled.loc[volatile_mask, 'MarketRegime'] = 'volatile'
+    labeled['RegimeLabel'] = labeled['MarketRegime'].map(REGIME_LABEL_TO_ID).astype(np.int8)
+
+    regime_dist = labeled['MarketRegime'].value_counts(normalize=True).mul(100.0).round(2)
+    print("\n>>> Regime distribution (% rows):")
+    for regime_name in ['choppy', 'trend', 'volatile']:
+        pct = float(regime_dist.get(regime_name, 0.0))
+        print(f"{regime_name:>8}: {pct:6.2f}%")
+
+    return labeled
+
+
+def train_regime_classifier(X, y, dates, feature_count, out_dir):
+    print("\n=========================================")
+    print("--- Training Market Regime Classifier ---")
+    print(f"Rows: {len(y)} | Classes: {sorted(np.unique(y).tolist())}")
+
+    fold_indices = build_day_walk_forward_splits(
+        dates,
+        n_splits=N_SPLITS,
+        day_gap=DAY_GAP_BETWEEN_TRAIN_TEST,
+    )
+    if not fold_indices:
+        print("WARNING: Not enough distinct days for day-based regime walk-forward validation.")
+        print(">>> Falling back to training final regime classifier on 100% of rows only.")
+
+    fold_acc = []
+
+    fold = 1
+    for train_index, test_index, train_days, test_days in fold_indices:
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        clf = build_rf_classifier(random_state=42)
+        clf.fit(X_train, y_train)
+        pred = clf.predict(X_test)
+        acc = accuracy_score(y_test, pred)
+        fold_acc.append(acc)
+        print(
+            f"Fold {fold} | TrainDays: {train_days} | TestDays: {test_days} "
+            f"| Train: {len(X_train)} | Test: {len(X_test)} | Accuracy: {acc:.2%}"
+        )
+        fold += 1
+
+    final_model = build_rf_classifier(random_state=42)
+    final_model.fit(X, y)
+
+    versioned_path = out_dir / "regime_classifier.onnx"
+    resources_path = Path("src") / "main" / "resources" / "regime_classifier.onnx"
+    export_to_onnx(final_model, feature_count, str(versioned_path), alias_filename=str(resources_path))
+
+    avg_acc = float(np.mean(fold_acc)) if fold_acc else 0.0
+    print(f">>> Regime classifier average walk-forward accuracy: {avg_acc:.2%}")
+
+    return {
+        'avg_accuracy': avg_acc,
+        'exported_to': str(versioned_path),
+    }
+
+
+def build_regime_feature_subset(df, all_feature_cols):
+    # Exclude direct proxies used in assign_market_regime to keep evaluation meaningful.
+    excluded = {
+        'f_atr_norm',
+        'f_realized_vol_20',
+        'f_realized_vol_z',
+        'f_spread_z',
+        'f_rsi',
+        'f_macd_diff',
+        'f_dist_sma',
+    }
+    subset = [col for col in all_feature_cols if col not in excluded]
+    if len(subset) < 8:
+        # Safety fallback: never train regime model on an excessively tiny schema.
+        print("WARNING: Regime subset too small after exclusions, reverting to full feature set.")
+        subset = list(all_feature_cols)
+    return subset
+
+
+def train_regime_specific_models(df, feature_cols, out_dir):
+    model_specs = [
+        ("LONG ENTRY (Dip Buyer)", "Label_Long_Entry", "long_entry.onnx"),
+        ("SHORT ENTRY (Rip Seller)", "Label_Short_Entry", "short_entry.onnx"),
+        ("LONG EXIT (Top Detector)", "Label_Long_Exit", "long_exit.onnx"),
+        ("SHORT EXIT (Bottom Detector)", "Label_Short_Exit", "short_exit.onnx"),
+    ]
+
+    summary_rows = []
+    for regime_name in ['choppy', 'trend', 'volatile']:
+        regime_df = df[df['MarketRegime'] == regime_name].copy()
+        print("\n=========================================")
+        print(f"--- Training {regime_name.upper()} Specialized Models ---")
+        print(f"Rows in regime subset: {len(regime_df)}")
+
+        if len(regime_df) < MIN_REGIME_ROWS:
+            print(f"WARNING: Skipping {regime_name} models. Need >= {MIN_REGIME_ROWS} rows.")
+            continue
+
+        X_regime = regime_df[feature_cols].values.astype(np.float32)
+
+        for model_name, label_col, base_filename in model_specs:
+            positive_count = int(np.sum(regime_df[label_col].values, dtype=np.int64))
+            if positive_count < MIN_REGIME_SIGNALS:
+                print(
+                    f"WARNING: Skipping {regime_name} {model_name}. "
+                    f"Need >= {MIN_REGIME_SIGNALS} positives, found {positive_count}."
+                )
+                continue
+
+            versioned_name = f"{regime_name}_{base_filename}"
+            resources_name = f"{regime_name}_{base_filename}"
+
+            result = perform_walk_forward_testing(
+                X_regime,
+                regime_df[label_col].values,
+                regime_df['Date'].values,
+                f"{regime_name.upper()} {model_name}"
+            )
+            if result['model'] is None:
+                continue
+
+            versioned_path = out_dir / versioned_name
+            resources_path = Path("src") / "main" / "resources" / resources_name
+            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=str(resources_path))
+
+            summary_rows.append({
+                'regime': regime_name,
+                'model': model_name,
+                'signals': result['total_signals'],
+                'rows': result['total_rows'],
+                'avg_precision': result['avg_precision'],
+                'avg_threshold': result['avg_threshold'],
+                'exported_to': str(versioned_path),
+            })
+
+    return summary_rows
+
+
+def train_open30_models(df, feature_cols, out_dir):
+    model_specs = [
+        ("LONG ENTRY (Dip Buyer)", "Label_Long_Entry", "open30_long_entry.onnx"),
+        ("SHORT ENTRY (Rip Seller)", "Label_Short_Entry", "open30_short_entry.onnx"),
+        ("LONG EXIT (Top Detector)", "Label_Long_Exit", "open30_long_exit.onnx"),
+        ("SHORT EXIT (Bottom Detector)", "Label_Short_Exit", "open30_short_exit.onnx"),
+    ]
+
+    # 09:30:00 <= t < 10:00:00 ET
+    open30_mask = (
+        ((df['Hour'] == 9) & (df['Minute'] >= 30))
+        | ((df['Hour'] == 10) & (df['Minute'] == 0) & (df['Timestamp'].dt.second == 0))
+    )
+
+    open_df = df[open30_mask].copy()
+    print("\n=========================================")
+    print("--- Training OPENING-30M Specialized Models ---")
+    print(f"Rows in opening subset: {len(open_df)}")
+
+    if len(open_df) < MIN_OPEN30_ROWS:
+        print(f"WARNING: Skipping opening-30m models. Need >= {MIN_OPEN30_ROWS} rows.")
+        return []
+
+    X_open = open_df[feature_cols].values.astype(np.float32)
+    summary_rows = []
+
+    for model_name, label_col, filename in model_specs:
+        positive_count = int(np.sum(open_df[label_col].values, dtype=np.int64))
+        if positive_count < MIN_OPEN30_SIGNALS:
+            print(
+                f"WARNING: Skipping opening-30m {model_name}. "
+                f"Need >= {MIN_OPEN30_SIGNALS} positives, found {positive_count}."
+            )
+            continue
+
+        result = perform_walk_forward_testing(
+            X_open,
+            open_df[label_col].values,
+            open_df['Date'].values,
+            f"OPEN30 {model_name}"
+        )
+        if result['model'] is None:
+            continue
+
+        versioned_path = out_dir / filename
+        resources_path = Path("src") / "main" / "resources" / filename
+        export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=str(resources_path))
+
+        summary_rows.append({
+            'model': model_name,
+            'signals': result['total_signals'],
+            'rows': result['total_rows'],
+            'avg_precision': result['avg_precision'],
+            'avg_threshold': result['avg_threshold'],
+            'exported_to': str(versioned_path),
+        })
+
+    return summary_rows
+
+
+def filter_after_opening_window(df):
+    # Soft separation: train non-open models only on bars from 10:00 ET onward.
+    rest_mask = (df['Hour'] >= 10)
+    return df[rest_mask].copy()
+
+
 def print_label_prevalence_by_hour(df):
     hour_stats = (
         df.groupby('Hour')[['Label_Long_Entry', 'Label_Short_Entry', 'Label_Long_Exit', 'Label_Short_Exit']]
@@ -377,7 +692,13 @@ def print_label_prevalence_by_hour(df):
 
 def export_to_onnx(model, feature_count, filename, alias_filename=None):
     initial_type = [('float_input', FloatTensorType([None, feature_count]))]
-    onnx_model = convert_sklearn(model, initial_types=initial_type, target_opset=12)
+    # Force probability tensor output (no ZipMap) to keep Java parsing stable and continuous.
+    onnx_model = convert_sklearn(
+        model,
+        initial_types=initial_type,
+        options={id(model): {'zipmap': False}},
+        target_opset=12,
+    )
     if getattr(onnx_model, 'ir_version', 0) > 9:
         onnx_model.ir_version = 9
     model_bytes = onnx_model.SerializeToString()
@@ -404,6 +725,14 @@ def optimize_threshold(y_true, probas):
     best_prec = -1.0
     best_recall = 0.0
     best_pos_rate = 0.0
+    best_score = -1e9
+
+    base_pos_rate = float(np.mean(y_true)) if len(y_true) else 0.0
+    adaptive_floor = max(
+        MIN_PRED_POS_RATE,
+        min(0.20, base_pos_rate * MIN_POS_FRACTION_OF_BASE)
+    )
+    target_pos_rate = min(0.25, max(0.08, base_pos_rate * TARGET_POS_FRACTION_OF_BASE))
 
     for thr in THRESHOLD_GRID:
         preds = (probas >= thr).astype(np.int8)
@@ -412,11 +741,14 @@ def optimize_threshold(y_true, probas):
             continue
 
         rec = recall_score(y_true, preds, zero_division=0)
-        if rec < MIN_RECALL or pos_rate < MIN_PRED_POS_RATE:
+        if rec < MIN_RECALL or pos_rate < adaptive_floor:
             continue
 
         prec = precision_score(y_true, preds, zero_division=0)
-        if prec > best_prec:
+        # Balance precision with recall and avoid drifting to very sparse predictions.
+        score = 0.65 * prec + 0.35 * rec - 0.15 * abs(pos_rate - target_pos_rate)
+        if score > best_score or (score == best_score and prec > best_prec):
+            best_score = float(score)
             best_prec = prec
             best_thr = float(thr)
             best_recall = float(rec)
@@ -427,7 +759,41 @@ def optimize_threshold(y_true, probas):
         return 0.50, 0.0, 0.0, 0.0
     return best_thr, best_prec, best_recall, best_pos_rate
 
-def perform_walk_forward_testing(X, y, name):
+def build_day_walk_forward_splits(dates, n_splits=5, day_gap=0):
+    day_series = pd.Series(dates).reset_index(drop=True)
+    unique_days = pd.Index(pd.unique(day_series))
+    n_days = len(unique_days)
+
+    if n_days < 2:
+        return []
+
+    test_days_per_fold = max(1, n_days // (n_splits + 1))
+    splits = []
+
+    for fold in range(1, n_splits + 1):
+        test_start = fold * test_days_per_fold
+        test_end = min(test_start + test_days_per_fold, n_days)
+        train_end = max(0, test_start - int(day_gap))
+
+        if test_start >= n_days or train_end <= 0:
+            continue
+
+        train_days = unique_days[:train_end]
+        test_days = unique_days[test_start:test_end]
+        if len(test_days) == 0:
+            continue
+
+        train_idx = day_series.index[day_series.isin(train_days)].to_numpy(dtype=np.int64)
+        test_idx = day_series.index[day_series.isin(test_days)].to_numpy(dtype=np.int64)
+        if len(train_idx) == 0 or len(test_idx) == 0:
+            continue
+
+        splits.append((train_idx, test_idx, len(train_days), len(test_days)))
+
+    return splits
+
+
+def perform_walk_forward_testing(X, y, dates, name):
     print(f"\n=========================================")
     print(f"--- Walk-Forward Testing: {name} ---")
     total_signals = int(np.sum(y, dtype=np.int64))
@@ -444,13 +810,20 @@ def perform_walk_forward_testing(X, y, name):
             'folds_used': 0,
         }
 
-    tscv = TimeSeriesSplit(n_splits=N_SPLITS, gap=FUTURE_WINDOW_BARS)
+    fold_indices = build_day_walk_forward_splits(
+        dates,
+        n_splits=N_SPLITS,
+        day_gap=DAY_GAP_BETWEEN_TRAIN_TEST,
+    )
+    if not fold_indices:
+        print("WARNING: Not enough distinct days for day-based walk-forward validation.")
+        print(">>> Falling back to training final production model on 100% of rows only.")
     
     fold = 1
     precisions = []
     thresholds = []
     
-    for train_index, test_index in tscv.split(X):
+    for train_index, test_index, train_days, test_days in fold_indices:
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
         
@@ -459,7 +832,7 @@ def perform_walk_forward_testing(X, y, name):
             fold += 1
             continue
 
-        model = RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced', random_state=42, n_jobs=-1)
+        model = build_rf_classifier(random_state=42)
         model.fit(X_train, y_train)
 
         # Calibrate threshold from the tail of train split (time-consistent).
@@ -475,14 +848,19 @@ def perform_walk_forward_testing(X, y, name):
 
         test_proba = model.predict_proba(X_test)[:, 1]
         y_pred = (test_proba >= thr).astype(np.int8)
+        pred_pos_rate = float(y_pred.mean()) if len(y_pred) else 0.0
+        test_pos_rate = float(y_test.mean()) if len(y_test) else 0.0
+        pred_pos_count = int(np.sum(y_pred, dtype=np.int64))
         
         prec = precision_score(y_test, y_pred, zero_division=0)
         precisions.append(prec)
         thresholds.append(thr)
         
         print(
-            f"Fold {fold} | Train Size: {len(X_train)} | Test Size: {len(X_test)} "
+            f"Fold {fold} | TrainDays: {train_days} | TestDays: {test_days} "
+            f"| Train Size: {len(X_train)} | Test Size: {len(X_test)} "
             f"| Thr: {thr:.2f} | CalP/R/Pos: {cal_prec:.2%}/{cal_rec:.2%}/{cal_pos:.2%} "
+            f"| Test Pos: {test_pos_rate:.2%} | Pred Pos: {pred_pos_rate:.2%} ({pred_pos_count}) "
             f"| Out-of-Sample Precision: {prec:.2%}"
         )
         fold += 1
@@ -496,7 +874,7 @@ def perform_walk_forward_testing(X, y, name):
             print(f"!!! WARNING: This model shows poor out-of-sample prediction power.")
     
     print(f"\n>>> Training Final Production Model on 100% of data...")
-    final_model = RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced', random_state=42, n_jobs=-1)
+    final_model = build_rf_classifier(random_state=42)
     final_model.fit(X, y)
     return {
         'model': final_model,
@@ -518,45 +896,76 @@ def main():
         print(f"ERROR: {CSV_FILE} not found. Please run the Java Historical Bulk Scraper first.")
         return
 
+    raw_df = filter_raw_to_regular_session(raw_df)
+    if raw_df.empty:
+        print("ERROR: No regular-session rows available after filtering (09:30-15:59 ET).")
+        return
+
     df = calculate_features(raw_df)
     df = generate_labels(df)
+    df = assign_market_regime(df)
+    df_rest = filter_after_opening_window(df)
+
+    if df_rest.empty:
+        print("ERROR: No rows available for >=10:00 ET training after soft separation filter.")
+        return
+
+    print(f">>> Soft separation enabled: training non-open models on >=10:00 ET rows only ({len(df_rest)}/{len(df)} rows).")
     print_label_prevalence_by_hour(df)
 
-    # EXACT 23-FEATURE ARRAY TO MATCH JAVA
+    # BASE feature array to match Java default output.
     feature_cols = [
         'f_dist_vwap', 'f_bb_lower_dist', 'f_bb_upper_dist', 'f_macd_diff',
         'f_body_size', 'f_lower_wick', 'f_upper_wick', 'f_atr_norm',
         'f_dist_sma', 'f_dist_high', 'f_dist_low', 'f_rsi', 'f_gap_from_prev_close',
         'f_time_of_day', 'f_dist_swing_high', 'f_dist_swing_low', 'f_is_new_high', 
         'f_is_new_low', 'f_dist_whole_num', 'f_is_green', 'f_green_streak',
-        'f_red_streak', 'f_put_call_ratio', 'f_vol_ask_ratio', 'f_vol_bid_ratio'
+        'f_red_streak', 'f_put_call_ratio', 'f_vol_ask_ratio', 'f_vol_bid_ratio',
+        # Promote first 5 "extended" features into the base schema.
+        'f_rel_volume_30s', 'f_realized_vol_20', 'f_realized_vol_z',
+        'f_dist_or_high_atr', 'f_dist_or_low_atr'
     ]
 
     extended_feature_cols = [
-        'f_rel_volume_30s', 'f_realized_vol_20', 'f_realized_vol_z',
-        'f_dist_or_high_atr', 'f_dist_or_low_atr',
         'f_spread_pct', 'f_spread_z', 'f_l1_imbalance', 'f_signed_flow_30s'
     ]
 
+    base_feature_count = len(feature_cols)
+
     if USE_EXTENDED_FEATURES:
         feature_cols = feature_cols + extended_feature_cols
-        print(">>> Using extended feature set (NOT Java-compatible without Java feature updates).")
+        print(">>> Using extended feature set (34 features: base 30 + 4 microstructure tail).")
     else:
-        print(">>> Using base 23-feature set (Java-compatible).")
+        print(f">>> Using base {base_feature_count}-feature set (Java-compatible).")
 
     print(f">>> Feature count used for training: {len(feature_cols)}")
-    X = df[feature_cols].values.astype(np.float32)
+    X = df_rest[feature_cols].values.astype(np.float32)
+
+    regime_feature_cols = build_regime_feature_subset(df_rest, feature_cols)
+    X_regime = df_rest[regime_feature_cols].values.astype(np.float32)
+    print(
+        f">>> Regime classifier feature subset: {len(regime_feature_cols)} "
+        f"(excluded direct regime-rule proxies)."
+    )
+
+    regime_report = train_regime_classifier(
+        X_regime,
+        df_rest['RegimeLabel'].values.astype(np.int64),
+        df_rest['Date'].values,
+        len(regime_feature_cols),
+        versioned_out_dir,
+    )
 
     models = [
-        ("LONG ENTRY (Dip Buyer)", df['Label_Long_Entry'].values, "long_entry.onnx"),
-        ("SHORT ENTRY (Rip Seller)", df['Label_Short_Entry'].values, "short_entry.onnx"),
-        ("LONG EXIT (Top Detector)", df['Label_Long_Exit'].values, "long_exit.onnx"),
-        ("SHORT EXIT (Bottom Detector)", df['Label_Short_Exit'].values, "short_exit.onnx")
+        ("LONG ENTRY (Dip Buyer)", df_rest['Label_Long_Entry'].values, "long_entry.onnx"),
+        ("SHORT ENTRY (Rip Seller)", df_rest['Label_Short_Entry'].values, "short_entry.onnx"),
+        ("LONG EXIT (Top Detector)", df_rest['Label_Long_Exit'].values, "long_exit.onnx"),
+        ("SHORT EXIT (Bottom Detector)", df_rest['Label_Short_Exit'].values, "short_exit.onnx")
     ]
 
     score_rows = []
     for name, y_data, filename in models:
-        result = perform_walk_forward_testing(X, y_data, name)
+        result = perform_walk_forward_testing(X, y_data, df_rest['Date'].values, name)
         exported_path = "-"
         if result['model'] is not None:
             versioned_path = versioned_out_dir / filename
@@ -587,6 +996,45 @@ def main():
             f"{row['folds_used']} | "
             f"{row['exported_to']}"
         )
+
+    regime_specific_rows = train_regime_specific_models(df_rest, feature_cols, versioned_out_dir)
+    if regime_specific_rows:
+        print("\n>>> REGIME-SPECIFIC MODEL SCORECARD")
+        print("Regime | Model | Signals/Rows | AvgPrecision | AvgThreshold | Export")
+        for row in regime_specific_rows:
+            print(
+                f"{row['regime']} | {row['model']} | "
+                f"{row['signals']}/{row['rows']} | "
+                f"{row['avg_precision']:.2%} | "
+                f"{row['avg_threshold']:.2f} | "
+                f"{row['exported_to']}"
+            )
+    else:
+        print("\n>>> REGIME-SPECIFIC MODEL SCORECARD")
+        print("No trend/volatile specialized models were exported (insufficient rows/signals).")
+
+    open30_rows = train_open30_models(df, feature_cols, versioned_out_dir)
+    if open30_rows:
+        print("\n>>> OPENING-30M MODEL SCORECARD")
+        print("Model | Signals/Rows | AvgPrecision | AvgThreshold | Export")
+        for row in open30_rows:
+            print(
+                f"{row['model']} | "
+                f"{row['signals']}/{row['rows']} | "
+                f"{row['avg_precision']:.2%} | "
+                f"{row['avg_threshold']:.2f} | "
+                f"{row['exported_to']}"
+            )
+    else:
+        print("\n>>> OPENING-30M MODEL SCORECARD")
+        print("No opening-30m specialized models were exported (insufficient rows/signals).")
+
+    print("\n>>> REGIME CLASSIFIER")
+    print(
+        "MarketRegimeClassifier | "
+        f"AvgAccuracy={regime_report['avg_accuracy']:.2%} | "
+        f"Export={regime_report['exported_to']}"
+    )
 
     print("\n==================================================")
     print(">>> PIPELINE COMPLETE.")

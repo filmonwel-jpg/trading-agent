@@ -105,9 +105,10 @@ public class HistoricalBacktester extends IBKRTrader {
             Double previousDayFinalClose = null;
             double lastSeenClose = 0.0;
 
-            LocalTime hardCutoffTime = LocalTime.of(13, 55, 0);
-            LocalTime eodFlattenStart = LocalTime.of(13, 59, 50);
-            LocalTime eodFlattenEnd = LocalTime.of(14, 0, 0);
+            // Market timezone is ET; align EOD rules to 16:00 ET close.
+            LocalTime hardCutoffTime = LocalTime.of(15, 55, 0);
+            LocalTime eodFlattenStart = LocalTime.of(15, 59, 50);
+            LocalTime eodFlattenEnd = LocalTime.of(16, 0, 0);
 
             while ((line = br.readLine()) != null) {
                 if (isHeader) {
@@ -323,7 +324,8 @@ public class HistoricalBacktester extends IBKRTrader {
             parseThresholdProperty("trading.ai.long-entry-threshold", 0.68),
             parseThresholdProperty("trading.ai.short-entry-threshold", 0.63),
             parseThresholdProperty("trading.ai.long-exit-threshold", 0.61),
-            parseThresholdProperty("trading.ai.short-exit-threshold", 0.63)
+            parseThresholdProperty("trading.ai.short-exit-threshold", 0.63),
+            parseThresholdProperty("trading.ai.regime-threshold", 0.50)
         );
         testStrategy.setMaxVolatilityPercent(10.0);
         testStrategy.setPositionSynced(true);

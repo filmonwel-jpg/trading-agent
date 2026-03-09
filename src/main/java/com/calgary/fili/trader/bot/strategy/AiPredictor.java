@@ -9,6 +9,7 @@ import ai.onnxruntime.TensorInfo;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -25,6 +26,7 @@ public class AiPredictor {
     private final int expectedFeatureCount;
 
     public record PredictionOutcome(boolean predictedPositive, double positiveProbability) {}
+    public record ClassPredictionOutcome(int classLabel, double confidence) {}
 
     public AiPredictor(String modelFileName) throws Exception {
         this.modelFileName = modelFileName;
@@ -58,7 +60,7 @@ public class AiPredictor {
             this.expectedFeatureCount = detectedFeatures > 0 ? detectedFeatures : DEFAULT_EXPECTED_FEATURES;
             flowInfo("AI.INIT", "Successfully loaded model=" + modelFileName);
             flowData("AI.INIT", "model=" + modelFileName + " input=" + inputName + " expectedFeatures=" + expectedFeatureCount);
-            if (expectedFeatureCount == 25 || expectedFeatureCount == 34) {
+            if (expectedFeatureCount == 25 || expectedFeatureCount == 30 || expectedFeatureCount == 34) {
                 flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", true, "model=" + modelFileName + " expected=" + expectedFeatureCount);
             } else {
                 flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", false, "model=" + modelFileName + " expected=" + expectedFeatureCount + " note=will trim/pad from strategy vector");
@@ -86,6 +88,83 @@ public class AiPredictor {
 
     public double predictProbability(float[] features) {
         return predictOutcome(features).positiveProbability();
+    }
+
+    public int predictClassLabel(float[] features, int fallbackLabel) {
+        boolean validFeatures = features != null && features.length > 0;
+        flowCondition("AI.INPUT", "FEATURE_VECTOR_PRESENT", validFeatures, "model=" + modelFileName + " featureCount=" + (features == null ? 0 : features.length));
+        if (!validFeatures) {
+            flowError("AI.INPUT", "Features cannot be null or empty model=" + modelFileName + " usingFallbackLabel=" + fallbackLabel);
+            return fallbackLabel;
+        }
+
+        try {
+            float[] normalizedFeatures = normalizeFeatures(features);
+            float[][] inputMatrix = new float[][]{normalizedFeatures};
+            try (OnnxTensor tensor = OnnxTensor.createTensor(env, inputMatrix);
+                 OrtSession.Result result = session.run(Collections.singletonMap(inputName, tensor))) {
+                long label = extractLabel(result);
+                if (label >= 0) {
+                    flowData("AI.RESPONSE", "model=" + modelFileName + " classLabel=" + label);
+                    return (int) label;
+                }
+                flowError("AI.RESPONSE", "Missing class label model=" + modelFileName + " usingFallbackLabel=" + fallbackLabel);
+            }
+        } catch (Exception e) {
+            flowError("AI.RESPONSE", "Class prediction failed model=" + modelFileName + " reason=" + e.getMessage() + " usingFallbackLabel=" + fallbackLabel);
+        }
+
+        return fallbackLabel;
+    }
+
+    public ClassPredictionOutcome predictClassWithConfidence(float[] features, int fallbackLabel) {
+        boolean validFeatures = features != null && features.length > 0;
+        flowCondition("AI.INPUT", "FEATURE_VECTOR_PRESENT", validFeatures, "model=" + modelFileName + " featureCount=" + (features == null ? 0 : features.length));
+        if (!validFeatures) {
+            flowError("AI.INPUT", "Features cannot be null or empty model=" + modelFileName + " usingFallbackLabel=" + fallbackLabel);
+            return new ClassPredictionOutcome(fallbackLabel, 0.0);
+        }
+
+        try {
+            float[] normalizedFeatures = normalizeFeatures(features);
+            float[][] inputMatrix = new float[][]{normalizedFeatures};
+            try (OnnxTensor tensor = OnnxTensor.createTensor(env, inputMatrix);
+                 OrtSession.Result result = session.run(Collections.singletonMap(inputName, tensor))) {
+                long label = extractLabel(result);
+                Map<Integer, Double> classProbabilities = extractClassProbabilities(result);
+
+                int predictedLabel = label >= 0 ? (int) label : fallbackLabel;
+                double confidence = 0.0;
+
+                if (!classProbabilities.isEmpty()) {
+                    if (classProbabilities.containsKey(predictedLabel)) {
+                        confidence = clampProbability(classProbabilities.get(predictedLabel));
+                    } else {
+                        Map.Entry<Integer, Double> best = classProbabilities.entrySet().stream()
+                            .max(Map.Entry.comparingByValue())
+                            .orElse(null);
+                        if (best != null) {
+                            predictedLabel = best.getKey();
+                            confidence = clampProbability(best.getValue());
+                        }
+                    }
+                } else if (label >= 0) {
+                    // If model does not expose probabilities, treat the emitted label as confident.
+                    confidence = 1.0;
+                }
+
+                flowData(
+                    "AI.RESPONSE",
+                    "model=" + modelFileName
+                        + " classLabel=" + predictedLabel
+                        + " confidence=" + String.format("%.4f", confidence)
+                );
+                return new ClassPredictionOutcome(predictedLabel, confidence);
+            }
+        } catch (Exception e) {
+            flowError("AI.RESPONSE", "Class prediction failed model=" + modelFileName + " reason=" + e.getMessage() + " usingFallbackLabel=" + fallbackLabel);
+            return new ClassPredictionOutcome(fallbackLabel, 0.0);
+        }
     }
 
     public PredictionOutcome predictOutcome(float[] features) {
@@ -169,6 +248,98 @@ public class AiPredictor {
             Double extracted = extractProbabilityFromValue(value);
             if (extracted != null) {
                 return extracted;
+            }
+        }
+        return null;
+    }
+
+    private Map<Integer, Double> extractClassProbabilities(OrtSession.Result result) {
+        for (int i = 0; i < result.size(); i++) {
+            Object value;
+            try {
+                value = result.get(i).getValue();
+            } catch (Exception e) {
+                flowError("AI.RESPONSE", "Failed reading ONNX class probabilities model=" + modelFileName + " idx=" + i + " reason=" + e.getMessage());
+                continue;
+            }
+
+            Map<Integer, Double> extracted = extractClassProbabilitiesFromValue(value);
+            if (!extracted.isEmpty()) {
+                return extracted;
+            }
+        }
+        return Collections.emptyMap();
+    }
+
+    private Map<Integer, Double> extractClassProbabilitiesFromValue(Object value) {
+        if (value == null) {
+            return Collections.emptyMap();
+        }
+
+        if (value instanceof float[][] probs2d && probs2d.length > 0 && probs2d[0].length > 0) {
+            return indexedProbabilities(probs2d[0]);
+        }
+        if (value instanceof double[][] probs2d && probs2d.length > 0 && probs2d[0].length > 0) {
+            return indexedProbabilities(probs2d[0]);
+        }
+        if (value instanceof float[] probs1d && probs1d.length > 0) {
+            return indexedProbabilities(probs1d);
+        }
+        if (value instanceof double[] probs1d && probs1d.length > 0) {
+            return indexedProbabilities(probs1d);
+        }
+
+        if (value instanceof List<?> list && !list.isEmpty()) {
+            Object first = list.get(0);
+            if (first instanceof Map<?, ?> map) {
+                return extractClassProbabilitiesFromMap(map);
+            }
+        }
+
+        if (value instanceof Map<?, ?> map) {
+            return extractClassProbabilitiesFromMap(map);
+        }
+
+        return Collections.emptyMap();
+    }
+
+    private Map<Integer, Double> indexedProbabilities(float[] probs) {
+        Map<Integer, Double> out = new HashMap<>();
+        for (int i = 0; i < probs.length; i++) {
+            out.put(i, clampProbability(probs[i]));
+        }
+        return out;
+    }
+
+    private Map<Integer, Double> indexedProbabilities(double[] probs) {
+        Map<Integer, Double> out = new HashMap<>();
+        for (int i = 0; i < probs.length; i++) {
+            out.put(i, clampProbability(probs[i]));
+        }
+        return out;
+    }
+
+    private Map<Integer, Double> extractClassProbabilitiesFromMap(Map<?, ?> map) {
+        Map<Integer, Double> out = new HashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            Integer key = parseClassKey(entry.getKey());
+            if (key == null || !(entry.getValue() instanceof Number n)) {
+                continue;
+            }
+            out.put(key, clampProbability(n.doubleValue()));
+        }
+        return out;
+    }
+
+    private Integer parseClassKey(Object rawKey) {
+        if (rawKey instanceof Number n) {
+            return n.intValue();
+        }
+        if (rawKey != null) {
+            try {
+                return Integer.parseInt(String.valueOf(rawKey));
+            } catch (NumberFormatException ignored) {
+                return null;
             }
         }
         return null;
