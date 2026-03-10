@@ -703,8 +703,29 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     // Logger Helpers
     private void flowInfo(String tag, String msg) { log.info(">>> [FLOW][INFO][{}] {}", tag, msg); }
-    private void flowData(String tag, String msg) { log.info(">>> [FLOW][DATA][{}] {}", tag, msg); }
-    private void flowCondition(String tag, String check, boolean pass, String context) { log.info(">>> [FLOW][COND][{}] {}={} | {}", tag, check, pass ? "PASS" : "FAIL", context); }
+    private boolean isTickerLevelTag(String tag) {
+        return "IBKR.TICK".equals(tag)
+            || "IBKR->AI.TICK".equals(tag)
+            || "IBKR.SUBSCRIBE".equals(tag)
+            || "STRATEGY.TAPE".equals(tag)
+            || "STRATEGY.TICK".equals(tag);
+    }
+
+    private void flowData(String tag, String msg) {
+        if (isTickerLevelTag(tag)) {
+            log.debug(">>> [FLOW][DATA][{}] {}", tag, msg);
+            return;
+        }
+        log.info(">>> [FLOW][DATA][{}] {}", tag, msg);
+    }
+
+    private void flowCondition(String tag, String check, boolean pass, String context) {
+        if (isTickerLevelTag(tag)) {
+            log.debug(">>> [FLOW][COND][{}] {}={} | {}", tag, check, pass ? "PASS" : "FAIL", context);
+            return;
+        }
+        log.info(">>> [FLOW][COND][{}] {}={} | {}", tag, check, pass ? "PASS" : "FAIL", context);
+    }
     private void flowAnalyze(String tag, String msg) { log.info(">>> [FLOW][ANALYZE][{}] {}", tag, msg); }
     private void flowError(String tag, String msg) { log.error(">>> [ERROR][{}] {}", tag, msg); }
     private void flowDataDebug(String tag, String msg) { log.debug(">>> [FLOW][DATA][{}] {}", tag, msg); }

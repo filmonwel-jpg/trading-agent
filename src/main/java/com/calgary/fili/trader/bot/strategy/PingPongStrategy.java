@@ -1553,7 +1553,15 @@ public class PingPongStrategy implements TradingStrategy {
         log.info(">>> [FLOW][INFO][{}] {}", stage, message);
     }
 
+    private boolean isTickerLevelStage(String stage) {
+        return "STRATEGY.TAPE".equals(stage) || "STRATEGY.TICK".equals(stage);
+    }
+
     private void flowData(String stage, String message) {
+        if (isTickerLevelStage(stage)) {
+            log.debug(">>> [FLOW][DATA][{}] {}", stage, message);
+            return;
+        }
         log.info(">>> [FLOW][DATA][{}] {}", stage, message);
     }
 
@@ -1567,6 +1575,10 @@ public class PingPongStrategy implements TradingStrategy {
 
     private void flowCondition(String stage, String conditionName, boolean passed, String details) {
         String verdict = passed ? "PASS" : "FAIL";
+        if (isTickerLevelStage(stage)) {
+            log.debug(">>> [FLOW][COND][{}] {}={} | {}", stage, conditionName, verdict, details);
+            return;
+        }
         log.info(">>> [FLOW][COND][{}] {}={} | {}", stage, conditionName, verdict, details);
     }
 }
