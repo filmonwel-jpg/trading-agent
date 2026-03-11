@@ -38,6 +38,8 @@ __pycache__/
 
 ### Runtime / local state ###
 runtime/git checkout 
+runtime/trading-agent.log
+runtime/trading-agent.log.*
 
 ### Generated logs and backtests ###
 backtest_trades_log*.csv
