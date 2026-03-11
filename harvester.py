@@ -10,7 +10,9 @@ from ib_insync import *
 import csv
 import os
 import math
-from datetime import datetime, timezone
+import re
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 ib = IB()
@@ -20,7 +22,7 @@ ib.connect('127.0.0.1', 7497, clientId=10)
 # Add all the symbols you want to harvest here.
 symbols = ['TSLA', 'QQQ', 'NVDA','AMD']
 MAX_TICK_BY_TICK_STREAMS = int(os.getenv('MAX_TICK_BY_TICK_STREAMS', '4'))
-OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test'))
 MARKET_ZONE = ZoneInfo('America/New_York')
 
 # Dictionaries to keep track of active subscriptions and data state
@@ -31,7 +33,8 @@ ticks_dict = {}
 bar_state_by_symbol = {}
 WARMUP_HEADER = [
     'Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'WAP', 'Count', 'YesterdayClose',
-    'Bid', 'Ask', 'BidSize', 'AskSize', 'PutVol', 'CallVol', 'ShortableShares'
+    'Bid', 'Ask', 'BidSize', 'AskSize', 'PutVol', 'CallVol', 'ShortableShares',
+    'NewsCount300s', 'SentimentMean300s', 'SentimentMin300s', 'SentimentMax300s', 'MinutesSinceNews'
 ]
 TICK_HEADER = [
     'time', 'price', 'size',
@@ -40,6 +43,23 @@ TICK_HEADER = [
     'put_vol', 'call_vol', 'shortable_shares',
     'volume', 'vwap', 'bbo_exchange', 'last_exchange'
 ]
+NEWS_HEADER = ['time', 'provider', 'article_id', 'headline', 'sentiment_score']
+NEWS_LOOKBACK_SECONDS = int(os.getenv('NEWS_LOOKBACK_SECONDS', '300'))
+SENTIMENT_MODEL = os.getenv('SENTIMENT_MODEL', 'finbert').strip().lower()
+FINBERT_MODEL_NAME = os.getenv('FINBERT_MODEL_NAME', 'ProsusAI/finbert').strip()
+FINBERT_MAX_LENGTH = int(os.getenv('FINBERT_MAX_LENGTH', '128'))
+
+POSITIVE_WORDS = {
+    'beat', 'beats', 'strong', 'up', 'upgrade', 'surge', 'growth', 'profit', 'bullish', 'outperform'
+}
+NEGATIVE_WORDS = {
+    'miss', 'misses', 'weak', 'down', 'downgrade', 'drop', 'loss', 'bearish', 'underperform', 'lawsuit'
+}
+
+news_state_by_symbol = {}
+seen_news_ids_by_symbol = {}
+finbert_pipeline = None
+finbert_label_map = {}
 
 
 def safe_num(val, default=0.0):
@@ -76,6 +96,241 @@ def format_market_timestamp_from_epoch(epoch_value):
         epoch_int = 0
     raw_dt = datetime.fromtimestamp(epoch_int, tz=timezone.utc)
     return format_market_timestamp(raw_dt)
+
+
+def parse_news_time(raw_time):
+    if isinstance(raw_time, datetime):
+        return to_market_dt(raw_time)
+
+    if isinstance(raw_time, (int, float)):
+        return to_market_dt(datetime.fromtimestamp(int(raw_time), tz=timezone.utc))
+
+    text = safe_str(raw_time, '')
+    if not text:
+        return datetime.now(MARKET_ZONE)
+
+    if text.isdigit():
+        return to_market_dt(datetime.fromtimestamp(int(text), tz=timezone.utc))
+
+    for fmt in ('%Y%m%d  %H:%M:%S', '%Y%m%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S'):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed.replace(tzinfo=timezone.utc).astimezone(MARKET_ZONE)
+        except ValueError:
+            continue
+
+    return datetime.now(MARKET_ZONE)
+
+
+def score_headline_sentiment_lexicon(headline):
+    tokens = re.findall(r"[a-zA-Z']+", safe_str(headline, '').lower())
+    if not tokens:
+        return 0.0
+
+    pos_hits = sum(1 for token in tokens if token in POSITIVE_WORDS)
+    neg_hits = sum(1 for token in tokens if token in NEGATIVE_WORDS)
+    raw_score = float(pos_hits - neg_hits)
+    return max(-1.0, min(1.0, raw_score / 3.0))
+
+
+def init_sentiment_model():
+    global finbert_pipeline, finbert_label_map
+
+    if SENTIMENT_MODEL != 'finbert':
+        print(f"[SENTIMENT] Using lexicon scorer (SENTIMENT_MODEL={SENTIMENT_MODEL}).")
+        return
+
+    try:
+        from transformers import pipeline
+
+        finbert_pipeline = pipeline(
+            'text-classification',
+            model=FINBERT_MODEL_NAME,
+            tokenizer=FINBERT_MODEL_NAME,
+            truncation=True,
+        )
+        id2label = getattr(getattr(finbert_pipeline, 'model', None), 'config', None)
+        raw_map = getattr(id2label, 'id2label', {}) if id2label is not None else {}
+        finbert_label_map = {str(k): str(v).lower() for k, v in raw_map.items()}
+        print(f"[SENTIMENT] FinBERT enabled: model={FINBERT_MODEL_NAME}")
+    except Exception as exc:
+        finbert_pipeline = None
+        finbert_label_map = {}
+        print(f"[SENTIMENT] FinBERT unavailable ({exc}); using lexicon fallback.")
+
+
+def _normalize_finbert_label(label):
+    normalized = safe_str(label, '').lower()
+    if normalized in ('positive', 'negative', 'neutral'):
+        return normalized
+
+    mapped = finbert_label_map.get(normalized, '')
+    if mapped in ('positive', 'negative', 'neutral'):
+        return mapped
+
+    if normalized.startswith('label_'):
+        # Common FinBERT mappings: 0=negative, 1=neutral, 2=positive.
+        if normalized == 'label_0':
+            return 'negative'
+        if normalized == 'label_1':
+            return 'neutral'
+        if normalized == 'label_2':
+            return 'positive'
+
+    return 'neutral'
+
+
+def score_headline_sentiment(headline):
+    clean_headline = safe_str(headline, '')
+    if not clean_headline:
+        return 0.0
+
+    if finbert_pipeline is None:
+        return score_headline_sentiment_lexicon(clean_headline)
+
+    try:
+        result = finbert_pipeline(clean_headline, truncation=True, max_length=FINBERT_MAX_LENGTH)
+        if not result:
+            return score_headline_sentiment_lexicon(clean_headline)
+
+        top = result[0]
+        label = _normalize_finbert_label(getattr(top, 'get', lambda *_: '')('label', ''))
+        confidence = float(getattr(top, 'get', lambda *_: 0.0)('score', 0.0))
+        confidence = max(0.0, min(1.0, confidence))
+
+        if label == 'positive':
+            return confidence
+        if label == 'negative':
+            return -confidence
+        return 0.0
+    except Exception:
+        return score_headline_sentiment_lexicon(clean_headline)
+
+
+def get_news_state(sym):
+    return news_state_by_symbol.setdefault(sym, {
+        'events': deque(),
+        'last_news_dt': None,
+    })
+
+
+def record_news_event(sym, news_csv_path, news_dt, provider_code, article_id, headline):
+    sentiment_score = score_headline_sentiment(headline)
+    state = get_news_state(sym)
+    state['events'].append((news_dt, sentiment_score))
+    state['last_news_dt'] = news_dt
+
+    cutoff = news_dt - timedelta(seconds=NEWS_LOOKBACK_SECONDS)
+    while state['events'] and state['events'][0][0] < cutoff:
+        state['events'].popleft()
+
+    with open(news_csv_path, 'a', newline='') as f:
+        csv.writer(f).writerow([
+            format_market_timestamp(news_dt),
+            safe_str(provider_code, ''),
+            safe_str(article_id, ''),
+            safe_str(headline, ''),
+            f"{sentiment_score:.4f}",
+        ])
+
+
+def get_news_features(sym, bar_dt):
+    state = get_news_state(sym)
+    cutoff = bar_dt - timedelta(seconds=NEWS_LOOKBACK_SECONDS)
+
+    while state['events'] and state['events'][0][0] < cutoff:
+        state['events'].popleft()
+
+    if not state['events']:
+        minutes_since_news = 9999.0
+        if state['last_news_dt'] is not None:
+            delta = bar_dt - state['last_news_dt']
+            minutes_since_news = max(0.0, delta.total_seconds() / 60.0)
+        return 0, 0.0, 0.0, 0.0, minutes_since_news
+
+    scores = [event[1] for event in state['events']]
+    mean_score = sum(scores) / len(scores)
+    min_score = min(scores)
+    max_score = max(scores)
+    delta = bar_dt - state['last_news_dt'] if state['last_news_dt'] is not None else timedelta(seconds=0)
+    minutes_since_news = max(0.0, delta.total_seconds() / 60.0)
+    return len(scores), mean_score, min_score, max_score, minutes_since_news
+
+
+def create_news_callback(sym, news_csv_path, ticker_obj):
+    def onNewsUpdate(_):
+        news_ticks = getattr(ticker_obj, 'tickNews', None) or []
+        if not news_ticks:
+            return
+
+        latest = news_ticks[-1]
+        article_id = safe_str(getattr(latest, 'articleId', None), '')
+        provider_code = safe_str(getattr(latest, 'providerCode', None), '')
+        headline = safe_str(getattr(latest, 'headline', None), '')
+        raw_ts = getattr(latest, 'timeStamp', None)
+        dedupe_key = f"{provider_code}:{article_id}:{raw_ts}"
+
+        seen = seen_news_ids_by_symbol.setdefault(sym, set())
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+
+        news_dt = parse_news_time(raw_ts)
+        record_news_event(sym, news_csv_path, news_dt, provider_code, article_id, headline)
+        print(f"[NEWS] {sym} {format_market_timestamp(news_dt)} | {provider_code} | {headline}")
+
+    return onNewsUpdate
+
+
+def resolve_news_provider_codes():
+    try:
+        providers = ib.reqNewsProviders()
+    except Exception as exc:
+        print(f"[NEWS] Provider lookup failed: {exc}")
+        return ''
+
+    codes = [safe_str(getattr(provider, 'code', None), '') for provider in providers]
+    codes = [code for code in codes if code]
+    if not codes:
+        print('[NEWS] No provider codes found; skipping historical news seed.')
+        return ''
+
+    joined = '+'.join(codes)
+    print(f"[NEWS] Enabled providers: {joined}")
+    return joined
+
+
+def seed_historical_news(sym, contract, provider_codes, news_csv_path):
+    if not provider_codes:
+        return
+
+    now_utc = datetime.now(timezone.utc)
+    start_utc = now_utc - timedelta(hours=6)
+
+    try:
+        historical_news = ib.reqHistoricalNews(contract.conId, provider_codes, start_utc, now_utc, 50)
+    except Exception as exc:
+        print(f"[NEWS] {sym} historical seed failed: {exc}")
+        return
+
+    seeded = 0
+    for item in historical_news or []:
+        news_time = parse_news_time(getattr(item, 'time', None))
+        provider_code = safe_str(getattr(item, 'providerCode', None), '')
+        article_id = safe_str(getattr(item, 'articleId', None), '')
+        headline = safe_str(getattr(item, 'headline', None), '')
+
+        dedupe_key = f"{provider_code}:{article_id}:{getattr(item, 'time', None)}"
+        seen = seen_news_ids_by_symbol.setdefault(sym, set())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        record_news_event(sym, news_csv_path, news_time, provider_code, article_id, headline)
+        seeded += 1
+
+    if seeded > 0:
+        print(f"[NEWS] {sym} seeded {seeded} historical headlines.")
 
 
 def normalize_warmup_csv(csv_path):
@@ -192,7 +447,8 @@ def normalize_warmup_csv(csv_path):
             f"{(wap_val if wap_val > 0 else close_val):.18f}",
             str(int(float(count_raw))) if str(count_raw).strip() else '0',
             yclose_raw,
-            '0', '0', '0', '0', '0', '0', '0'
+            '0', '0', '0', '0', '0', '0', '0',
+            '0', '0', '0', '0', '9999'
         ])
 
         last_close = close_val
@@ -237,6 +493,7 @@ def create_bar_callback(sym, csv_path, ticker_obj):
             bar_volume = safe_num(getattr(bar, 'volume', None), 0.0)
             bar_count = int(safe_num(getattr(bar, 'barCount', getattr(bar, 'count', None)), 0))
             y_close = safe_num(getattr(ticker_obj, 'close', None), 0.0)
+            news_count, sent_mean, sent_min, sent_max, mins_since_news = get_news_features(sym, market_dt)
 
             bid = safe_num(getattr(ticker_obj, 'bid', None), 0.0)
             ask = safe_num(getattr(ticker_obj, 'ask', None), 0.0)
@@ -264,6 +521,11 @@ def create_bar_callback(sym, csv_path, ticker_obj):
                     put_vol,
                     call_vol,
                     f"{shortable:.0f}",
+                    news_count,
+                    f"{sent_mean:.4f}",
+                    f"{sent_min:.4f}",
+                    f"{sent_max:.4f}",
+                    f"{mins_since_news:.4f}",
                 ])
 
             state['last_close'] = safe_num(bar.close)
@@ -397,6 +659,8 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
 
 # --- SUBSCRIPTION LOOP ---
 tbt_subscriptions = 0
+init_sentiment_model()
+news_provider_codes = resolve_news_provider_codes()
 
 for sym in symbols:
     print(f"[*] Setting up data streams for {sym}...")
@@ -409,6 +673,7 @@ for sym in symbols:
     os.makedirs(symbol_dir, exist_ok=True)
     bar_csv = os.path.join(symbol_dir, f'{sym}_5s_warmup_{warmup_date}.csv')
     tick_csv = os.path.join(symbol_dir, f'{sym}_live_ticks_{warmup_date}.csv')
+    news_csv = os.path.join(symbol_dir, f'{sym}_news_{warmup_date}.csv')
 
     # Init CSVs with Headers
     normalize_warmup_csv(bar_csv)
@@ -421,8 +686,14 @@ for sym in symbols:
         with open(tick_csv, 'w', newline='') as f:
             csv.writer(f).writerow(TICK_HEADER)
 
+    if not os.path.exists(news_csv):
+        with open(news_csv, 'w', newline='') as f:
+            csv.writer(f).writerow(NEWS_HEADER)
+
     # 1. State Tracker (BBO, Options, Shortable Shares)
-    tickers[sym] = ib.reqMktData(contract, '100,104,236', snapshot=False, regulatorySnapshot=False)
+    tickers[sym] = ib.reqMktData(contract, '100,104,236,292', snapshot=False, regulatorySnapshot=False)
+    tickers[sym].updateEvent += create_news_callback(sym, news_csv, tickers[sym])
+    seed_historical_news(sym, contract, news_provider_codes, news_csv)
 
     # 2. 5-Second Bars
     bars = ib.reqHistoricalData(
