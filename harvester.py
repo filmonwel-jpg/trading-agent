@@ -112,6 +112,8 @@ NEWS_LOOKBACK_SECONDS = int(os.getenv('NEWS_LOOKBACK_SECONDS', '300'))
 SENTIMENT_MODEL = os.getenv('SENTIMENT_MODEL', 'finbert').strip().lower()
 FINBERT_MODEL_NAME = os.getenv('FINBERT_MODEL_NAME', 'ProsusAI/finbert').strip()
 FINBERT_MAX_LENGTH = int(os.getenv('FINBERT_MAX_LENGTH', '128'))
+SENTIMENT_SELF_TEST_ENABLED = os.getenv('SENTIMENT_SELF_TEST', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+SENTIMENT_SELF_TEST_STRICT = os.getenv('SENTIMENT_SELF_TEST_STRICT', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 
 POSITIVE_WORDS = {
     'beat', 'beats', 'strong', 'up', 'upgrade', 'surge', 'growth', 'profit', 'bullish', 'outperform'
@@ -234,6 +236,65 @@ def init_sentiment_model():
         finbert_pipeline = None
         finbert_label_map = {}
         print(f"[SENTIMENT] FinBERT unavailable ({exc}); using lexicon fallback.")
+
+
+def run_finbert_self_test():
+    global finbert_pipeline, finbert_label_map
+
+    if SENTIMENT_MODEL != 'finbert':
+        return True
+
+    if not SENTIMENT_SELF_TEST_ENABLED:
+        print('[SENTIMENT] FinBERT self-test skipped (SENTIMENT_SELF_TEST disabled).')
+        return True
+
+    if finbert_pipeline is None:
+        print('[SENTIMENT] FinBERT self-test skipped (pipeline unavailable; lexicon fallback active).')
+        return False
+
+    test_cases = [
+        ('positive', 'Tesla shares surge after record deliveries and strong profit guidance'),
+        ('negative', 'Tesla shares plunge after weak deliveries and a profit warning'),
+        ('neutral', 'Tesla scheduled its annual shareholder meeting for next month'),
+    ]
+
+    try:
+        outputs = []
+        for expected_label, headline in test_cases:
+            score, confidence, label = score_headline_sentiment(headline)
+            if label not in ('positive', 'negative', 'neutral'):
+                raise ValueError(f'unexpected label={label!r}')
+            if not (-1.0 <= float(score) <= 1.0):
+                raise ValueError(f'score out of range={score!r}')
+            if not (0.0 <= float(confidence) <= 1.0):
+                raise ValueError(f'confidence out of range={confidence!r}')
+            outputs.append((expected_label, label, float(score), float(confidence)))
+
+        directional_failures = [
+            (expected, actual, score, confidence)
+            for expected, actual, score, confidence in outputs[:2]
+            if actual != expected
+        ]
+        if directional_failures:
+            raise ValueError(f'directional mismatch={directional_failures}')
+
+        summary = ', '.join(
+            f"{expected}->{actual} score={score:.4f} conf={confidence:.4f}"
+            for expected, actual, score, confidence in outputs
+        )
+        print(f"[SENTIMENT] FinBERT self-test passed: {summary}")
+        return True
+    except Exception as exc:
+        print(f"[SENTIMENT] FinBERT self-test failed ({exc}); using lexicon fallback.")
+        finbert_pipeline = None
+        finbert_label_map = {}
+        if SENTIMENT_SELF_TEST_STRICT:
+            raise
+        return False
+
+
+def get_active_sentiment_engine():
+    return 'finbert' if finbert_pipeline is not None else 'lexicon'
 
 
 def _normalize_finbert_label(label):
@@ -783,6 +844,27 @@ def seed_historical_news(sym, contract, provider_codes, news_csv_path):
         print(f"[NEWS] {sym} historical seed failed: {exc}")
         return
 
+
+    _ingest_historical_news_seed(sym, historical_news, news_csv_path)
+
+
+async def seed_historical_news_async(sym, contract, provider_codes, news_csv_path):
+    if not provider_codes:
+        return
+
+    now_utc = datetime.now(timezone.utc)
+    start_utc = now_utc - timedelta(hours=6)
+
+    try:
+        historical_news = await ib.reqHistoricalNewsAsync(contract.conId, provider_codes, start_utc, now_utc, 50)
+    except Exception as exc:
+        print(f"[NEWS] {sym} historical seed failed: {exc}")
+        return
+
+    _ingest_historical_news_seed(sym, historical_news, news_csv_path)
+
+
+def _ingest_historical_news_seed(sym, historical_news, news_csv_path):
     seeded = 0
     for item in historical_news or []:
         news_time = parse_news_time(getattr(item, 'time', None))
@@ -1085,7 +1167,7 @@ def create_quote_capture_callback(sym, ticker_obj):
     return on_quote_update
 
 
-def subscribe_symbol_streams(sym, provider_codes):
+def _begin_symbol_subscription(sym):
     runtime = symbol_runtime[sym]
     contract = contracts[sym]
 
@@ -1097,14 +1179,15 @@ def subscribe_symbol_streams(sym, provider_codes):
     ticker_obj.updateEvent += create_quote_capture_callback(sym, ticker_obj)
     ticker_obj.updateEvent += create_news_callback(sym, runtime['news_csv'], ticker_obj)
     tickers[sym] = ticker_obj
+    return runtime, contract, ticker_obj
 
-    bars = ib.reqHistoricalData(
-        contract, endDateTime='', durationStr='1800 S',
-        barSizeSetting='5 secs', whatToShow='TRADES', useRTH=False, keepUpToDate=True
-    )
-    bars.updateEvent += create_bar_callback(sym, runtime['bar_csv'], ticker_obj)
+
+def _attach_symbol_bar_stream(sym, bars, ticker_obj):
+    bars.updateEvent += create_bar_callback(sym, symbol_runtime[sym]['bar_csv'], ticker_obj)
     bars_dict[sym] = bars
 
+
+def _attach_symbol_tick_stream(sym, contract, runtime, ticker_obj):
     if runtime['uses_tbt']:
         live_ticks = ib.reqTickByTickData(contract, 'AllLast')
         live_ticks.updateEvent += create_tick_callback(sym, runtime['tick_csv'], ticker_obj)
@@ -1114,12 +1197,43 @@ def subscribe_symbol_streams(sym, provider_codes):
         ticks_dict[sym] = ticker_obj
         print(f"[!] {sym}: using mktData fallback (tick-by-tick cap reached: {MAX_TICK_BY_TICK_STREAMS})")
 
+
+def subscribe_symbol_streams(sym, provider_codes):
+    runtime, contract, ticker_obj = _begin_symbol_subscription(sym)
+
+    bars = ib.reqHistoricalData(
+        contract, endDateTime='', durationStr='1800 S',
+        barSizeSetting='5 secs', whatToShow='TRADES', useRTH=False, keepUpToDate=True
+    )
+    _attach_symbol_bar_stream(sym, bars, ticker_obj)
+    _attach_symbol_tick_stream(sym, contract, runtime, ticker_obj)
+
     if not runtime.get('news_seeded', False):
         seed_historical_news(sym, contract, provider_codes, runtime['news_csv'])
         runtime['news_seeded'] = True
 
 
-def resubscribe_symbol_streams(sym, provider_codes, reason='stale stream'):
+async def subscribe_symbol_streams_async(sym, provider_codes):
+    runtime, contract, ticker_obj = _begin_symbol_subscription(sym)
+
+    bars = await ib.reqHistoricalDataAsync(
+        contract,
+        endDateTime='',
+        durationStr='1800 S',
+        barSizeSetting='5 secs',
+        whatToShow='TRADES',
+        useRTH=False,
+        keepUpToDate=True,
+    )
+    _attach_symbol_bar_stream(sym, bars, ticker_obj)
+    _attach_symbol_tick_stream(sym, contract, runtime, ticker_obj)
+
+    if not runtime.get('news_seeded', False):
+        await seed_historical_news_async(sym, contract, provider_codes, runtime['news_csv'])
+        runtime['news_seeded'] = True
+
+
+async def resubscribe_symbol_streams(sym, provider_codes, reason='stale stream'):
     if sym in stream_resubscribe_lock:
         return
 
@@ -1127,21 +1241,22 @@ def resubscribe_symbol_streams(sym, provider_codes, reason='stale stream'):
     try:
         print(f"[STREAM-WATCHDOG] Re-arming {sym} ({reason})")
         cancel_symbol_streams(sym)
-        subscribe_symbol_streams(sym, provider_codes)
+        await subscribe_symbol_streams_async(sym, provider_codes)
         print(f"[STREAM-WATCHDOG] {sym} streams resumed.")
     except Exception as exc:
+        cancel_symbol_streams(sym)
         print(f"[STREAM-WATCHDOG] {sym} resume failed: {exc}")
     finally:
         stream_resubscribe_lock.discard(sym)
 
 
-def resubscribe_all_symbols(provider_codes):
+async def resubscribe_all_symbols(provider_codes):
     if not ib.isConnected():
         return
 
     print('[RECONNECT] Re-arming all symbol streams...')
     for sym in symbols:
-        resubscribe_symbol_streams(sym, provider_codes, reason='post reconnect')
+        await resubscribe_symbol_streams(sym, provider_codes, reason='post reconnect')
 
 
 async def stream_heartbeat_watchdog(provider_codes):
@@ -1165,7 +1280,7 @@ async def stream_heartbeat_watchdog(provider_codes):
 
             if stale_bar or stale_tick:
                 reason = f"bar_age={bar_age:.1f}s tick_age={tick_age:.1f}s"
-                resubscribe_symbol_streams(sym, provider_codes, reason)
+                await resubscribe_symbol_streams(sym, provider_codes, reason)
 
 
 async def reconnect_watchdog(provider_codes):
@@ -1178,7 +1293,7 @@ async def reconnect_watchdog(provider_codes):
         try:
             await ib.connectAsync(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
             print('[RECONNECT] Connected to IBKR. Re-subscribing streams...')
-            resubscribe_all_symbols(provider_codes)
+            await resubscribe_all_symbols(provider_codes)
         except Exception as exc:
             print(f"[RECONNECT] connectAsync failed: {exc}")
 
@@ -1704,6 +1819,8 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
 
 # --- SUBSCRIPTION LOOP ---
 init_sentiment_model()
+run_finbert_self_test()
+print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()}")
 news_provider_codes = resolve_news_provider_codes()
 
 for idx, sym in enumerate(symbols):
