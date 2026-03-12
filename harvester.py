@@ -112,6 +112,7 @@ NEWS_LOOKBACK_SECONDS = int(os.getenv('NEWS_LOOKBACK_SECONDS', '300'))
 SENTIMENT_MODEL = os.getenv('SENTIMENT_MODEL', 'finbert').strip().lower()
 FINBERT_MODEL_NAME = os.getenv('FINBERT_MODEL_NAME', 'ProsusAI/finbert').strip()
 FINBERT_MAX_LENGTH = int(os.getenv('FINBERT_MAX_LENGTH', '128'))
+HF_TOKEN = os.getenv('HF_TOKEN', os.getenv('HUGGINGFACE_HUB_TOKEN', '')).strip()
 SENTIMENT_SELF_TEST_ENABLED = os.getenv('SENTIMENT_SELF_TEST', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 SENTIMENT_SELF_TEST_STRICT = os.getenv('SENTIMENT_SELF_TEST_STRICT', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 
@@ -222,16 +223,26 @@ def init_sentiment_model():
     try:
         from transformers import pipeline
 
-        finbert_pipeline = pipeline(
-            'text-classification',
-            model=FINBERT_MODEL_NAME,
-            tokenizer=FINBERT_MODEL_NAME,
-            truncation=True,
-        )
+        pipeline_kwargs = {
+            'task': 'text-classification',
+            'model': FINBERT_MODEL_NAME,
+            'tokenizer': FINBERT_MODEL_NAME,
+            'truncation': True,
+        }
+
+        if HF_TOKEN:
+            try:
+                finbert_pipeline = pipeline(token=HF_TOKEN, **pipeline_kwargs)
+            except TypeError:
+                finbert_pipeline = pipeline(use_auth_token=HF_TOKEN, **pipeline_kwargs)
+        else:
+            finbert_pipeline = pipeline(**pipeline_kwargs)
+
         id2label = getattr(getattr(finbert_pipeline, 'model', None), 'config', None)
         raw_map = getattr(id2label, 'id2label', {}) if id2label is not None else {}
         finbert_label_map = {str(k): str(v).lower() for k, v in raw_map.items()}
-        print(f"[SENTIMENT] FinBERT enabled: model={FINBERT_MODEL_NAME}")
+        auth_status = 'configured' if HF_TOKEN else 'not_configured'
+        print(f"[SENTIMENT] FinBERT enabled: model={FINBERT_MODEL_NAME} hf_auth={auth_status}")
     except Exception as exc:
         finbert_pipeline = None
         finbert_label_map = {}
@@ -295,6 +306,10 @@ def run_finbert_self_test():
 
 def get_active_sentiment_engine():
     return 'finbert' if finbert_pipeline is not None else 'lexicon'
+
+
+def get_hf_auth_status():
+    return 'configured' if HF_TOKEN else 'not_configured'
 
 
 def _normalize_finbert_label(label):
@@ -1820,7 +1835,7 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
 # --- SUBSCRIPTION LOOP ---
 init_sentiment_model()
 run_finbert_self_test()
-print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()}")
+print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()} hf_auth={get_hf_auth_status()}")
 news_provider_codes = resolve_news_provider_codes()
 
 for idx, sym in enumerate(symbols):
