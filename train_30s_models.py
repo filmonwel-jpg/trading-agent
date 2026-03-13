@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -8,6 +9,26 @@ from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 import warnings
 warnings.filterwarnings('ignore')
+
+try:
+    from onnxmltools import convert_lightgbm as convert_lightgbm_onnx
+except Exception:
+    convert_lightgbm_onnx = None
+
+try:
+    import onnx
+except Exception:
+    onnx = None
+
+try:
+    from lightgbm import LGBMClassifier
+except Exception:
+    LGBMClassifier = None
+
+try:
+    from catboost import CatBoostClassifier
+except Exception:
+    CatBoostClassifier = None
 
 # --- CONFIGURATION: THE 4-MODEL PARAMETERS ---
 # CHANGED: Now pointing to the new 30-second aggregated data
@@ -31,6 +52,56 @@ DAY_GAP_BETWEEN_TRAIN_TEST = 0  # Optional day embargo between train and test fo
 # Keep Java compatibility by default (30 features: legacy 25 + 5 extended core features).
 # Turn on to include the remaining 4 extended microstructure features.
 USE_EXTENDED_FEATURES = False
+
+# Optional training-only meta features emitted by build_30s_from_5s_csv.py producer baselines.
+# Keep disabled by default so production Java shape remains unchanged unless explicitly enabled.
+USE_META_PRODUCER_FEATURES = False
+USE_REGIME_PROB_FEATURES = os.getenv('USE_REGIME_PROB_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+
+MODEL_FAMILY = os.getenv('MODEL_FAMILY', 'random_forest').strip().lower()
+REGIME_MODEL_FAMILY = os.getenv('REGIME_MODEL_FAMILY', MODEL_FAMILY).strip().lower()
+
+META_PRODUCER_FEATURE_COLS = [
+    'tsm_ret_30s_p50',
+    'tsm_ret_120s_p50',
+    'tsm_ret_30s_p10',
+    'tsm_ret_30s_p90',
+    'tsm_up_prob_30s',
+    'tsm_vol_forecast_120s',
+    'tsm_uncertainty',
+    'regime_trend_prob',
+    'regime_chop_prob',
+    'regime_volatile_prob',
+    'regime_transition_prob',
+    'news_event_earnings',
+    'news_event_analyst',
+    'news_event_legal',
+    'news_event_earnings_beat_miss',
+    'news_event_analyst_upgrade_downgrade',
+    'news_event_legal_regulatory',
+    'news_event_product_capex',
+    'news_event_macro_spillover',
+    'news_novelty_score',
+    'news_relevance_score',
+    'news_embedding_cluster',
+    'seq_lstm_up_prob_30s',
+    'seq_tcn_up_prob_30s',
+    'seq_transformer_up_prob_30s',
+    'seq_patchtst_up_prob_30s',
+    'seq_model_consensus_up_prob_30s',
+    'setup_breakout_prob',
+    'setup_pullback_continuation_prob',
+    'setup_reversal_prob',
+    'setup_trend_exhaustion_prob',
+    'setup_failed_breakout_prob',
+]
+
+REGIME_PROB_FEATURE_COLS = [
+    'f_regime_prob_choppy',
+    'f_regime_prob_trend',
+    'f_regime_prob_volatile',
+    'f_regime_prob_entropy',
+]
 
 REGIME_LABEL_TO_ID = {
     'choppy': 0,
@@ -81,6 +152,59 @@ def build_rf_classifier(random_state=42):
         random_state=random_state,
         n_jobs=-1,
     )
+
+
+def _normalize_model_family(family):
+    text = str(family or '').strip().lower()
+    if text in ('rf', 'randomforest', 'random_forest'):
+        return 'random_forest'
+    if text in ('lgbm', 'lightgbm', 'light_gbm'):
+        return 'lightgbm'
+    if text in ('catboost', 'cb'):
+        return 'catboost'
+    return 'random_forest'
+
+
+def build_classifier(model_family='random_forest', random_state=42, multi_class=False):
+    family = _normalize_model_family(model_family)
+
+    if family == 'lightgbm' and LGBMClassifier is not None:
+        objective = 'multiclass' if multi_class else 'binary'
+        kwargs = {
+            'n_estimators': 350,
+            'learning_rate': 0.04,
+            'num_leaves': 31,
+            'subsample': 0.9,
+            'colsample_bytree': 0.8,
+            'reg_alpha': 0.2,
+            'reg_lambda': 0.6,
+            'random_state': random_state,
+            'class_weight': 'balanced',
+            'verbose': -1,
+        }
+        if multi_class:
+            kwargs['objective'] = objective
+            kwargs['num_class'] = len(REGIME_LABEL_TO_ID)
+        else:
+            kwargs['objective'] = objective
+        return LGBMClassifier(**kwargs)
+
+    if family == 'catboost' and CatBoostClassifier is not None:
+        kwargs = {
+            'iterations': 450,
+            'depth': 6,
+            'learning_rate': 0.05,
+            'loss_function': 'MultiClass' if multi_class else 'Logloss',
+            'auto_class_weights': 'Balanced',
+            'random_seed': random_state,
+            'verbose': False,
+            'allow_writing_files': False,
+        }
+        return CatBoostClassifier(**kwargs)
+
+    if family in ('lightgbm', 'catboost'):
+        print(f"WARNING: Requested MODEL_FAMILY={family} is unavailable; falling back to RandomForest.")
+    return build_rf_classifier(random_state=random_state)
 
 
 def filter_raw_to_regular_session(raw_df):
@@ -489,10 +613,10 @@ def assign_market_regime(df):
     return labeled
 
 
-def train_regime_classifier(X, y, dates, feature_count, out_dir):
+def train_regime_classifier(X, y, dates, feature_count, out_dir, model_family='random_forest'):
     print("\n=========================================")
     print("--- Training Market Regime Classifier ---")
-    print(f"Rows: {len(y)} | Classes: {sorted(np.unique(y).tolist())}")
+    print(f"Rows: {len(y)} | Classes: {sorted(np.unique(y).tolist())} | ModelFamily: {_normalize_model_family(model_family)}")
 
     fold_indices = build_day_walk_forward_splits(
         dates,
@@ -510,7 +634,7 @@ def train_regime_classifier(X, y, dates, feature_count, out_dir):
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
 
-        clf = build_rf_classifier(random_state=42)
+        clf = build_classifier(model_family=model_family, random_state=42, multi_class=True)
         clf.fit(X_train, y_train)
         pred = clf.predict(X_test)
         acc = accuracy_score(y_test, pred)
@@ -521,7 +645,7 @@ def train_regime_classifier(X, y, dates, feature_count, out_dir):
         )
         fold += 1
 
-    final_model = build_rf_classifier(random_state=42)
+    final_model = build_classifier(model_family=model_family, random_state=42, multi_class=True)
     final_model.fit(X, y)
 
     versioned_path = out_dir / "regime_classifier.onnx"
@@ -593,7 +717,8 @@ def train_regime_specific_models(df, feature_cols, out_dir):
                 X_regime,
                 regime_df[label_col].values,
                 regime_df['Date'].values,
-                f"{regime_name.upper()} {model_name}"
+                f"{regime_name.upper()} {model_name}",
+                model_family=MODEL_FAMILY,
             )
             if result['model'] is None:
                 continue
@@ -654,7 +779,8 @@ def train_open30_models(df, feature_cols, out_dir):
             X_open,
             open_df[label_col].values,
             open_df['Date'].values,
-            f"OPEN30 {model_name}"
+            f"OPEN30 {model_name}",
+            model_family=MODEL_FAMILY,
         )
         if result['model'] is None:
             continue
@@ -692,16 +818,42 @@ def print_label_prevalence_by_hour(df):
 
 def export_to_onnx(model, feature_count, filename, alias_filename=None):
     initial_type = [('float_input', FloatTensorType([None, feature_count]))]
-    # Force probability tensor output (no ZipMap) to keep Java parsing stable and continuous.
-    onnx_model = convert_sklearn(
-        model,
-        initial_types=initial_type,
-        options={id(model): {'zipmap': False}},
-        target_opset=12,
-    )
-    if getattr(onnx_model, 'ir_version', 0) > 9:
-        onnx_model.ir_version = 9
-    model_bytes = onnx_model.SerializeToString()
+
+    model_bytes = None
+    onnx_model = None
+
+    if isinstance(model, RandomForestClassifier):
+        # Force probability tensor output (no ZipMap) to keep Java parsing stable and continuous.
+        onnx_model = convert_sklearn(
+            model,
+            initial_types=initial_type,
+            options={id(model): {'zipmap': False}},
+            target_opset=12,
+        )
+        if getattr(onnx_model, 'ir_version', 0) > 9:
+            onnx_model.ir_version = 9
+        model_bytes = onnx_model.SerializeToString()
+    elif LGBMClassifier is not None and isinstance(model, LGBMClassifier):
+        if convert_lightgbm_onnx is None:
+            raise RuntimeError('LightGBM ONNX export requires onnxmltools. Install onnxmltools to continue.')
+        onnx_model = convert_lightgbm_onnx(model, initial_types=initial_type, target_opset=12)
+        model_bytes = onnx_model.SerializeToString()
+    elif CatBoostClassifier is not None and isinstance(model, CatBoostClassifier):
+        out_path = Path(filename)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        model.save_model(str(out_path), format='onnx')
+        model_bytes = out_path.read_bytes()
+        if onnx is not None:
+            onnx_model = onnx.load_from_string(model_bytes)
+    else:
+        # Best-effort fallback for other sklearn-compatible estimators.
+        onnx_model = convert_sklearn(
+            model,
+            initial_types=initial_type,
+            options={id(model): {'zipmap': False}},
+            target_opset=12,
+        )
+        model_bytes = onnx_model.SerializeToString()
 
     out_path = Path(filename)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -714,8 +866,12 @@ def export_to_onnx(model, feature_count, filename, alias_filename=None):
         with open(alias_path, "wb") as f:
             f.write(model_bytes)
 
-    opsets = ",".join(str(imp.version) for imp in onnx_model.opset_import)
-    print(f">>> Exported Production Model: {out_path} (ir={onnx_model.ir_version}, opset={opsets})")
+    if onnx_model is not None:
+        ir = getattr(onnx_model, 'ir_version', '?')
+        opsets = ",".join(str(imp.version) for imp in onnx_model.opset_import)
+        print(f">>> Exported Production Model: {out_path} (ir={ir}, opset={opsets})")
+    else:
+        print(f">>> Exported Production Model: {out_path}")
     if alias_filename:
         print(f">>> Updated Canonical Model: {alias_filename}")
 
@@ -793,11 +949,11 @@ def build_day_walk_forward_splits(dates, n_splits=5, day_gap=0):
     return splits
 
 
-def perform_walk_forward_testing(X, y, dates, name):
+def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'):
     print(f"\n=========================================")
     print(f"--- Walk-Forward Testing: {name} ---")
     total_signals = int(np.sum(y, dtype=np.int64))
-    print(f"Total signals found: {total_signals} / {len(y)}")
+    print(f"Total signals found: {total_signals} / {len(y)} | ModelFamily: {_normalize_model_family(model_family)}")
     
     if int(np.sum(y, dtype=np.int64)) == 0:
         print(f"WARNING: No positive labels found. Adjust target percentages.")
@@ -832,7 +988,7 @@ def perform_walk_forward_testing(X, y, dates, name):
             fold += 1
             continue
 
-        model = build_rf_classifier(random_state=42)
+        model = build_classifier(model_family=model_family, random_state=42, multi_class=False)
         model.fit(X_train, y_train)
 
         # Calibrate threshold from the tail of train split (time-consistent).
@@ -874,7 +1030,7 @@ def perform_walk_forward_testing(X, y, dates, name):
             print(f"!!! WARNING: This model shows poor out-of-sample prediction power.")
     
     print(f"\n>>> Training Final Production Model on 100% of data...")
-    final_model = build_rf_classifier(random_state=42)
+    final_model = build_classifier(model_family=model_family, random_state=42, multi_class=False)
     final_model.fit(X, y)
     return {
         'model': final_model,
@@ -885,9 +1041,61 @@ def perform_walk_forward_testing(X, y, dates, name):
         'folds_used': len(precisions),
     }
 
+def ensure_optional_numeric_columns(df, columns, default_value=0.0):
+    out = df.copy()
+    for col in columns:
+        if col not in out.columns:
+            out[col] = default_value
+        out[col] = pd.to_numeric(out[col], errors='coerce').fillna(default_value)
+    return out
+
+
+def add_regime_probability_features(df, regime_feature_cols, model_family='random_forest'):
+    out = df.copy()
+    X_regime = out[regime_feature_cols].values.astype(np.float32)
+    y_regime = out['RegimeLabel'].values.astype(np.int64)
+    dates = out['Date'].values
+
+    proba_matrix = np.full((len(out), len(REGIME_LABEL_TO_ID)), np.nan, dtype=np.float32)
+    fold_indices = build_day_walk_forward_splits(dates, n_splits=N_SPLITS, day_gap=DAY_GAP_BETWEEN_TRAIN_TEST)
+
+    for fold_i, (train_idx, test_idx, _train_days, _test_days) in enumerate(fold_indices, start=1):
+        train_labels = y_regime[train_idx]
+        if len(np.unique(train_labels)) < 2:
+            continue
+
+        clf = build_classifier(model_family=model_family, random_state=200 + fold_i, multi_class=True)
+        clf.fit(X_regime[train_idx], train_labels)
+        raw = clf.predict_proba(X_regime[test_idx])
+
+        aligned = np.zeros((len(test_idx), len(REGIME_LABEL_TO_ID)), dtype=np.float32)
+        classes = getattr(clf, 'classes_', np.arange(len(REGIME_LABEL_TO_ID)))
+        for local_idx, class_id in enumerate(classes):
+            class_int = int(class_id)
+            if 0 <= class_int < aligned.shape[1]:
+                aligned[:, class_int] = raw[:, local_idx]
+        proba_matrix[test_idx] = aligned
+
+    missing_mask = np.isnan(proba_matrix).any(axis=1)
+    if missing_mask.any():
+        prevalence = np.bincount(y_regime, minlength=len(REGIME_LABEL_TO_ID)).astype(np.float32)
+        prevalence = prevalence / max(prevalence.sum(), 1.0)
+        proba_matrix[missing_mask] = prevalence
+
+    out['f_regime_prob_choppy'] = proba_matrix[:, REGIME_LABEL_TO_ID['choppy']]
+    out['f_regime_prob_trend'] = proba_matrix[:, REGIME_LABEL_TO_ID['trend']]
+    out['f_regime_prob_volatile'] = proba_matrix[:, REGIME_LABEL_TO_ID['volatile']]
+
+    entropy = -np.sum(proba_matrix * np.log(np.clip(proba_matrix, 1e-9, 1.0)), axis=1)
+    out['f_regime_prob_entropy'] = entropy / np.log(float(len(REGIME_LABEL_TO_ID)))
+    return out
+
 def main():
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     versioned_out_dir = Path("model_exports") / run_tag
+
+    print(f">>> Training model family: {_normalize_model_family(MODEL_FAMILY)}")
+    print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
 
     print(f">>> Loading historical data from {CSV_FILE}...")
     try:
@@ -938,15 +1146,34 @@ def main():
     else:
         print(f">>> Using base {base_feature_count}-feature set (Java-compatible).")
 
-    print(f">>> Feature count used for training: {len(feature_cols)}")
-    X = df_rest[feature_cols].values.astype(np.float32)
+    if USE_META_PRODUCER_FEATURES:
+        # Accept producer columns from enriched 30s CSV when present; inject safe numeric defaults otherwise.
+        df_rest = ensure_optional_numeric_columns(df_rest, META_PRODUCER_FEATURE_COLS, default_value=0.0)
+        feature_cols = feature_cols + META_PRODUCER_FEATURE_COLS
+        print(
+            ">>> Meta producer feature block enabled "
+            f"(+{len(META_PRODUCER_FEATURE_COLS)} columns, training-only schema extension)."
+        )
 
     regime_feature_cols = build_regime_feature_subset(df_rest, feature_cols)
-    X_regime = df_rest[regime_feature_cols].values.astype(np.float32)
     print(
         f">>> Regime classifier feature subset: {len(regime_feature_cols)} "
         f"(excluded direct regime-rule proxies)."
     )
+
+    if USE_REGIME_PROB_FEATURES:
+        full_regime_feature_cols = build_regime_feature_subset(df, feature_cols)
+        df = add_regime_probability_features(df, full_regime_feature_cols, model_family=REGIME_MODEL_FAMILY)
+        df_rest = add_regime_probability_features(df_rest, regime_feature_cols, model_family=REGIME_MODEL_FAMILY)
+        feature_cols = feature_cols + REGIME_PROB_FEATURE_COLS
+        print(
+            ">>> Regime probability features enabled "
+            f"(+{len(REGIME_PROB_FEATURE_COLS)} columns from walk-forward regime model outputs)."
+        )
+
+    print(f">>> Feature count used for training: {len(feature_cols)}")
+    X = df_rest[feature_cols].values.astype(np.float32)
+    X_regime = df_rest[regime_feature_cols].values.astype(np.float32)
 
     regime_report = train_regime_classifier(
         X_regime,
@@ -954,6 +1181,7 @@ def main():
         df_rest['Date'].values,
         len(regime_feature_cols),
         versioned_out_dir,
+        model_family=REGIME_MODEL_FAMILY,
     )
 
     models = [
@@ -965,7 +1193,7 @@ def main():
 
     score_rows = []
     for name, y_data, filename in models:
-        result = perform_walk_forward_testing(X, y_data, df_rest['Date'].values, name)
+        result = perform_walk_forward_testing(X, y_data, df_rest['Date'].values, name, model_family=MODEL_FAMILY)
         exported_path = "-"
         if result['model'] is not None:
             versioned_path = versioned_out_dir / filename

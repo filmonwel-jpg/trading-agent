@@ -1,0 +1,4 @@
+torch>=2.3
+timesfm>=1.2
+transformers>=4.48
+huggingface-hub>=0.30
