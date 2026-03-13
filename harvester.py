@@ -69,7 +69,10 @@ WARMUP_CORE_HEADER = [
 WARMUP_ENRICHMENT_HEADER = [
     'AsOfTs', 'BarEpochSec', 'SessionBucket', 'MinuteOfDay', 'SecondsFromOpen',
     'SpreadBps', 'L1Imbalance', 'NewsCount60s', 'NewsUniqueProviders300s',
-    'SentimentStd300s', 'SentimentLatest', 'SentimentModel',
+    'SentimentStd300s', 'SentimentLatest',
+    'NewsEventEarningsBeatMiss300s', 'NewsEventAnalystUpgradeDowngrade300s',
+    'NewsEventLegalRegulatory300s', 'NewsEventProductCapex300s', 'NewsEventMacroSpillover300s',
+    'SentimentModel',
     'SentimentConfidenceMean300s', 'SentimentConfidenceLatest',
     'NewsAsOfLagSec', 'NewsCoverage300s', 'FeatureCompleteness', 'DataQualityFlags'
 ]
@@ -104,6 +107,9 @@ TICK_HEADER = [
 NEWS_HEADER = [
     'time', 'provider', 'provider_name', 'article_id', 'headline',
     'sentiment_score', 'sentiment_confidence', 'sentiment_label', 'sentiment_model',
+    'event_label', 'event_confidence',
+    'event_prob_earnings_beat_miss', 'event_prob_analyst_upgrade_downgrade',
+    'event_prob_legal_regulatory', 'event_prob_product_capex', 'event_prob_macro_spillover',
     'published_ts', 'received_ts', 'tradable_ts', 'is_historical_seed',
     'source_raw', 'source_site',
     'dup_cluster_id', 'dup_seq_asof', 'dup_provider_count_asof', 'dup_first_seen_ts', 'dup_is_repeat'
@@ -122,6 +128,32 @@ POSITIVE_WORDS = {
 NEGATIVE_WORDS = {
     'miss', 'misses', 'weak', 'down', 'downgrade', 'drop', 'loss', 'bearish', 'underperform', 'lawsuit'
 }
+
+EVENT_KEYWORDS = {
+    'earnings_beat_miss': {
+        'earnings', 'eps', 'guidance', 'revenue', 'beat', 'beats', 'miss', 'misses', 'quarter', 'q1', 'q2', 'q3', 'q4',
+    },
+    'analyst_upgrade_downgrade': {
+        'analyst', 'upgrade', 'upgraded', 'downgrade', 'downgraded', 'price', 'target', 'outperform', 'underperform',
+    },
+    'legal_regulatory': {
+        'lawsuit', 'probe', 'investigation', 'sec', 'doj', 'regulatory', 'fine', 'settlement', 'court', 'ban',
+    },
+    'product_capex': {
+        'factory', 'plant', 'capex', 'product', 'launch', 'rollout', 'model', 'production', 'facility', 'roadmap',
+    },
+    'macro_spillover': {
+        'fed', 'rates', 'inflation', 'macro', 'cpi', 'gdp', 'tariff', 'recession', 'yield', 'treasury',
+    },
+}
+
+EVENT_LABELS = [
+    'earnings_beat_miss',
+    'analyst_upgrade_downgrade',
+    'legal_regulatory',
+    'product_capex',
+    'macro_spillover',
+]
 
 news_state_by_symbol = {}
 seen_news_ids_by_symbol = {}
@@ -211,6 +243,37 @@ def score_headline_sentiment_lexicon(headline):
     neg_hits = sum(1 for token in tokens if token in NEGATIVE_WORDS)
     raw_score = float(pos_hits - neg_hits)
     return max(-1.0, min(1.0, raw_score / 3.0))
+
+
+def classify_headline_event(headline):
+    text = safe_str(headline, '').lower()
+    tokens = re.findall(r"[a-zA-Z0-9']+", text)
+    if not tokens:
+        probs = {label: 0.0 for label in EVENT_LABELS}
+        probs['macro_spillover'] = 1.0
+        return 'macro_spillover', 0.0, probs
+
+    token_set = set(tokens)
+    scores = {}
+    for label, keywords in EVENT_KEYWORDS.items():
+        overlap = len(token_set.intersection(keywords))
+        scores[label] = float(overlap)
+
+    score_values = np.array([scores[label] for label in EVENT_LABELS], dtype=float)
+    if float(score_values.max()) <= 0.0:
+        probs = {label: 0.0 for label in EVENT_LABELS}
+        probs['macro_spillover'] = 1.0
+        return 'macro_spillover', 0.0, probs
+
+    stable = score_values - score_values.max()
+    exp_v = np.exp(stable)
+    p = exp_v / (exp_v.sum() + 1e-9)
+
+    probs = {label: float(p[idx]) for idx, label in enumerate(EVENT_LABELS)}
+    top_idx = int(np.argmax(p))
+    top_label = EVENT_LABELS[top_idx]
+    top_conf = float(p[top_idx])
+    return top_label, top_conf, probs
 
 
 def init_sentiment_model():
@@ -671,6 +734,7 @@ def get_news_state(sym):
 
 def record_news_event(sym, news_csv_path, news_dt, provider_code, article_id, headline, received_dt=None, is_historical_seed=False, provider_name='', source_raw=''):
     sentiment_score, sentiment_confidence, sentiment_label = score_headline_sentiment(headline)
+    event_label, event_confidence, event_probs = classify_headline_event(headline)
     state = get_news_state(sym)
     published_dt = to_market_dt(news_dt)
     received_market_dt = to_market_dt(received_dt if received_dt is not None else _now_utc())
@@ -689,6 +753,13 @@ def record_news_event(sym, news_csv_path, news_dt, provider_code, article_id, he
         'sentiment_confidence': sentiment_confidence,
         'sentiment_label': sentiment_label,
         'sentiment_model': SENTIMENT_MODEL,
+        'event_label': event_label,
+        'event_confidence': float(event_confidence),
+        'event_prob_earnings_beat_miss': float(event_probs['earnings_beat_miss']),
+        'event_prob_analyst_upgrade_downgrade': float(event_probs['analyst_upgrade_downgrade']),
+        'event_prob_legal_regulatory': float(event_probs['legal_regulatory']),
+        'event_prob_product_capex': float(event_probs['product_capex']),
+        'event_prob_macro_spillover': float(event_probs['macro_spillover']),
     })
     state['last_news_dt'] = published_dt
 
@@ -707,6 +778,13 @@ def record_news_event(sym, news_csv_path, news_dt, provider_code, article_id, he
             f"{sentiment_confidence:.4f}",
             sentiment_label,
             SENTIMENT_MODEL,
+            event_label,
+            f"{event_confidence:.4f}",
+            f"{event_probs['earnings_beat_miss']:.4f}",
+            f"{event_probs['analyst_upgrade_downgrade']:.4f}",
+            f"{event_probs['legal_regulatory']:.4f}",
+            f"{event_probs['product_capex']:.4f}",
+            f"{event_probs['macro_spillover']:.4f}",
             format_market_timestamp(published_dt),
             format_market_timestamp(received_market_dt),
             format_market_timestamp(tradable_dt),
@@ -754,6 +832,11 @@ def get_news_features(sym, bar_dt):
             'minutes_since_news': minutes_since_news,
             'news_asof_lag_sec': news_lag_sec,
             'news_coverage_300s': 0.0,
+            'news_event_earnings_beat_miss_300s': 0.0,
+            'news_event_analyst_upgrade_downgrade_300s': 0.0,
+            'news_event_legal_regulatory_300s': 0.0,
+            'news_event_product_capex_300s': 0.0,
+            'news_event_macro_spillover_300s': 0.0,
         }
 
     scores = [event['sentiment_score'] for event in eligible_events]
@@ -764,6 +847,11 @@ def get_news_features(sym, bar_dt):
     std_score = float(np.std(scores, ddof=1)) if len(scores) > 1 else 0.0
     mean_score = sum(scores) / len(scores)
     mean_conf = sum(confidences) / len(confidences)
+    event_earnings = float(np.mean([event.get('event_prob_earnings_beat_miss', 0.0) for event in eligible_events]))
+    event_analyst = float(np.mean([event.get('event_prob_analyst_upgrade_downgrade', 0.0) for event in eligible_events]))
+    event_legal = float(np.mean([event.get('event_prob_legal_regulatory', 0.0) for event in eligible_events]))
+    event_product = float(np.mean([event.get('event_prob_product_capex', 0.0) for event in eligible_events]))
+    event_macro = float(np.mean([event.get('event_prob_macro_spillover', 0.0) for event in eligible_events]))
 
     delta = bar_dt - latest_event['published_dt']
     minutes_since_news = max(0.0, delta.total_seconds() / 60.0)
@@ -785,6 +873,11 @@ def get_news_features(sym, bar_dt):
         'minutes_since_news': minutes_since_news,
         'news_asof_lag_sec': news_asof_lag_sec,
         'news_coverage_300s': _news_coverage_score(len(eligible_events)),
+        'news_event_earnings_beat_miss_300s': event_earnings,
+        'news_event_analyst_upgrade_downgrade_300s': event_analyst,
+        'news_event_legal_regulatory_300s': event_legal,
+        'news_event_product_capex_300s': event_product,
+        'news_event_macro_spillover_300s': event_macro,
     }
 
 
@@ -965,6 +1058,13 @@ def normalize_news_csv(csv_path):
             'sentiment_confidence': '0',
             'sentiment_label': 'neutral',
             'sentiment_model': SENTIMENT_MODEL,
+            'event_label': 'macro_spillover',
+            'event_confidence': '0',
+            'event_prob_earnings_beat_miss': '0',
+            'event_prob_analyst_upgrade_downgrade': '0',
+            'event_prob_legal_regulatory': '0',
+            'event_prob_product_capex': '0',
+            'event_prob_macro_spillover': '1',
             'published_ts': row[0] if len(row) > 0 else '',
             'received_ts': row[0] if len(row) > 0 else '',
             'tradable_ts': row[0] if len(row) > 0 else '',
@@ -1427,6 +1527,11 @@ def build_warmup_tail_defaults(bar_dt, quality_flag='none'):
         'NewsUniqueProviders300s': '0',
         'SentimentStd300s': '0',
         'SentimentLatest': '0',
+        'NewsEventEarningsBeatMiss300s': '0',
+        'NewsEventAnalystUpgradeDowngrade300s': '0',
+        'NewsEventLegalRegulatory300s': '0',
+        'NewsEventProductCapex300s': '0',
+        'NewsEventMacroSpillover300s': '0',
         'SentimentModel': SENTIMENT_MODEL,
         'SentimentConfidenceMean300s': '0',
         'SentimentConfidenceLatest': '0',
@@ -1656,6 +1761,11 @@ def create_bar_callback(sym, csv_path, ticker_obj):
                     news_features['news_unique_providers_300s'],
                     f"{news_features['sentiment_std_300s']:.4f}",
                     f"{news_features['sentiment_latest']:.4f}",
+                    f"{news_features['news_event_earnings_beat_miss_300s']:.4f}",
+                    f"{news_features['news_event_analyst_upgrade_downgrade_300s']:.4f}",
+                    f"{news_features['news_event_legal_regulatory_300s']:.4f}",
+                    f"{news_features['news_event_product_capex_300s']:.4f}",
+                    f"{news_features['news_event_macro_spillover_300s']:.4f}",
                     SENTIMENT_MODEL,
                     f"{news_features['sentiment_conf_mean_300s']:.4f}",
                     f"{news_features['sentiment_conf_latest']:.4f}",
