@@ -25,6 +25,11 @@ RECONNECT_RETRY_SECONDS = float(os.getenv('RECONNECT_RETRY_SECONDS', '3'))
 STREAM_WATCHDOG_INTERVAL_SECONDS = float(os.getenv('STREAM_WATCHDOG_INTERVAL_SECONDS', '10'))
 BAR_STALE_SECONDS = float(os.getenv('BAR_STALE_SECONDS', '90'))
 TICK_STALE_SECONDS = float(os.getenv('TICK_STALE_SECONDS', '90'))
+NEWS_LIVE_POLL_ENABLED = os.getenv('NEWS_LIVE_POLL_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+NEWS_LIVE_POLL_INTERVAL_SECONDS = float(os.getenv('NEWS_LIVE_POLL_INTERVAL_SECONDS', '30'))
+NEWS_LIVE_POLL_LOOKBACK_MINUTES = int(os.getenv('NEWS_LIVE_POLL_LOOKBACK_MINUTES', '20'))
+NEWS_LIVE_POLL_RESULTS = int(os.getenv('NEWS_LIVE_POLL_RESULTS', '25'))
+MKT_DATA_GENERIC_TICKS = os.getenv('MKT_DATA_GENERIC_TICKS', '100,104,233,236,292').strip()
 
 # Connect to Gateway/TWS. Using ClientID 10 to avoid conflicts with Java bots.
 ib.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
@@ -887,33 +892,38 @@ def create_news_callback(sym, news_csv_path, ticker_obj):
         if not news_ticks:
             return
 
-        latest = news_ticks[-1]
-        article_id = safe_str(getattr(latest, 'articleId', None), '')
-        provider_code = safe_str(getattr(latest, 'providerCode', None), '')
-        headline = safe_str(getattr(latest, 'headline', None), '')
-        raw_ts = getattr(latest, 'timeStamp', None)
-        source_raw = safe_str(getattr(latest, 'extraData', None), '')
-        dedupe_key = f"{provider_code}:{article_id}:{raw_ts}"
-
         seen = seen_news_ids_by_symbol.setdefault(sym, set())
-        if dedupe_key in seen:
-            return
-        seen.add(dedupe_key)
+        wrote_any = False
+        for item in news_ticks:
+            article_id = safe_str(getattr(item, 'articleId', None), '')
+            provider_code = safe_str(getattr(item, 'providerCode', None), '')
+            headline = safe_str(getattr(item, 'headline', None), '')
+            raw_ts = getattr(item, 'timeStamp', None)
+            source_raw = safe_str(getattr(item, 'extraData', None), '')
+            dedupe_key = f"{provider_code}:{article_id}:{raw_ts}"
 
-        news_dt = parse_news_time(raw_ts)
-        record_news_event(
-            sym,
-            news_csv_path,
-            news_dt,
-            provider_code,
-            article_id,
-            headline,
-            received_dt=_now_utc(),
-            is_historical_seed=False,
-            provider_name=safe_str(news_provider_name_by_code.get(provider_code, ''), ''),
-            source_raw=source_raw,
-        )
-        print(f"[NEWS] {sym} {format_market_timestamp(news_dt)} | {provider_code} | {headline}")
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            news_dt = parse_news_time(raw_ts)
+            record_news_event(
+                sym,
+                news_csv_path,
+                news_dt,
+                provider_code,
+                article_id,
+                headline,
+                received_dt=_now_utc(),
+                is_historical_seed=False,
+                provider_name=safe_str(news_provider_name_by_code.get(provider_code, ''), ''),
+                source_raw=source_raw,
+            )
+            wrote_any = True
+            print(f"[NEWS] {sym} {format_market_timestamp(news_dt)} | {provider_code} | {headline}")
+
+        if wrote_any:
+            mark_stream_alive(sym, 'news')
 
     return onNewsUpdate
 
@@ -1290,7 +1300,12 @@ def _begin_symbol_subscription(sym):
     runtime['last_bar_event_ts'] = _now_utc()
     runtime['last_tick_event_ts'] = _now_utc()
 
-    ticker_obj = ib.reqMktData(contract, '100,104,236,292', snapshot=False, regulatorySnapshot=False)
+    ticker_obj = ib.reqMktData(
+        contract,
+        MKT_DATA_GENERIC_TICKS,
+        snapshot=False,
+        regulatorySnapshot=False,
+    )
     ticker_obj.updateEvent += create_quote_capture_callback(sym, ticker_obj)
     ticker_obj.updateEvent += create_news_callback(sym, runtime['news_csv'], ticker_obj)
     tickers[sym] = ticker_obj
@@ -1411,6 +1426,77 @@ async def reconnect_watchdog(provider_codes):
             await resubscribe_all_symbols(provider_codes)
         except Exception as exc:
             print(f"[RECONNECT] connectAsync failed: {exc}")
+
+
+async def news_fallback_poll_watchdog(provider_codes):
+    if not NEWS_LIVE_POLL_ENABLED:
+        print('[NEWS-POLL] disabled (NEWS_LIVE_POLL_ENABLED=0).')
+        return
+
+    if not provider_codes:
+        print('[NEWS-POLL] no provider codes available; fallback polling disabled.')
+        return
+
+    while True:
+        await asyncio.sleep(NEWS_LIVE_POLL_INTERVAL_SECONDS)
+
+        if not ib.isConnected():
+            continue
+
+        now_utc = _now_utc()
+        start_utc = now_utc - timedelta(minutes=max(1, NEWS_LIVE_POLL_LOOKBACK_MINUTES))
+
+        for sym in symbols:
+            runtime = symbol_runtime.get(sym)
+            contract = contracts.get(sym)
+            if runtime is None or contract is None:
+                continue
+
+            try:
+                historical_news = await ib.reqHistoricalNewsAsync(
+                    contract.conId,
+                    provider_codes,
+                    start_utc,
+                    now_utc,
+                    max(1, NEWS_LIVE_POLL_RESULTS),
+                )
+            except Exception as exc:
+                print(f"[NEWS-POLL] {sym} poll failed: {exc}")
+                continue
+
+            seen = seen_news_ids_by_symbol.setdefault(sym, set())
+            captured = 0
+
+            for item in historical_news or []:
+                raw_time = getattr(item, 'time', None)
+                provider_code = safe_str(getattr(item, 'providerCode', None), '')
+                article_id = safe_str(getattr(item, 'articleId', None), '')
+                headline = safe_str(getattr(item, 'headline', None), '')
+                source_raw = safe_str(getattr(item, 'extraData', None), 'historical_poll')
+                dedupe_key = f"{provider_code}:{article_id}:{raw_time}"
+
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
+                news_dt = parse_news_time(raw_time)
+                record_news_event(
+                    sym,
+                    runtime['news_csv'],
+                    news_dt,
+                    provider_code,
+                    article_id,
+                    headline,
+                    received_dt=_now_utc(),
+                    is_historical_seed=False,
+                    provider_name=safe_str(news_provider_name_by_code.get(provider_code, ''), ''),
+                    source_raw=source_raw,
+                )
+                captured += 1
+
+            if captured > 0:
+                mark_stream_alive(sym, 'news')
+                print(f"[NEWS-POLL] {sym} captured {captured} new headline(s) via historical fallback.")
 
 
 # --- MAIN LOGIC ---
@@ -1639,7 +1725,7 @@ def build_market_context_features(asof_dt):
 
 def capture_market_context_features(sym, bar_dt, quote_metrics, news_features):
     close_price = safe_num(quote_metrics.get('close_price', None), 0.0)
-    if close_price <= 0:
+    if close_price <= 0.0:
         close_price = safe_num(quote_metrics['bid_last'] + quote_metrics['ask_last']) / 2.0
     update_market_context_snapshot(sym, bar_dt, close_price, quote_metrics, news_features)
     market_context_features = build_market_context_features(bar_dt)
@@ -1800,6 +1886,7 @@ def create_bar_callback(sym, csv_path, ticker_obj):
 
 def create_tick_callback(sym, csv_path, ticker_obj):
     skipped_invalid_ticks = 0
+    contract_exchange = safe_str(getattr(contracts.get(sym), 'primaryExchange', ''), '')
 
     def onTickUpdate(ticker):
         nonlocal skipped_invalid_ticks
@@ -1830,6 +1917,7 @@ def create_tick_callback(sym, csv_path, ticker_obj):
         tick_price = safe_num(getattr(tick, 'price', None))
         tick_size = safe_num(getattr(tick, 'size', None))
         exchange = safe_str(getattr(tick, 'exchange', ''), '')
+        emitted_last_exchange = exchange or last_exchange or bbo_exchange or contract_exchange
 
         if tick_price <= 0 or tick_size <= 0:
             skipped_invalid_ticks += 1
@@ -1865,7 +1953,7 @@ def create_tick_callback(sym, csv_path, ticker_obj):
                 volume,
                 vwap,
                 bbo_exchange,
-                exchange or last_exchange
+                emitted_last_exchange
             ])
     return onTickUpdate
 
@@ -1873,6 +1961,7 @@ def create_tick_callback(sym, csv_path, ticker_obj):
 def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
     skipped_invalid_ticks = 0
     last_emitted = None
+    contract_exchange = safe_str(getattr(contracts.get(sym), 'primaryExchange', ''), '')
 
     def onMktDataUpdate(_):
         nonlocal skipped_invalid_ticks, last_emitted
@@ -1896,6 +1985,7 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
         vwap = safe_num(getattr(ticker_obj, 'vwap', None), 0.0)
         bbo_exchange = safe_str(getattr(ticker_obj, 'bboExchange', ''), '')
         last_exchange = safe_str(getattr(ticker_obj, 'lastExchange', ''), '')
+        emitted_last_exchange = last_exchange or bbo_exchange or contract_exchange
 
         if tick_time is None or tick_price <= 0 or tick_size <= 0:
             skipped_invalid_ticks += 1
@@ -1936,7 +2026,7 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
                 volume,
                 vwap,
                 bbo_exchange,
-                last_exchange
+                emitted_last_exchange
             ])
 
     return onMktDataUpdate
@@ -1966,6 +2056,7 @@ for idx, sym in enumerate(symbols):
         'news_seeded': False,
         'last_bar_event_ts': _now_utc(),
         'last_tick_event_ts': _now_utc(),
+        'last_news_event_ts': _now_utc(),
     }
 
     subscribe_symbol_streams(sym, news_provider_codes)
@@ -1978,6 +2069,7 @@ ib.connectedEvent += lambda: print('[RECONNECT] connectedEvent received from IBK
 
 watchdog_task = asyncio.get_event_loop().create_task(reconnect_watchdog(news_provider_codes))
 stream_watchdog_task = asyncio.get_event_loop().create_task(stream_heartbeat_watchdog(news_provider_codes))
+news_poll_task = asyncio.get_event_loop().create_task(news_fallback_poll_watchdog(news_provider_codes))
 
 print("\n[+] Harvester fully armed. Streaming all symbols concurrently...")
 try:
@@ -1987,3 +2079,4 @@ except KeyboardInterrupt:
 finally:
     watchdog_task.cancel()
     stream_watchdog_task.cancel()
+    news_poll_task.cancel()
