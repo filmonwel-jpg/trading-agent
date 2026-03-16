@@ -251,13 +251,19 @@ def build_30s_from_5s_csv(input_csv, output_csv, add_meta_features=True):
 
 
 def pick_source_csv(source_dir: Path) -> Path:
-    candidates = sorted(source_dir.glob('*warmup*.csv'))
-    if candidates:
-        return candidates[0]
+    # Prefer stable historical clean source first so training stays backward-compatible
+    # while live warmup harvesting schema continues to evolve.
+    canonical_clean = source_dir / 'TSLA_5Sec_Historical_Bulk_20260228_1558_clean.csv'
+    if canonical_clean.exists():
+        return canonical_clean
 
     preferred = sorted(source_dir.glob('*_clean.csv'))
     if preferred:
         return preferred[0]
+
+    candidates = sorted(source_dir.glob('*warmup*.csv'))
+    if candidates:
+        return candidates[0]
 
     all_csv = sorted(source_dir.glob('*.csv'))
     if all_csv:

@@ -33,6 +33,8 @@ except Exception:
 # --- CONFIGURATION: THE 4-MODEL PARAMETERS ---
 # CHANGED: Now pointing to the new 30-second aggregated data
 CSV_FILE = Path(__file__).resolve().parent / "TSLA_30Sec_Historical_Bulk_fromTrainer.csv"
+SOURCE_5S_CLEAN_FILE = Path(__file__).resolve().parent / "TSLA_5Sec_Historical_Bulk_20260228_1558_clean.csv"
+AUTO_BUILD_30S_IF_MISSING = os.getenv('AUTO_BUILD_30S_IF_MISSING', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 # Hybrid targets for Entries (best overall from 3-way comparison)
 ENTRY_PROFIT_PCT = 0.0014    # +0.14%
@@ -115,6 +117,27 @@ MIN_REGIME_ROWS = 1200
 MIN_REGIME_SIGNALS = 25
 MIN_OPEN30_ROWS = 800
 MIN_OPEN30_SIGNALS = 20
+
+
+def ensure_training_csv_available():
+    if CSV_FILE.exists():
+        return True
+
+    if not AUTO_BUILD_30S_IF_MISSING:
+        return False
+
+    if not SOURCE_5S_CLEAN_FILE.exists():
+        return False
+
+    try:
+        from build_30s_from_5s_csv import build_30s_from_5s_csv
+        print(f">>> 30s dataset missing. Auto-building from {SOURCE_5S_CLEAN_FILE.name}...")
+        build_30s_from_5s_csv(str(SOURCE_5S_CLEAN_FILE), str(CSV_FILE), add_meta_features=True)
+    except Exception as exc:
+        print(f"ERROR: Failed to auto-build 30s dataset from clean 5s source: {exc}")
+        return False
+
+    return CSV_FILE.exists()
 
 # Threshold optimization on probabilities
 # Slightly stricter floors reduce fold collapse where thresholding predicts almost no positives.
@@ -1098,6 +1121,13 @@ def main():
     print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
 
     print(f">>> Loading historical data from {CSV_FILE}...")
+    if not ensure_training_csv_available():
+        print(
+            "ERROR: Training CSV missing and could not be prepared automatically. "
+            f"Expected 30s file: {CSV_FILE} | clean 5s fallback: {SOURCE_5S_CLEAN_FILE}"
+        )
+        return
+
     try:
         raw_df = pd.read_csv(CSV_FILE)
     except FileNotFoundError:
