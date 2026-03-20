@@ -46,7 +46,7 @@ The backtester is designed to mirror live-engine data shape as closely as possib
 
 Before running the suite, ensure the following are available:
 
-1. **Java 17+** (JDK)
+1. **Java 21+** (JDK)
 2. **Maven**
 3. **IBKR TWS** or **IB Gateway** running locally (`127.0.0.1`)
 4. Active **U.S. Equities live market data subscription** in IBKR
