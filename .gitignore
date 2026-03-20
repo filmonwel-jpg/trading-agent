@@ -40,6 +40,7 @@ __pycache__/
 runtime/git checkout 
 runtime/trading-agent.log
 runtime/trading-agent.log.*
+runtime/postgres-local.properties
 
 ### Generated logs and backtests ###
 backtest_trades_log*.csv
