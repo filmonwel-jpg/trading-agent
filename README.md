@@ -68,6 +68,16 @@ This will create/update files like:
 - `NVDA_1_Sec_Data.csv`
 - `TSLA_1_Sec_Data.csv`
 
+For the 5-second bulk scraper, you can now request a rolling window or an explicit date range:
+
+```powershell
+./mvnw spring-boot:run '-Dspring-boot.run.main-class=com.calgary.fili.trader.datascrapers.IBKR5SecHistoricalBulkScraper' '-Dspring-boot.run.arguments="NVDA --months=6"'
+
+./mvnw spring-boot:run '-Dspring-boot.run.main-class=com.calgary.fili.trader.datascrapers.IBKR5SecHistoricalBulkScraper' '-Dspring-boot.run.arguments="NVDA --start=2025-09-16 --end=2026-03-16"'
+```
+
+Supported arguments are `SYMBOL [--months=N] [--start=YYYY-MM-DD] [--end=YYYY-MM-DD]`.
+
 ### Step 2 — Run Historical Backtests
 Backtest each symbol using the same strategy engine.
 
