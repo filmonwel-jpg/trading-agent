@@ -1,12 +1,12 @@
+#!/usr/bin/env python3
+
 import asyncio
 
-# Python 3.14 compatibility: ensure a current event loop exists before ib_insync import
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+# Python 3.13+/3.14 compatibility: create one explicit event loop for the IBKR async client.
+EVENT_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(EVENT_LOOP)
 
-from ib_insync import *
+from ib_async import IB, Stock, Contract
 import csv
 import os
 import math
@@ -30,9 +30,25 @@ NEWS_LIVE_POLL_INTERVAL_SECONDS = float(os.getenv('NEWS_LIVE_POLL_INTERVAL_SECON
 NEWS_LIVE_POLL_LOOKBACK_MINUTES = int(os.getenv('NEWS_LIVE_POLL_LOOKBACK_MINUTES', '20'))
 NEWS_LIVE_POLL_RESULTS = int(os.getenv('NEWS_LIVE_POLL_RESULTS', '25'))
 MKT_DATA_GENERIC_TICKS = os.getenv('MKT_DATA_GENERIC_TICKS', '100,104,233,236,292').strip()
+BROADTAPE_NEWS_ENABLED = os.getenv('BROADTAPE_NEWS_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+BROADTAPE_PROVIDER_CODES = [token.strip().upper() for token in os.getenv('BROADTAPE_PROVIDER_CODES', '').split(',') if token.strip()]
+BROADTAPE_PROVIDER_HINTS = [token.strip().lower() for token in os.getenv('BROADTAPE_PROVIDER_HINTS', 'benzinga,bz').split(',') if token.strip()]
+BROADTAPE_ROUTE_TO_SYMBOLS = os.getenv('BROADTAPE_ROUTE_TO_SYMBOLS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+NEWS_SYMBOL_ALIASES = os.getenv('NEWS_SYMBOL_ALIASES', '').strip()
+BROADTAPE_PSEUDO_SYMBOL_PREFIX = '__BROADTAPE__'
 
-# Connect to Gateway/TWS. Using ClientID 10 to avoid conflicts with Java bots.
-ib.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
+
+def connect_to_ib():
+    if ib.isConnected():
+        return True
+
+    try:
+        ib.connect(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
+    except Exception as exc:
+        print(f"[RECONNECT] Initial connect failed: {exc}")
+        return False
+
+    return ib.isConnected()
 
 def _parse_symbol_list(raw_value, fallback):
     text = '' if raw_value is None else str(raw_value).strip()
@@ -47,11 +63,37 @@ def _parse_symbol_list(raw_value, fallback):
     return parsed if parsed else list(fallback)
 
 
+def _parse_symbol_aliases(raw_value):
+    aliases = {}
+    text = '' if raw_value is None else str(raw_value).strip()
+    if not text:
+        return aliases
+
+    for chunk in text.split(';'):
+        if ':' not in chunk:
+            continue
+        sym, alias_blob = chunk.split(':', 1)
+        sym = str(sym).strip().upper()
+        if not sym:
+            continue
+        parsed = [str(part).strip().upper() for part in alias_blob.split('|') if str(part).strip()]
+        if parsed:
+            aliases[sym] = parsed
+    return aliases
+
+
 # Add all symbols you want to harvest (env override: HARVEST_SYMBOLS=TSLA,QQQ,NVDA,AMD).
 DEFAULT_SYMBOLS = ['TSLA', 'QQQ', 'NVDA', 'AMD']
 symbols = _parse_symbol_list(os.getenv('HARVEST_SYMBOLS', ''), DEFAULT_SYMBOLS)
 # Market-context symbols default to all harvested symbols (optional override: MARKET_CONTEXT_SYMBOLS).
 market_context_symbols = _parse_symbol_list(os.getenv('MARKET_CONTEXT_SYMBOLS', ''), symbols)
+DEFAULT_NEWS_SYMBOL_ALIASES = {
+    'TSLA': ['TESLA', 'TESLA INC', 'TESLA MOTORS'],
+    'NVDA': ['NVIDIA', 'NVIDIA CORP', 'NVIDIA CORPORATION'],
+    'AMD': ['ADVANCED MICRO DEVICES', 'ADVANCED MICRO'],
+    'QQQ': ['NASDAQ 100', 'NASDAQ-100', 'INVESCO QQQ'],
+}
+CONFIGURED_NEWS_SYMBOL_ALIASES = _parse_symbol_aliases(NEWS_SYMBOL_ALIASES)
 MAX_TICK_BY_TICK_STREAMS = int(os.getenv('MAX_TICK_BY_TICK_STREAMS', '4'))
 OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test'))
 MARKET_ZONE = ZoneInfo('America/New_York')
@@ -164,6 +206,12 @@ news_state_by_symbol = {}
 seen_news_ids_by_symbol = {}
 news_provider_name_by_code = {}
 news_cluster_state_by_symbol = {}
+broadtape_contracts = {}
+broadtape_tickers = {}
+broadtape_runtime_by_code = {}
+broadtape_handler_registered = False
+active_news_provider_codes = ''
+active_broadtape_provider_codes = []
 finbert_pipeline = None
 finbert_label_map = {}
 
@@ -180,6 +228,15 @@ def safe_str(val, default=''):
         return default
     text = str(val).strip()
     return text if text else default
+
+
+def _register_seen_news_id(sym, provider_code, article_id, raw_ts):
+    dedupe_key = f"{safe_str(provider_code, '')}:{safe_str(article_id, '')}:{raw_ts}"
+    seen = seen_news_ids_by_symbol.setdefault(sym, set())
+    if dedupe_key in seen:
+        return False
+    seen.add(dedupe_key)
+    return True
 
 
 def _now_utc():
@@ -892,7 +949,6 @@ def create_news_callback(sym, news_csv_path, ticker_obj):
         if not news_ticks:
             return
 
-        seen = seen_news_ids_by_symbol.setdefault(sym, set())
         wrote_any = False
         for item in news_ticks:
             article_id = safe_str(getattr(item, 'articleId', None), '')
@@ -900,11 +956,8 @@ def create_news_callback(sym, news_csv_path, ticker_obj):
             headline = safe_str(getattr(item, 'headline', None), '')
             raw_ts = getattr(item, 'timeStamp', None)
             source_raw = safe_str(getattr(item, 'extraData', None), '')
-            dedupe_key = f"{provider_code}:{article_id}:{raw_ts}"
-
-            if dedupe_key in seen:
+            if not _register_seen_news_id(sym, provider_code, article_id, raw_ts):
                 continue
-            seen.add(dedupe_key)
 
             news_dt = parse_news_time(raw_ts)
             record_news_event(
@@ -928,11 +981,295 @@ def create_news_callback(sym, news_csv_path, ticker_obj):
     return onNewsUpdate
 
 
+def _build_broadtape_symbol(provider_code):
+    return f"{provider_code}:{provider_code}_ALL"
+
+
+def _build_broadtape_contract(provider_code):
+    contract = Contract()
+    contract.symbol = _build_broadtape_symbol(provider_code)
+    contract.secType = 'NEWS'
+    contract.exchange = provider_code
+    contract.currency = ''
+    return contract
+
+
+def _qualify_broadtape_contract(provider_code):
+    contract = _build_broadtape_contract(provider_code)
+    qualified = ib.qualifyContracts(contract)
+    if qualified:
+        contract = qualified[0]
+    if not _contract_is_qualified(contract):
+        raise ValueError(f'broadtape contract qualification returned no conId for {provider_code}')
+    return contract
+
+
+async def _qualify_broadtape_contract_async(provider_code):
+    contract = _build_broadtape_contract(provider_code)
+    qualified = await ib.qualifyContractsAsync(contract)
+    if qualified:
+        contract = qualified[0]
+    if not _contract_is_qualified(contract):
+        raise ValueError(f'broadtape contract qualification returned no conId for {provider_code}')
+    return contract
+
+
+def _match_broadtape_provider(code, name):
+    code = safe_str(code, '').upper()
+    name = safe_str(name, '').lower()
+    if not code:
+        return False
+
+    if BROADTAPE_PROVIDER_CODES:
+        return code in BROADTAPE_PROVIDER_CODES
+
+    return any(hint in code.lower() or hint in name for hint in BROADTAPE_PROVIDER_HINTS)
+
+
+def _resolve_broadtape_provider_codes():
+    global active_broadtape_provider_codes
+
+    if not BROADTAPE_NEWS_ENABLED:
+        active_broadtape_provider_codes = []
+        return []
+
+    matches = [
+        code for code, name in news_provider_name_by_code.items()
+        if _match_broadtape_provider(code, name)
+    ]
+    matches = list(dict.fromkeys(matches))
+    active_broadtape_provider_codes = matches
+
+    if BROADTAPE_PROVIDER_CODES:
+        missing = [code for code in BROADTAPE_PROVIDER_CODES if code not in matches and code not in news_provider_name_by_code]
+        if missing:
+            print(f"[NEWS-LIVE] Requested broadtape provider code(s) not found in current entitlements: {','.join(missing)}")
+
+    if matches:
+        names = ', '.join(f"{code} ({news_provider_name_by_code.get(code, '')})" for code in matches)
+        print(f"[NEWS-LIVE] Broadtape providers armed: {names}")
+    elif BROADTAPE_NEWS_ENABLED:
+        print('[NEWS-LIVE] No entitled broadtape providers matched the current Benzinga filters.')
+
+    return matches
+
+
+def _log_news_provider_inventory():
+    if not news_provider_name_by_code:
+        return
+
+    print('[NEWS] Provider inventory:')
+    for code in sorted(news_provider_name_by_code):
+        name = safe_str(news_provider_name_by_code.get(code, ''), '')
+        broadtape_flag = ' broadtape_match=1' if code in active_broadtape_provider_codes else ''
+        print(f"[NEWS]   {code:<10} | {name}{broadtape_flag}")
+
+
+def _broadtape_runtime(provider_code):
+    runtime = broadtape_runtime_by_code.get(provider_code)
+    if runtime is not None:
+        return runtime
+
+    warmup_date = datetime.now(MARKET_ZONE).strftime('%Y%m%d')
+    broadtape_dir = os.path.join(OUTPUT_DIR, '_broadtape')
+    os.makedirs(broadtape_dir, exist_ok=True)
+    csv_path = os.path.join(broadtape_dir, f'{provider_code}_live_news_{warmup_date}.csv')
+    ensure_news_csv_file(csv_path)
+    runtime = {
+        'sym': f'{BROADTAPE_PSEUDO_SYMBOL_PREFIX}_{provider_code}',
+        'csv_path': csv_path,
+        'last_event_ts': _now_utc(),
+    }
+    broadtape_runtime_by_code[provider_code] = runtime
+    return runtime
+
+
+def _extract_symbols_from_text(text):
+    content = safe_str(text, '')
+    if not content:
+        return []
+
+    matches = []
+    upper_content = content.upper()
+    for sym in symbols:
+        alias_candidates = [sym] + CONFIGURED_NEWS_SYMBOL_ALIASES.get(sym, []) + DEFAULT_NEWS_SYMBOL_ALIASES.get(sym, [])
+        for alias in dict.fromkeys(alias_candidates):
+            pattern = rf'(?<![A-Z0-9])\$?{re.escape(alias)}(?![A-Z0-9])'
+            if not re.search(pattern, upper_content):
+                continue
+            matches.append(sym)
+            break
+    return matches
+
+
+def _route_broadtape_news_symbols(headline, source_raw):
+    matched = []
+    for sym in _extract_symbols_from_text(headline) + _extract_symbols_from_text(source_raw):
+        if sym not in matched:
+            matched.append(sym)
+    return matched
+
+
+def _record_broadtape_news_item(provider_code, article_id, headline, raw_ts, source_raw):
+    runtime = _broadtape_runtime(provider_code)
+    provider_name = safe_str(news_provider_name_by_code.get(provider_code, ''), '')
+    news_dt = parse_news_time(raw_ts)
+    received_dt = _now_utc()
+
+    if _register_seen_news_id(runtime['sym'], provider_code, article_id, raw_ts):
+        record_news_event(
+            runtime['sym'],
+            runtime['csv_path'],
+            news_dt,
+            provider_code,
+            article_id,
+            headline,
+            received_dt=received_dt,
+            is_historical_seed=False,
+            provider_name=provider_name,
+            source_raw=source_raw,
+        )
+        print(f"[NEWS-LIVE] Archived {provider_code} headline -> {os.path.basename(runtime['csv_path'])}")
+
+    runtime['last_event_ts'] = received_dt
+
+    if not BROADTAPE_ROUTE_TO_SYMBOLS:
+        return []
+
+    matched_symbols = []
+    for sym in _route_broadtape_news_symbols(headline, source_raw):
+        symbol_cfg = symbol_runtime.get(sym)
+        if symbol_cfg is None:
+            continue
+        if not _register_seen_news_id(sym, provider_code, article_id, raw_ts):
+            continue
+
+        record_news_event(
+            sym,
+            symbol_cfg['news_csv'],
+            news_dt,
+            provider_code,
+            article_id,
+            headline,
+            received_dt=received_dt,
+            is_historical_seed=False,
+            provider_name=provider_name,
+            source_raw=source_raw or 'broadtape_live',
+        )
+        mark_stream_alive(sym, 'news')
+        matched_symbols.append(sym)
+
+    return matched_symbols
+
+
+def _handle_live_news_tick(news_item):
+    provider_code = safe_str(getattr(news_item, 'providerCode', None), '').upper()
+    if provider_code not in active_broadtape_provider_codes:
+        return
+
+    article_id = safe_str(getattr(news_item, 'articleId', None), '')
+    headline = safe_str(getattr(news_item, 'headline', None), '')
+    raw_ts = getattr(news_item, 'timeStamp', None)
+    source_raw = safe_str(getattr(news_item, 'extraData', None), '')
+    matched_symbols = _record_broadtape_news_item(provider_code, article_id, headline, raw_ts, source_raw)
+
+    routed = f" -> {','.join(matched_symbols)}" if matched_symbols else ''
+    print(f"[NEWS-LIVE] {provider_code} {format_market_timestamp(parse_news_time(raw_ts))}{routed} | {headline}")
+
+
+def _register_broadtape_handler():
+    global broadtape_handler_registered
+    if broadtape_handler_registered:
+        return
+    ib.tickNewsEvent += _handle_live_news_tick
+    broadtape_handler_registered = True
+
+
+def subscribe_broadtape_news(provider_codes=None):
+    if not BROADTAPE_NEWS_ENABLED or not ib.isConnected():
+        return
+
+    provider_codes = list(provider_codes or active_broadtape_provider_codes)
+    if not provider_codes:
+        return
+
+    _register_broadtape_handler()
+    for provider_code in provider_codes:
+        if provider_code in broadtape_tickers:
+            continue
+
+        runtime = _broadtape_runtime(provider_code)
+        try:
+            contract = _qualify_broadtape_contract(provider_code)
+            broadtape_contracts[provider_code] = contract
+            broadtape_tickers[provider_code] = ib.reqMktData(
+                contract,
+                'mdoff,292',
+                snapshot=False,
+                regulatorySnapshot=False,
+            )
+            print(f"[NEWS-LIVE] Subscribed broadtape feed {provider_code} -> {os.path.basename(runtime['csv_path'])}")
+        except Exception as exc:
+            broadtape_contracts.pop(provider_code, None)
+            broadtape_tickers.pop(provider_code, None)
+            print(f"[NEWS-LIVE] {provider_code} subscription failed: {exc}")
+
+
+async def subscribe_broadtape_news_async(provider_codes=None):
+    if not BROADTAPE_NEWS_ENABLED or not ib.isConnected():
+        return
+
+    provider_codes = list(provider_codes or active_broadtape_provider_codes)
+    if not provider_codes:
+        return
+
+    _register_broadtape_handler()
+    for provider_code in provider_codes:
+        if provider_code in broadtape_tickers:
+            continue
+
+        runtime = _broadtape_runtime(provider_code)
+        try:
+            contract = await _qualify_broadtape_contract_async(provider_code)
+            broadtape_contracts[provider_code] = contract
+            broadtape_tickers[provider_code] = ib.reqMktData(
+                contract,
+                'mdoff,292',
+                snapshot=False,
+                regulatorySnapshot=False,
+            )
+            print(f"[NEWS-LIVE] Subscribed broadtape feed {provider_code} -> {os.path.basename(runtime['csv_path'])}")
+        except Exception as exc:
+            broadtape_contracts.pop(provider_code, None)
+            broadtape_tickers.pop(provider_code, None)
+            print(f"[NEWS-LIVE] {provider_code} subscription failed: {exc}")
+
+
+def cancel_broadtape_news():
+    for provider_code, contract in list(broadtape_contracts.items()):
+        try:
+            ib.cancelMktData(contract)
+        except Exception as exc:
+            print(f"[NEWS-LIVE] {provider_code} cancelMktData warning: {exc}")
+
+    broadtape_contracts.clear()
+    broadtape_tickers.clear()
+
+
+def clear_broadtape_subscription_cache():
+    broadtape_contracts.clear()
+    broadtape_tickers.clear()
+
+
 def resolve_news_provider_codes():
+    global active_news_provider_codes
+
     try:
         providers = ib.reqNewsProviders()
     except Exception as exc:
         print(f"[NEWS] Provider lookup failed: {exc}")
+        active_news_provider_codes = ''
+        active_broadtape_provider_codes.clear()
         return ''
 
     codes = [safe_str(getattr(provider, 'code', None), '') for provider in providers]
@@ -942,10 +1279,15 @@ def resolve_news_provider_codes():
     codes = [code for code in codes if code]
     if not codes:
         print('[NEWS] No provider codes found; skipping historical news seed.')
+        active_news_provider_codes = ''
+        active_broadtape_provider_codes.clear()
         return ''
 
     joined = '+'.join(codes)
+    active_news_provider_codes = joined
     print(f"[NEWS] Enabled providers: {joined}")
+    _resolve_broadtape_provider_codes()
+    _log_news_provider_inventory()
     return joined
 
 
@@ -990,11 +1332,8 @@ def _ingest_historical_news_seed(sym, historical_news, news_csv_path):
         article_id = safe_str(getattr(item, 'articleId', None), '')
         headline = safe_str(getattr(item, 'headline', None), '')
 
-        dedupe_key = f"{provider_code}:{article_id}:{getattr(item, 'time', None)}"
-        seen = seen_news_ids_by_symbol.setdefault(sym, set())
-        if dedupe_key in seen:
+        if not _register_seen_news_id(sym, provider_code, article_id, getattr(item, 'time', None)):
             continue
-        seen.add(dedupe_key)
 
         record_news_event(
             sym,
@@ -1236,9 +1575,16 @@ def normalize_warmup_csv(csv_path):
     print(f"[MIGRATE] Normalized warmup CSV schema: {os.path.basename(csv_path)} rows={len(upgraded_rows)}")
 
 
+def ensure_news_csv_file(news_csv):
+    normalize_news_csv(news_csv)
+    if not os.path.exists(news_csv):
+        with open(news_csv, 'w', newline='') as f:
+            csv.writer(f).writerow(NEWS_HEADER)
+
+
 def ensure_csv_files(bar_csv, tick_csv, news_csv):
     normalize_warmup_csv(bar_csv)
-    normalize_news_csv(news_csv)
+    ensure_news_csv_file(news_csv)
 
     if not os.path.exists(bar_csv):
         with open(bar_csv, 'w', newline='') as f:
@@ -1248,9 +1594,7 @@ def ensure_csv_files(bar_csv, tick_csv, news_csv):
         with open(tick_csv, 'w', newline='') as f:
             csv.writer(f).writerow(TICK_HEADER)
 
-    if not os.path.exists(news_csv):
-        with open(news_csv, 'w', newline='') as f:
-            csv.writer(f).writerow(NEWS_HEADER)
+    ensure_news_csv_file(news_csv)
 
 
 def cancel_symbol_streams(sym):
@@ -1292,6 +1636,28 @@ def create_quote_capture_callback(sym, ticker_obj):
     return on_quote_update
 
 
+def _supports_ticker_news_stream(ticker_obj):
+    return hasattr(ticker_obj, 'tickNews')
+
+
+def _contract_is_qualified(contract):
+    return bool(safe_num(getattr(contract, 'conId', None), 0))
+
+
+def _ensure_contract_qualified(sym):
+    contract = contracts[sym]
+    if not _contract_is_qualified(contract):
+        ib.qualifyContracts(contract)
+    return contract
+
+
+async def _ensure_contract_qualified_async(sym):
+    contract = contracts[sym]
+    if not _contract_is_qualified(contract):
+        await ib.qualifyContractsAsync(contract)
+    return contract
+
+
 def _begin_symbol_subscription(sym):
     runtime = symbol_runtime[sym]
     contract = contracts[sym]
@@ -1307,7 +1673,11 @@ def _begin_symbol_subscription(sym):
         regulatorySnapshot=False,
     )
     ticker_obj.updateEvent += create_quote_capture_callback(sym, ticker_obj)
-    ticker_obj.updateEvent += create_news_callback(sym, runtime['news_csv'], ticker_obj)
+    if _supports_ticker_news_stream(ticker_obj):
+        ticker_obj.updateEvent += create_news_callback(sym, runtime['news_csv'], ticker_obj)
+    elif not runtime.get('news_stream_notice_emitted', False):
+        print(f"[NEWS] {sym}: direct ticker tickNews stream unavailable in current IB client; relying on historical fallback polling.")
+        runtime['news_stream_notice_emitted'] = True
     tickers[sym] = ticker_obj
     return runtime, contract, ticker_obj
 
@@ -1329,6 +1699,7 @@ def _attach_symbol_tick_stream(sym, contract, runtime, ticker_obj):
 
 
 def subscribe_symbol_streams(sym, provider_codes):
+    _ensure_contract_qualified(sym)
     runtime, contract, ticker_obj = _begin_symbol_subscription(sym)
 
     bars = ib.reqHistoricalData(
@@ -1344,6 +1715,7 @@ def subscribe_symbol_streams(sym, provider_codes):
 
 
 async def subscribe_symbol_streams_async(sym, provider_codes):
+    await _ensure_contract_qualified_async(sym)
     runtime, contract, ticker_obj = _begin_symbol_subscription(sym)
 
     bars = await ib.reqHistoricalDataAsync(
@@ -1384,6 +1756,7 @@ async def resubscribe_all_symbols(provider_codes):
     if not ib.isConnected():
         return
 
+    provider_codes = provider_codes or active_news_provider_codes
     print('[RECONNECT] Re-arming all symbol streams...')
     for sym in symbols:
         await resubscribe_symbol_streams(sym, provider_codes, reason='post reconnect')
@@ -1410,7 +1783,7 @@ async def stream_heartbeat_watchdog(provider_codes):
 
             if stale_bar or stale_tick:
                 reason = f"bar_age={bar_age:.1f}s tick_age={tick_age:.1f}s"
-                await resubscribe_symbol_streams(sym, provider_codes, reason)
+                await resubscribe_symbol_streams(sym, provider_codes or active_news_provider_codes, reason)
 
 
 async def reconnect_watchdog(provider_codes):
@@ -1422,8 +1795,11 @@ async def reconnect_watchdog(provider_codes):
         print('[RECONNECT] IBKR disconnected. Attempting reconnect...')
         try:
             await ib.connectAsync(IB_HOST, IB_PORT, clientId=IB_CLIENT_ID)
+            refreshed_provider_codes = resolve_news_provider_codes()
+            clear_broadtape_subscription_cache()
+            await subscribe_broadtape_news_async(active_broadtape_provider_codes)
             print('[RECONNECT] Connected to IBKR. Re-subscribing streams...')
-            await resubscribe_all_symbols(provider_codes)
+            await resubscribe_all_symbols(refreshed_provider_codes or provider_codes)
         except Exception as exc:
             print(f"[RECONNECT] connectAsync failed: {exc}")
 
@@ -1433,7 +1809,7 @@ async def news_fallback_poll_watchdog(provider_codes):
         print('[NEWS-POLL] disabled (NEWS_LIVE_POLL_ENABLED=0).')
         return
 
-    if not provider_codes:
+    if not provider_codes and not active_news_provider_codes:
         print('[NEWS-POLL] no provider codes available; fallback polling disabled.')
         return
 
@@ -1441,6 +1817,10 @@ async def news_fallback_poll_watchdog(provider_codes):
         await asyncio.sleep(NEWS_LIVE_POLL_INTERVAL_SECONDS)
 
         if not ib.isConnected():
+            continue
+
+        provider_codes_for_poll = provider_codes or active_news_provider_codes
+        if not provider_codes_for_poll:
             continue
 
         now_utc = _now_utc()
@@ -1455,7 +1835,7 @@ async def news_fallback_poll_watchdog(provider_codes):
             try:
                 historical_news = await ib.reqHistoricalNewsAsync(
                     contract.conId,
-                    provider_codes,
+                    provider_codes_for_poll,
                     start_utc,
                     now_utc,
                     max(1, NEWS_LIVE_POLL_RESULTS),
@@ -1464,7 +1844,6 @@ async def news_fallback_poll_watchdog(provider_codes):
                 print(f"[NEWS-POLL] {sym} poll failed: {exc}")
                 continue
 
-            seen = seen_news_ids_by_symbol.setdefault(sym, set())
             captured = 0
 
             for item in historical_news or []:
@@ -1473,11 +1852,8 @@ async def news_fallback_poll_watchdog(provider_codes):
                 article_id = safe_str(getattr(item, 'articleId', None), '')
                 headline = safe_str(getattr(item, 'headline', None), '')
                 source_raw = safe_str(getattr(item, 'extraData', None), 'historical_poll')
-                dedupe_key = f"{provider_code}:{article_id}:{raw_time}"
-
-                if dedupe_key in seen:
+                if not _register_seen_news_id(sym, provider_code, article_id, raw_time):
                     continue
-                seen.add(dedupe_key)
 
                 news_dt = parse_news_time(raw_time)
                 record_news_event(
@@ -2032,51 +2408,66 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
     return onMktDataUpdate
 
 
-# --- SUBSCRIPTION LOOP ---
-init_sentiment_model()
-run_finbert_self_test()
-print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()} hf_auth={get_hf_auth_status()}")
-news_provider_codes = resolve_news_provider_codes()
+def main():
+    connect_to_ib()
 
-for idx, sym in enumerate(symbols):
-    print(f"[*] Setting up data streams for {sym}...")
-    contract = Stock(sym, 'SMART', 'USD')
-    ib.qualifyContracts(contract)
-    contracts[sym] = contract
+    init_sentiment_model()
+    run_finbert_self_test()
+    print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()} hf_auth={get_hf_auth_status()}")
+    news_provider_codes = resolve_news_provider_codes() if ib.isConnected() else ''
 
-    warmup_date = datetime.now(MARKET_ZONE).strftime('%Y%m%d')
-    symbol_dir = os.path.join(OUTPUT_DIR, sym)
-    os.makedirs(symbol_dir, exist_ok=True)
+    for idx, sym in enumerate(symbols):
+        print(f"[*] Setting up data streams for {sym}...")
+        contract = Stock(sym, 'SMART', 'USD')
+        contracts[sym] = contract
 
-    symbol_runtime[sym] = {
-        'bar_csv': os.path.join(symbol_dir, f'{sym}_5s_warmup_{warmup_date}.csv'),
-        'tick_csv': os.path.join(symbol_dir, f'{sym}_live_ticks_{warmup_date}.csv'),
-        'news_csv': os.path.join(symbol_dir, f'{sym}_news_{warmup_date}.csv'),
-        'uses_tbt': idx < MAX_TICK_BY_TICK_STREAMS,
-        'news_seeded': False,
-        'last_bar_event_ts': _now_utc(),
-        'last_tick_event_ts': _now_utc(),
-        'last_news_event_ts': _now_utc(),
-    }
+        warmup_date = datetime.now(MARKET_ZONE).strftime('%Y%m%d')
+        symbol_dir = os.path.join(OUTPUT_DIR, sym)
+        os.makedirs(symbol_dir, exist_ok=True)
 
-    subscribe_symbol_streams(sym, news_provider_codes)
+        symbol_runtime[sym] = {
+            'bar_csv': os.path.join(symbol_dir, f'{sym}_5s_warmup_{warmup_date}.csv'),
+            'tick_csv': os.path.join(symbol_dir, f'{sym}_live_ticks_{warmup_date}.csv'),
+            'news_csv': os.path.join(symbol_dir, f'{sym}_news_{warmup_date}.csv'),
+            'uses_tbt': idx < MAX_TICK_BY_TICK_STREAMS,
+            'news_seeded': False,
+            'news_stream_notice_emitted': False,
+            'last_bar_event_ts': _now_utc(),
+            'last_tick_event_ts': _now_utc(),
+            'last_news_event_ts': _now_utc(),
+        }
 
-if MAX_TICK_BY_TICK_STREAMS < len(symbols):
-    print(f"[!] Tick-by-tick cap active: {MAX_TICK_BY_TICK_STREAMS} of {len(symbols)} symbols use AllLast stream.")
+        if ib.isConnected():
+            subscribe_symbol_streams(sym, news_provider_codes)
+        else:
+            print(f"[RECONNECT] {sym}: startup subscription deferred until IBKR reconnects.")
 
-ib.disconnectedEvent += lambda: print('[RECONNECT] disconnectedEvent received from IBKR.')
-ib.connectedEvent += lambda: print('[RECONNECT] connectedEvent received from IBKR.')
+    if ib.isConnected():
+        subscribe_broadtape_news(active_broadtape_provider_codes)
 
-watchdog_task = asyncio.get_event_loop().create_task(reconnect_watchdog(news_provider_codes))
-stream_watchdog_task = asyncio.get_event_loop().create_task(stream_heartbeat_watchdog(news_provider_codes))
-news_poll_task = asyncio.get_event_loop().create_task(news_fallback_poll_watchdog(news_provider_codes))
+    if MAX_TICK_BY_TICK_STREAMS < len(symbols):
+        print(f"[!] Tick-by-tick cap active: {MAX_TICK_BY_TICK_STREAMS} of {len(symbols)} symbols use AllLast stream.")
 
-print("\n[+] Harvester fully armed. Streaming all symbols concurrently...")
-try:
-    ib.run()
-except KeyboardInterrupt:
-    print("\n[*] Harvester stopped.")
-finally:
-    watchdog_task.cancel()
-    stream_watchdog_task.cancel()
-    news_poll_task.cancel()
+    ib.disconnectedEvent += lambda: (clear_broadtape_subscription_cache(), print('[RECONNECT] disconnectedEvent received from IBKR.'))
+    ib.connectedEvent += lambda: print('[RECONNECT] connectedEvent received from IBKR.')
+
+    watchdog_task = EVENT_LOOP.create_task(reconnect_watchdog(news_provider_codes))
+    stream_watchdog_task = EVENT_LOOP.create_task(stream_heartbeat_watchdog(news_provider_codes))
+    news_poll_task = EVENT_LOOP.create_task(news_fallback_poll_watchdog(news_provider_codes))
+
+    print("\n[+] Harvester fully armed. Streaming all symbols concurrently...")
+    try:
+        ib.run()
+    except KeyboardInterrupt:
+        print("\n[*] Harvester stopped.")
+    finally:
+        watchdog_task.cancel()
+        stream_watchdog_task.cancel()
+        news_poll_task.cancel()
+        cancel_broadtape_news()
+        if ib.isConnected():
+            ib.disconnect()
+
+
+if __name__ == '__main__':
+    main()
