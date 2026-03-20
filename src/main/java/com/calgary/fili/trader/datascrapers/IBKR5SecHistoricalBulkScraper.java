@@ -29,6 +29,9 @@ public class IBKR5SecHistoricalBulkScraper implements EWrapper {
     private final EJavaSignal signal = new EJavaSignal();
     private final EClientSocket client = new EClientSocket(this, signal);
 
+    private final LocalDate startDateEt;
+    private final LocalDate endDateEt;
+
     private volatile boolean running = true;
     private volatile CountDownLatch latch;
     private PrintWriter writer;
@@ -38,10 +41,68 @@ public class IBKR5SecHistoricalBulkScraper implements EWrapper {
     private double yesterdayClose = 0.0;
     private String currentDateStr = "";
 
+    private IBKR5SecHistoricalBulkScraper(LocalDate startDateEt, LocalDate endDateEt) {
+        this.startDateEt = startDateEt;
+        this.endDateEt = endDateEt;
+    }
+
     public static void main(String[] args) {
-        String symbol = (args != null && args.length > 0 && args[0] != null && !args[0].isBlank())
-            ? args[0].trim().toUpperCase() : "TSLA";
-        new IBKR5SecHistoricalBulkScraper().start(symbol);
+        ScrapeRequest request = parseArgs(args);
+        new IBKR5SecHistoricalBulkScraper(request.startDateEt, request.endDateEt).start(request.symbol);
+    }
+
+    private static ScrapeRequest parseArgs(String[] args) {
+        LocalDate todayEt = LocalDate.now(MARKET_ZONE);
+        String symbol = "TSLA";
+        LocalDate startDateEt = LocalDate.of(todayEt.getYear(), 1, 2);
+        LocalDate endDateEt = todayEt;
+        Integer monthsBack = null;
+
+        if (args != null) {
+            for (String rawArg : args) {
+                if (rawArg == null || rawArg.isBlank()) {
+                    continue;
+                }
+
+                String arg = rawArg.trim();
+                if (!arg.startsWith("--")) {
+                    symbol = arg.toUpperCase();
+                    continue;
+                }
+
+                if (arg.startsWith("--months=")) {
+                    monthsBack = Integer.parseInt(arg.substring("--months=".length()));
+                    continue;
+                }
+
+                if (arg.startsWith("--start=")) {
+                    startDateEt = LocalDate.parse(arg.substring("--start=".length()));
+                    continue;
+                }
+
+                if (arg.startsWith("--end=")) {
+                    endDateEt = LocalDate.parse(arg.substring("--end=".length()));
+                    continue;
+                }
+
+                throw new IllegalArgumentException(
+                    "Unknown argument: " + arg + ". Supported usage: SYMBOL [--months=N] [--start=YYYY-MM-DD] [--end=YYYY-MM-DD]"
+                );
+            }
+        }
+
+        if (monthsBack != null) {
+            if (monthsBack <= 0) {
+                throw new IllegalArgumentException("--months must be a positive integer.");
+            }
+            startDateEt = endDateEt.minusMonths(monthsBack);
+        }
+
+        if (startDateEt.isAfter(endDateEt)) {
+            throw new IllegalArgumentException("Start date must be on or before end date.");
+        }
+
+        return new ScrapeRequest(symbol, startDateEt, endDateEt);
     }
 
     private void start(String symbol) {
@@ -77,9 +138,6 @@ public class IBKR5SecHistoricalBulkScraper implements EWrapper {
     private void runPacingLoop(String symbol) throws InterruptedException {
         Contract contract = createContract(symbol);
         DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyyMMdd");
-        
-        LocalDate startDateEt = LocalDate.of(2026, 01, 02); // Start of the year
-        LocalDate todayEt = LocalDate.now(MARKET_ZONE);
 
         String[] chunkEndTimesEt = {
             "10:00:00", "10:30:00", "11:00:00", "11:30:00", "12:00:00",
@@ -87,9 +145,9 @@ public class IBKR5SecHistoricalBulkScraper implements EWrapper {
             "15:00:00", "15:30:00", "16:00:00"
         };
 
-        flowInfo("SCRAPER", "Starting historical bulk scrape from " + startDateEt + " to " + todayEt);
+        flowInfo("SCRAPER", "Starting historical bulk scrape from " + startDateEt + " to " + endDateEt);
 
-        for (LocalDate dayEt = startDateEt; !dayEt.isAfter(todayEt); dayEt = dayEt.plusDays(1)) {
+        for (LocalDate dayEt = startDateEt; !dayEt.isAfter(endDateEt); dayEt = dayEt.plusDays(1)) {
             // Skip weekends
             if (dayEt.getDayOfWeek() == DayOfWeek.SATURDAY || dayEt.getDayOfWeek() == DayOfWeek.SUNDAY) {
                 flowCondition("SCRAPER.DAY", "WEEKDAY_ONLY", false, "day=" + dayEt + " dayOfWeek=" + dayEt.getDayOfWeek());
@@ -117,6 +175,8 @@ public class IBKR5SecHistoricalBulkScraper implements EWrapper {
         }
         flowInfo("SCRAPER", "Bulk download complete");
     }
+
+    private record ScrapeRequest(String symbol, LocalDate startDateEt, LocalDate endDateEt) {}
 
     private void startReaderLoop() {
         EReader reader = new EReader(client, signal);
