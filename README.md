@@ -335,7 +335,38 @@ python3 build_30s_from_5s_csv.py \
   --output-csv TSLA_30Sec_Historical_Bulk_fromTrainer.csv
 ```
 
-3) **Generate TimesFM columns** (`generate_timesfm_features.py`)
+3) **Train a supervised news-event model from historical outcomes** (`train_news_event_model.py`)
+
+- **Purpose:** Align historical news to future 30s bar outcomes and train event-level scoring heads.
+- **Main outputs:**
+  - `news_event_model_outputs/<timestamp>/news_event_dataset.csv`
+  - `news_event_model_outputs/<timestamp>/scored_news_events.csv`
+  - `news_event_model_outputs/<timestamp>/news_event_model_metrics.json`
+  - `news_event_model_outputs/<timestamp>/news_event_model_bundle.pkl`
+- **Notes:** `scored_news_events.csv` includes `relevance_score`, `impact_score`, `novelty_score`, `directional_impulse`, `alpha_*`, and `volatility_shock_score`, and can be fed directly into `build_30s_from_5s_csv.py --news-csv`.
+
+```bash
+python3 train_news_event_model.py \
+  --news-csv path/to/TSLA_news.csv \
+  --bars-csv TSLA_30Sec_Historical_Bulk_fromTrainer.csv
+```
+
+**TODO / Best next step**
+
+- Train `train_news_event_model.py` on your real historical news CSVs.
+- Or add a small helper script that:
+  1. takes your raw harvested news CSV,
+  2. runs `train_news_event_model.py`,
+  3. rebuilds 30s bars using the scored event output,
+  4. then trains the 30s bar models.
+
+Target one-pass workflow:
+
+```text
+raw news -> event model training/scoring -> scored news -> 30s bar rebuild -> 30s model training
+```
+
+4) **Generate TimesFM columns** (`generate_timesfm_features.py`)
 
 - **Purpose:** Add `TimesFM_*` columns (real model or proxy fallback).
 - **Main output:** stage CSV with TimesFM columns.
@@ -354,7 +385,7 @@ python3 generate_timesfm_features.py \
   --backend proxy
 ```
 
-4) **Generate sequence-model columns** (`train_sequence_meta.py` -> `sequence_meta_features.py`)
+5) **Generate sequence-model columns** (`train_sequence_meta.py` -> `sequence_meta_features.py`)
 
 - **Purpose:** Add `Seq*` columns from torch models or proxy fallback.
 - **Main output:** stage CSV with sequence columns.
@@ -375,7 +406,7 @@ python3 train_sequence_meta.py \
   --backend proxy
 ```
 
-5) **Tune regime blend/source weights** (`tune_regime_ensemble_weights.py`)
+6) **Tune regime blend/source weights** (`tune_regime_ensemble_weights.py`)
 
 - **Purpose:** Fit blend + source/per-class weights from labeled data.
 - **Main outputs (optional):** `regime_weights.json`, `regime_weights.env`.
@@ -390,7 +421,7 @@ python3 tune_regime_ensemble_weights.py \
   --env-out regime_weights.env
 ```
 
-6) **Train/export ONNX trade + regime models** (`train_30s_models.py`)
+7) **Train/export ONNX trade + regime models** (`train_30s_models.py`)
 
 - **Purpose:** Train regime + entry/exit models and export ONNX.
 - **Main outputs:** ONNX files under `model_exports/<timestamp>/` and canonical updates in `src/main/resources/`.
@@ -404,7 +435,22 @@ export REGIME_MODEL_FAMILY=catboost
 python3 train_30s_models.py
 ```
 
-7) **One-command orchestration** (`run_meta_pipeline.py`)
+Train from a custom file without overwriting the default TSLA dataset:
+
+```bash
+python3 train_30s_models.py \
+  --input-csv /absolute/path/to/custom_30s.csv
+```
+
+If the custom 30s file does not exist yet, the trainer can auto-build it from a chosen 5s source:
+
+```bash
+python3 train_30s_models.py \
+  --input-csv /absolute/path/to/custom_30s.csv \
+  --source-5s-csv /absolute/path/to/custom_5s.csv
+```
+
+8) **One-command orchestration** (`run_meta_pipeline.py`)
 
 - **Purpose:** Chain stages (TimesFM -> sequence -> optional tuning -> optional training).
 

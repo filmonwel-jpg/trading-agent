@@ -1,3 +1,4 @@
+import argparse
 import os
 import pandas as pd
 import numpy as np
@@ -32,8 +33,8 @@ except Exception:
 
 # --- CONFIGURATION: THE 4-MODEL PARAMETERS ---
 # CHANGED: Now pointing to the new 30-second aggregated data
-CSV_FILE = Path(__file__).resolve().parent / "TSLA_30Sec_Historical_Bulk_fromTrainer.csv"
-SOURCE_5S_CLEAN_FILE = Path(__file__).resolve().parent / "TSLA_5Sec_Historical_Bulk_20260228_1558_clean.csv"
+DEFAULT_CSV_FILE = Path(__file__).resolve().parent / "TSLA_30Sec_Historical_Bulk_fromTrainer.csv"
+DEFAULT_SOURCE_5S_CLEAN_FILE = Path(__file__).resolve().parent / "TSLA_5Sec_Historical_Bulk_20260228_1558_clean.csv"
 AUTO_BUILD_30S_IF_MISSING = os.getenv('AUTO_BUILD_30S_IF_MISSING', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 # Hybrid targets for Entries (best overall from 3-way comparison)
@@ -58,6 +59,7 @@ USE_EXTENDED_FEATURES = False
 # Optional training-only meta features emitted by build_30s_from_5s_csv.py producer baselines.
 # Keep disabled by default so production Java shape remains unchanged unless explicitly enabled.
 USE_META_PRODUCER_FEATURES = False
+USE_NEWS_BAR_FEATURES = os.getenv('USE_NEWS_BAR_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_REGIME_PROB_FEATURES = os.getenv('USE_REGIME_PROB_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 MODEL_FAMILY = os.getenv('MODEL_FAMILY', 'random_forest').strip().lower()
@@ -105,6 +107,36 @@ REGIME_PROB_FEATURE_COLS = [
     'f_regime_prob_entropy',
 ]
 
+NEWS_BAR_FEATURE_COLS = [
+    'f_news_intensity_60s',
+    'f_news_intensity_300s',
+    'f_news_freshness',
+    'f_news_provider_breadth',
+    'f_news_confidence',
+    'f_news_sentiment_level',
+    'f_news_sentiment_shift',
+    'f_news_sentiment_dispersion',
+    'f_news_coverage',
+    'f_news_relevance',
+    'f_news_surprise',
+    'f_news_directional_impulse',
+    'f_news_event_earnings',
+    'f_news_event_analyst',
+    'f_news_event_legal',
+    'f_news_event_product',
+    'f_news_event_macro',
+    'f_news_model_relevance',
+    'f_news_model_impact',
+    'f_news_model_novelty',
+    'f_news_directional_conviction',
+    'f_news_alpha_bias_60s',
+    'f_news_alpha_bias_300s',
+    'f_news_alpha_ret_60s_norm',
+    'f_news_alpha_ret_300s_norm',
+    'f_news_vol_shock',
+    'f_news_event_strength',
+]
+
 REGIME_LABEL_TO_ID = {
     'choppy': 0,
     'trend': 1,
@@ -119,25 +151,47 @@ MIN_OPEN30_ROWS = 800
 MIN_OPEN30_SIGNALS = 20
 
 
-def ensure_training_csv_available():
-    if CSV_FILE.exists():
+def ensure_training_csv_available(csv_file, source_5s_clean_file):
+    csv_file = Path(csv_file)
+    source_5s_clean_file = Path(source_5s_clean_file) if source_5s_clean_file else DEFAULT_SOURCE_5S_CLEAN_FILE
+
+    if csv_file.exists():
         return True
 
     if not AUTO_BUILD_30S_IF_MISSING:
         return False
 
-    if not SOURCE_5S_CLEAN_FILE.exists():
+    if not source_5s_clean_file.exists():
         return False
 
     try:
         from build_30s_from_5s_csv import build_30s_from_5s_csv
-        print(f">>> 30s dataset missing. Auto-building from {SOURCE_5S_CLEAN_FILE.name}...")
-        build_30s_from_5s_csv(str(SOURCE_5S_CLEAN_FILE), str(CSV_FILE), add_meta_features=True)
+        print(f">>> 30s dataset missing. Auto-building from {source_5s_clean_file.name}...")
+        build_30s_from_5s_csv(str(source_5s_clean_file), str(csv_file), add_meta_features=True)
     except Exception as exc:
         print(f"ERROR: Failed to auto-build 30s dataset from clean 5s source: {exc}")
         return False
 
-    return CSV_FILE.exists()
+    return csv_file.exists()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Train/export 30-second trade and regime models from a chosen 30s CSV.'
+    )
+    parser.add_argument(
+        '--input-csv',
+        type=str,
+        default=str(DEFAULT_CSV_FILE),
+        help='Path to the 30-second training CSV (defaults to the repo TSLA training file).',
+    )
+    parser.add_argument(
+        '--source-5s-csv',
+        type=str,
+        default=str(DEFAULT_SOURCE_5S_CLEAN_FILE),
+        help='Optional clean 5s CSV to auto-build the 30s file when --input-csv is missing.',
+    )
+    return parser.parse_args()
 
 # Threshold optimization on probabilities
 # Slightly stricter floors reduce fold collapse where thresholding predicts almost no positives.
@@ -458,6 +512,170 @@ def calculate_features(df):
         df['f_put_call_ratio'] = put_vol / (call_vol + 1.0)
     else:
         df['f_put_call_ratio'] = 1.0
+
+    def _opt_numeric(col_name, default_value=0.0):
+        if col_name not in df.columns:
+            return pd.Series(default_value, index=df.index, dtype=float)
+        return pd.to_numeric(df[col_name], errors='coerce').fillna(default_value).astype(float)
+
+    news_count_60 = _opt_numeric('NewsCount60s', 0.0)
+    news_count_300 = _opt_numeric('NewsCount300s', 0.0)
+    news_provider_count = _opt_numeric('NewsUniqueProviders300s', 0.0)
+    news_sentiment_latest = _opt_numeric('SentimentLatest', 0.0).clip(-1.0, 1.0)
+    news_sentiment_mean = _opt_numeric('SentimentMean300s', 0.0).clip(-1.0, 1.0)
+    news_sentiment_std = _opt_numeric('SentimentStd300s', 0.0).clip(0.0, 2.0)
+    news_conf_mean = _opt_numeric('SentimentConfidenceMean300s', 0.0).clip(0.0, 1.0)
+    news_conf_latest = _opt_numeric('SentimentConfidenceLatest', 0.0).clip(0.0, 1.0)
+    news_lag_sec = _opt_numeric('NewsAsOfLagSec', 999999.0).clip(lower=0.0)
+    news_coverage = _opt_numeric('NewsCoverage300s', 0.0).clip(0.0, 1.0)
+    news_event_earnings = _opt_numeric('NewsEventEarningsBeatMiss300s', 0.0).clip(0.0, 1.0)
+    news_event_analyst = _opt_numeric('NewsEventAnalystUpgradeDowngrade300s', 0.0).clip(0.0, 1.0)
+    news_event_legal = _opt_numeric('NewsEventLegalRegulatory300s', 0.0).clip(0.0, 1.0)
+    news_event_product = _opt_numeric('NewsEventProductCapex300s', 0.0).clip(0.0, 1.0)
+    news_event_macro = _opt_numeric('NewsEventMacroSpillover300s', 0.0).clip(0.0, 1.0)
+    news_relevance_latest = _opt_numeric('NewsRelevanceLatest', 0.0).clip(0.0, 1.0)
+    news_relevance_mean = _opt_numeric('NewsRelevanceMean300s', 0.0).clip(0.0, 1.0)
+    news_relevance_max = _opt_numeric('NewsRelevanceMax300s', 0.0).clip(0.0, 1.0)
+    news_impact_latest = _opt_numeric('NewsImpactLatest', 0.0).clip(0.0, 1.0)
+    news_impact_mean = _opt_numeric('NewsImpactMean300s', 0.0).clip(0.0, 1.0)
+    news_impact_max = _opt_numeric('NewsImpactMax300s', 0.0).clip(0.0, 1.0)
+    news_novelty_latest = _opt_numeric('NewsNoveltyLatest', 0.0).clip(0.0, 1.0)
+    news_novelty_mean = _opt_numeric('NewsNoveltyMean300s', 0.0).clip(0.0, 1.0)
+    news_novelty_max = _opt_numeric('NewsNoveltyMax300s', 0.0).clip(0.0, 1.0)
+    news_directional_latest = _opt_numeric('NewsDirectionalImpulseLatest', 0.0).clip(-1.0, 1.0)
+    news_directional_mean = _opt_numeric('NewsDirectionalImpulseMean300s', 0.0).clip(-1.0, 1.0)
+    news_directional_decay = _opt_numeric('NewsDirectionalImpulseDecay300s', 0.0).clip(-1.0, 1.0)
+    news_directional_abs_max = _opt_numeric('NewsAbsDirectionalImpulseMax300s', 0.0).clip(0.0, 1.0)
+    news_alpha_up_60s_latest = _opt_numeric('NewsAlphaUpProb60sLatest', 0.0).clip(0.0, 1.0)
+    news_alpha_down_60s_latest = _opt_numeric('NewsAlphaDownProb60sLatest', 0.0).clip(0.0, 1.0)
+    news_alpha_up_300s_latest = _opt_numeric('NewsAlphaUpProb300sLatest', 0.0).clip(0.0, 1.0)
+    news_alpha_down_300s_latest = _opt_numeric('NewsAlphaDownProb300sLatest', 0.0).clip(0.0, 1.0)
+    news_alpha_up_60s_mean = _opt_numeric('NewsAlphaUpProb60sMean300s', 0.0).clip(0.0, 1.0)
+    news_alpha_down_60s_mean = _opt_numeric('NewsAlphaDownProb60sMean300s', 0.0).clip(0.0, 1.0)
+    news_alpha_up_300s_mean = _opt_numeric('NewsAlphaUpProb300sMean300s', 0.0).clip(0.0, 1.0)
+    news_alpha_down_300s_mean = _opt_numeric('NewsAlphaDownProb300sMean300s', 0.0).clip(0.0, 1.0)
+    news_alpha_ret_60s_latest = _opt_numeric('NewsAlphaExpectedRet60sBpsLatest', 0.0)
+    news_alpha_ret_300s_latest = _opt_numeric('NewsAlphaExpectedRet300sBpsLatest', 0.0)
+    news_alpha_ret_60s_mean = _opt_numeric('NewsAlphaExpectedRet60sBpsMean300s', 0.0)
+    news_alpha_ret_300s_mean = _opt_numeric('NewsAlphaExpectedRet300sBpsMean300s', 0.0)
+    news_alpha_ret_60s_decay = _opt_numeric('NewsAlphaExpectedRet60sBpsDecay300s', 0.0)
+    news_alpha_ret_300s_decay = _opt_numeric('NewsAlphaExpectedRet300sBpsDecay300s', 0.0)
+    news_vol_shock_latest = _opt_numeric('NewsVolatilityShockLatest', 0.0).clip(0.0, 1.0)
+    news_vol_shock_mean = _opt_numeric('NewsVolatilityShockMean300s', 0.0).clip(0.0, 1.0)
+    news_vol_shock_max = _opt_numeric('NewsVolatilityShockMax300s', 0.0).clip(0.0, 1.0)
+
+    news_freshness = np.exp(-np.clip(news_lag_sec, 0.0, 3600.0) / 300.0)
+    news_conf_mix = np.clip(0.5 * news_conf_mean + 0.5 * news_conf_latest, 0.0, 1.0)
+    news_sentiment_shift = (news_sentiment_latest - news_sentiment_mean).clip(-2.0, 2.0)
+    news_event_top = np.maximum.reduce([
+        news_event_earnings.values,
+        news_event_analyst.values,
+        news_event_legal.values,
+        news_event_product.values,
+        news_event_macro.values,
+    ])
+    news_model_relevance = np.clip(
+        0.45 * news_relevance_latest + 0.30 * news_relevance_mean + 0.25 * news_relevance_max,
+        0.0,
+        1.0,
+    )
+    news_model_impact = np.clip(
+        0.45 * news_impact_latest + 0.30 * news_impact_mean + 0.25 * news_impact_max,
+        0.0,
+        1.0,
+    )
+    news_model_novelty = np.clip(
+        0.45 * news_novelty_latest + 0.30 * news_novelty_mean + 0.25 * news_novelty_max,
+        0.0,
+        1.0,
+    )
+    news_directional_conviction = np.clip(
+        0.60 * news_directional_decay + 0.25 * news_directional_latest + 0.15 * news_directional_mean,
+        -1.0,
+        1.0,
+    )
+    news_alpha_bias_60s = np.clip(
+        0.55 * (news_alpha_up_60s_latest - news_alpha_down_60s_latest)
+        + 0.45 * (news_alpha_up_60s_mean - news_alpha_down_60s_mean),
+        -1.0,
+        1.0,
+    )
+    news_alpha_bias_300s = np.clip(
+        0.55 * (news_alpha_up_300s_latest - news_alpha_down_300s_latest)
+        + 0.45 * (news_alpha_up_300s_mean - news_alpha_down_300s_mean),
+        -1.0,
+        1.0,
+    )
+    news_alpha_ret_60s_norm = np.tanh(
+        (0.45 * news_alpha_ret_60s_latest + 0.35 * news_alpha_ret_60s_decay + 0.20 * news_alpha_ret_60s_mean) / 25.0
+    )
+    news_alpha_ret_300s_norm = np.tanh(
+        (0.45 * news_alpha_ret_300s_latest + 0.35 * news_alpha_ret_300s_decay + 0.20 * news_alpha_ret_300s_mean) / 40.0
+    )
+    news_vol_shock = np.clip(
+        0.45 * news_vol_shock_latest + 0.30 * news_vol_shock_mean + 0.25 * news_vol_shock_max,
+        0.0,
+        1.0,
+    )
+    news_event_strength = np.clip(
+        (0.45 * news_model_relevance + 0.35 * news_model_impact + 0.20 * np.clip(news_event_top, 0.0, 1.0))
+        * (0.60 + 0.40 * news_freshness),
+        0.0,
+        1.0,
+    )
+    heuristic_news_relevance = np.clip(
+        0.25 * news_freshness
+        + 0.20 * np.clip(news_provider_count / 4.0, 0.0, 1.0)
+        + 0.20 * news_coverage
+        + 0.20 * news_conf_mix
+        + 0.15 * news_event_top,
+        0.0,
+        1.0,
+    )
+
+    df['f_news_intensity_60s'] = np.clip(news_count_60 / 3.0, 0.0, 1.0)
+    df['f_news_intensity_300s'] = np.clip(news_count_300 / 8.0, 0.0, 1.0)
+    df['f_news_freshness'] = news_freshness
+    df['f_news_provider_breadth'] = np.clip(news_provider_count / 4.0, 0.0, 1.0)
+    df['f_news_confidence'] = news_conf_mix
+    df['f_news_sentiment_level'] = news_sentiment_latest
+    df['f_news_sentiment_shift'] = news_sentiment_shift
+    df['f_news_sentiment_dispersion'] = news_sentiment_std
+    df['f_news_coverage'] = news_coverage
+    df['f_news_relevance'] = np.clip(
+        0.55 * heuristic_news_relevance + 0.45 * news_model_relevance,
+        0.0,
+        1.0,
+    )
+    df['f_news_surprise'] = np.clip(
+        0.50 * (news_freshness * df['f_news_intensity_60s'] * np.abs(news_sentiment_shift))
+        + 0.30 * news_model_novelty
+        + 0.20 * (news_directional_abs_max * news_model_impact),
+        0.0,
+        1.0,
+    )
+    df['f_news_directional_impulse'] = np.clip(
+        0.45 * (news_freshness * df['f_news_intensity_60s'] * news_sentiment_latest)
+        + 0.35 * news_directional_conviction
+        + 0.20 * news_alpha_bias_60s,
+        -1.0,
+        1.0,
+    )
+    df['f_news_event_earnings'] = news_event_earnings
+    df['f_news_event_analyst'] = news_event_analyst
+    df['f_news_event_legal'] = news_event_legal
+    df['f_news_event_product'] = news_event_product
+    df['f_news_event_macro'] = news_event_macro
+    df['f_news_model_relevance'] = news_model_relevance
+    df['f_news_model_impact'] = news_model_impact
+    df['f_news_model_novelty'] = news_model_novelty
+    df['f_news_directional_conviction'] = news_directional_conviction
+    df['f_news_alpha_bias_60s'] = news_alpha_bias_60s
+    df['f_news_alpha_bias_300s'] = news_alpha_bias_300s
+    df['f_news_alpha_ret_60s_norm'] = news_alpha_ret_60s_norm
+    df['f_news_alpha_ret_300s_norm'] = news_alpha_ret_300s_norm
+    df['f_news_vol_shock'] = news_vol_shock
+    df['f_news_event_strength'] = news_event_strength
 
     df = df.dropna()
     return df
@@ -1114,24 +1332,28 @@ def add_regime_probability_features(df, regime_feature_cols, model_family='rando
     return out
 
 def main():
+    args = parse_args()
+    csv_file = Path(args.input_csv).expanduser().resolve()
+    source_5s_clean_file = Path(args.source_5s_csv).expanduser().resolve() if args.source_5s_csv else DEFAULT_SOURCE_5S_CLEAN_FILE
+
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     versioned_out_dir = Path("model_exports") / run_tag
 
     print(f">>> Training model family: {_normalize_model_family(MODEL_FAMILY)}")
     print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
 
-    print(f">>> Loading historical data from {CSV_FILE}...")
-    if not ensure_training_csv_available():
+    print(f">>> Loading historical data from {csv_file}...")
+    if not ensure_training_csv_available(csv_file, source_5s_clean_file):
         print(
             "ERROR: Training CSV missing and could not be prepared automatically. "
-            f"Expected 30s file: {CSV_FILE} | clean 5s fallback: {SOURCE_5S_CLEAN_FILE}"
+            f"Expected 30s file: {csv_file} | clean 5s fallback: {source_5s_clean_file}"
         )
         return
 
     try:
-        raw_df = pd.read_csv(CSV_FILE)
+        raw_df = pd.read_csv(csv_file)
     except FileNotFoundError:
-        print(f"ERROR: {CSV_FILE} not found. Please run the Java Historical Bulk Scraper first.")
+        print(f"ERROR: {csv_file} not found. Please run the Java Historical Bulk Scraper first.")
         return
 
     raw_df = filter_raw_to_regular_session(raw_df)
@@ -1175,6 +1397,13 @@ def main():
         print(">>> Using extended feature set (34 features: base 30 + 4 microstructure tail).")
     else:
         print(f">>> Using base {base_feature_count}-feature set (Java-compatible).")
+
+    if USE_NEWS_BAR_FEATURES:
+        feature_cols = feature_cols + NEWS_BAR_FEATURE_COLS
+        print(
+            ">>> Live-news bar feature block enabled "
+            f"(+{len(NEWS_BAR_FEATURE_COLS)} columns, requires bar-aligned news inputs for non-zero signal)."
+        )
 
     if USE_META_PRODUCER_FEATURES:
         # Accept producer columns from enriched 30s CSV when present; inject safe numeric defaults otherwise.
