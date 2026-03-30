@@ -3,6 +3,7 @@ package com.calgary.fili.trader.bot.controler;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -41,6 +43,14 @@ public class TradingControlController {
     @GetMapping("/status")
     public Map<String, Object> status() {
         return trader.controlStatus();
+    }
+
+    @GetMapping("/logs/db/recent")
+    public List<Map<String, Object>> recentDatabaseTradeLogs(
+        @RequestParam(name = "symbol", required = false) String symbol,
+        @RequestParam(name = "limit", defaultValue = "200") int limit
+    ) {
+        return trader.recentTradeLogs(symbol, limit);
     }
 
     @GetMapping("/logs/stream")
@@ -182,6 +192,16 @@ public class TradingControlController {
     public Map<String, Object> flatten() {
         String result = trader.flattenPosition();
         return response(result);
+    }
+
+    @PostMapping("/shared-capital/reset")
+    public Map<String, Object> resetSharedCapital() {
+        return trader.resetSharedCapitalReservations(false);
+    }
+
+    @PostMapping("/shared-capital/reset/{force}")
+    public Map<String, Object> resetSharedCapital(@PathVariable boolean force) {
+        return trader.resetSharedCapitalReservations(force);
     }
 
     @PostMapping("/switch/{newSymbol}")

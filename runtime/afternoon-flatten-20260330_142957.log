@@ -1,0 +1,39 @@
+[AFTERNOON][2026-03-30 14:29:57] afternoon flatten/shutdown started
+[AFTERNOON][2026-03-30 14:29:57] TSLA pre-flatten status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:29:57] 8081 /api/control/pause request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:29:57] TSLA post-pause status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:29:57] TSLA already flat and order-free after pause; enabling kill-switch and stopping process without cancel/flatten
+[AFTERNOON][2026-03-30 14:29:57] 8081 /api/control/kill-switch/true request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:29:57] TSLA sending TERM to pid=98641 on port 8081
+[AFTERNOON][2026-03-30 14:29:58] TSLA process pid=98641 exited cleanly
+[AFTERNOON][2026-03-30 14:29:58] NVDA pre-flatten status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:29:58] 8082 /api/control/pause request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:29:58] NVDA post-pause status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:29:58] NVDA already flat and order-free after pause; enabling kill-switch and stopping process without cancel/flatten
+[AFTERNOON][2026-03-30 14:29:58] 8082 /api/control/kill-switch/true request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:29:58] NVDA sending TERM to pid=98705 on port 8082
+[AFTERNOON][2026-03-30 14:29:59] NVDA process pid=98705 exited cleanly
+[AFTERNOON][2026-03-30 14:29:59] AMD pre-flatten status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:29:59] 8083 /api/control/pause request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:29:59] AMD post-pause status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:29:59] AMD already flat and order-free after pause; enabling kill-switch and stopping process without cancel/flatten
+[AFTERNOON][2026-03-30 14:29:59] 8083 /api/control/kill-switch/true request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:29:59] AMD sending TERM to pid=98790 on port 8083
+[AFTERNOON][2026-03-30 14:30:00] AMD process pid=98790 exited cleanly
+[AFTERNOON][2026-03-30 14:30:01] AMZN pre-flatten status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:30:01] 8084 /api/control/pause request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:30:01] AMZN post-pause status position=0 openOrders=0
+[AFTERNOON][2026-03-30 14:30:01] AMZN already flat and order-free after pause; enabling kill-switch and stopping process without cancel/flatten
+[AFTERNOON][2026-03-30 14:30:01] 8084 /api/control/kill-switch/true request succeeded attempt=1
+[AFTERNOON][2026-03-30 14:30:01] AMZN sending TERM to pid=98858 on port 8084
+[AFTERNOON][2026-03-30 14:30:02] AMZN process pid=98858 exited cleanly
+[AFTERNOON][2026-03-30 14:30:02] stopping harvester pid(s): 98566 
+[AFTERNOON][2026-03-30 14:30:02] harvester exited cleanly
+[AFTERNOON][2026-03-30 14:30:02] stopping IBKR workstation / gateway as final shutdown step
+[IBKR-PREFLIGHT][2026-03-30 14:30:02] checking IBKR API host=127.0.0.1 port=7497 wait_seconds=180 poll_seconds=5
+[IBKR-PREFLIGHT][2026-03-30 14:30:02] requesting IBKR shutdown host=127.0.0.1 port=7497 wait_seconds=180 poll_seconds=5
+[IBKR-PREFLIGHT][2026-03-30 14:30:02] quit requested for app: Trader Workstation
+[IBKR-PREFLIGHT][2026-03-30 14:30:02] quit requested for app: IB Gateway
+[IBKR-PREFLIGHT][2026-03-30 14:30:08] IBKR shutdown confirmed after 5s
+[AFTERNOON][2026-03-30 14:30:08] IBKR shutdown confirmed
+[AFTERNOON][2026-03-30 14:30:08] afternoon flatten/shutdown completed

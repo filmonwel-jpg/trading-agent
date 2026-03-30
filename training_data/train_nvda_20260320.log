@@ -1,0 +1,395 @@
+>>> Training model family: random_forest
+>>> Regime model family: random_forest
+>>> Loading historical data from /Users/filmonghezehey/trading-agent/training_data/NVDA_30Sec_Historical_Bulk_20260320.csv...
+>>> Regular-session filter applied: kept 98340/98340 rows (09:30-15:59 ET).
+>>> Calculating Java-equivalent features (30-second adjusted)...
+>>> Generating 4 event-ordered path-dependent labels...
+
+>>> Regime distribution (% rows):
+  choppy:  29.06%
+   trend:  29.41%
+volatile:  41.53%
+>>> Soft separation enabled: training non-open models on >=10:00 ET rows only (90651/98211 rows).
+
+>>> Label prevalence by hour (ET):
+      Label_Long_Entry  Label_Short_Entry  Label_Long_Exit  Label_Short_Exit
+Hour                                                                        
+9                0.452              0.493            0.609             0.572
+10               0.380              0.399            0.562             0.540
+11               0.474              0.491            0.607             0.600
+12               0.422              0.437            0.583             0.572
+13               0.399              0.426            0.575             0.542
+14               0.380              0.409            0.565             0.536
+15               0.376              0.405            0.555             0.529
+>>> Using base 30-feature set (Java-compatible).
+>>> Live-news bar feature block enabled (+27 columns, requires bar-aligned news inputs for non-zero signal).
+>>> Regime classifier feature subset: 51 (excluded direct regime-rule proxies).
+>>> Regime probability features enabled (+4 columns from walk-forward regime model outputs).
+>>> Feature count used for training: 61
+
+=========================================
+--- Training Market Regime Classifier ---
+Rows: 90651 | Classes: [0, 1, 2] | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train: 15061 | Test: 15120 | Accuracy: 72.86%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train: 30181 | Test: 14760 | Accuracy: 76.61%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train: 44941 | Test: 14760 | Accuracy: 71.57%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train: 59701 | Test: 15120 | Accuracy: 70.34%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train: 74821 | Test: 15120 | Accuracy: 71.24%
+>>> Exported Production Model: model_exports/20260320_192113/regime_classifier.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/regime_classifier.onnx
+>>> Regime classifier average walk-forward accuracy: 72.52%
+
+=========================================
+--- Walk-Forward Testing: LONG ENTRY (Dip Buyer) ---
+Total signals found: 36736 / 90651 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 15061 | Test Size: 15120 | Thr: 0.58 | CalP/R/Pos: 79.18%/48.86%/25.20% | Test Pos: 43.13% | Pred Pos: 22.16% (3351) | Out-of-Sample Precision: 52.28%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 30181 | Test Size: 14760 | Thr: 0.64 | CalP/R/Pos: 91.18%/23.61%/12.39% | Test Pos: 44.44% | Pred Pos: 8.60% (1269) | Out-of-Sample Precision: 61.23%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 44941 | Test Size: 14760 | Thr: 0.54 | CalP/R/Pos: 65.39%/50.08%/31.09% | Test Pos: 35.28% | Pred Pos: 17.76% (2622) | Out-of-Sample Precision: 48.97%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 59701 | Test Size: 15120 | Thr: 0.56 | CalP/R/Pos: 67.92%/22.02%/10.73% | Test Pos: 40.91% | Pred Pos: 29.61% (4477) | Out-of-Sample Precision: 49.83%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 74821 | Test Size: 15120 | Thr: 0.58 | CalP/R/Pos: 67.53%/31.12%/18.85% | Test Pos: 42.47% | Pred Pos: 14.58% (2204) | Out-of-Sample Precision: 51.54%
+>>> Average Walk-Forward Precision: 52.77%
+>>> Average Tuned Threshold: 0.58
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/long_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/long_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: SHORT ENTRY (Rip Seller) ---
+Total signals found: 38810 / 90651 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 15061 | Test Size: 15120 | Thr: 0.56 | CalP/R/Pos: 78.82%/61.79%/36.99% | Test Pos: 44.75% | Pred Pos: 20.99% (3174) | Out-of-Sample Precision: 52.49%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 30181 | Test Size: 14760 | Thr: 0.60 | CalP/R/Pos: 89.90%/28.72%/15.59% | Test Pos: 47.42% | Pred Pos: 7.87% (1161) | Out-of-Sample Precision: 55.04%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 44941 | Test Size: 14760 | Thr: 0.56 | CalP/R/Pos: 79.07%/20.54%/11.21% | Test Pos: 36.36% | Pred Pos: 3.95% (583) | Out-of-Sample Precision: 45.11%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 59701 | Test Size: 15120 | Thr: 0.54 | CalP/R/Pos: 63.50%/32.13%/16.84% | Test Pos: 44.16% | Pred Pos: 42.27% (6391) | Out-of-Sample Precision: 51.13%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 74821 | Test Size: 15120 | Thr: 0.56 | CalP/R/Pos: 69.86%/31.70%/20.07% | Test Pos: 43.58% | Pred Pos: 14.23% (2151) | Out-of-Sample Precision: 51.14%
+>>> Average Walk-Forward Precision: 50.98%
+>>> Average Tuned Threshold: 0.56
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/short_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/short_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: LONG EXIT (Top Detector) ---
+Total signals found: 52082 / 90651 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 15061 | Test Size: 15120 | Thr: 0.54 | CalP/R/Pos: 86.90%/58.74%/40.31% | Test Pos: 58.17% | Pred Pos: 28.17% (4259) | Out-of-Sample Precision: 59.61%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 30181 | Test Size: 14760 | Thr: 0.56 | CalP/R/Pos: 93.30%/35.45%/23.01% | Test Pos: 60.54% | Pred Pos: 18.33% (2706) | Out-of-Sample Precision: 62.68%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 44941 | Test Size: 14760 | Thr: 0.52 | CalP/R/Pos: 76.89%/54.93%/41.54% | Test Pos: 53.10% | Pred Pos: 27.26% (4023) | Out-of-Sample Precision: 60.15%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 59701 | Test Size: 15120 | Thr: 0.42 | CalP/R/Pos: 58.94%/85.59%/73.53% | Test Pos: 58.43% | Pred Pos: 92.78% (14029) | Out-of-Sample Precision: 59.31%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 74821 | Test Size: 15120 | Thr: 0.52 | CalP/R/Pos: 70.22%/63.65%/52.97% | Test Pos: 57.88% | Pred Pos: 57.15% (8641) | Out-of-Sample Precision: 60.28%
+>>> Average Walk-Forward Precision: 60.41%
+>>> Average Tuned Threshold: 0.51
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/long_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/long_exit.onnx
+
+=========================================
+--- Walk-Forward Testing: SHORT EXIT (Bottom Detector) ---
+Total signals found: 50160 / 90651 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 15061 | Test Size: 15120 | Thr: 0.58 | CalP/R/Pos: 92.04%/39.32%/23.77% | Test Pos: 56.08% | Pred Pos: 19.86% (3003) | Out-of-Sample Precision: 60.17%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 30181 | Test Size: 14760 | Thr: 0.54 | CalP/R/Pos: 79.99%/66.69%/49.60% | Test Pos: 57.54% | Pred Pos: 43.31% (6392) | Out-of-Sample Precision: 61.91%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 44941 | Test Size: 14760 | Thr: 0.54 | CalP/R/Pos: 80.99%/43.32%/29.91% | Test Pos: 51.56% | Pred Pos: 18.65% (2753) | Out-of-Sample Precision: 61.28%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 59701 | Test Size: 15120 | Thr: 0.42 | CalP/R/Pos: 58.65%/80.56%/68.07% | Test Pos: 56.01% | Pred Pos: 88.98% (13454) | Out-of-Sample Precision: 57.83%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 74821 | Test Size: 15120 | Thr: 0.48 | CalP/R/Pos: 61.41%/84.89%/77.31% | Test Pos: 57.69% | Pred Pos: 83.70% (12655) | Out-of-Sample Precision: 59.79%
+>>> Average Walk-Forward Precision: 60.19%
+>>> Average Tuned Threshold: 0.51
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/short_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/short_exit.onnx
+
+>>> MODEL SCORECARD
+Model | Signals/Rows | SignalRate | AvgPrecision | AvgThreshold | Folds | Export
+LONG ENTRY (Dip Buyer) | 36736/90651 | 40.52% | 52.77% | 0.58 | 5 | model_exports/20260320_192113/long_entry.onnx
+SHORT ENTRY (Rip Seller) | 38810/90651 | 42.81% | 50.98% | 0.56 | 5 | model_exports/20260320_192113/short_entry.onnx
+LONG EXIT (Top Detector) | 52082/90651 | 57.45% | 60.41% | 0.51 | 5 | model_exports/20260320_192113/long_exit.onnx
+SHORT EXIT (Bottom Detector) | 50160/90651 | 55.33% | 60.19% | 0.51 | 5 | model_exports/20260320_192113/short_exit.onnx
+
+=========================================
+--- Training CHOPPY Specialized Models ---
+Rows in regime subset: 28522
+
+=========================================
+--- Walk-Forward Testing: CHOPPY LONG ENTRY (Dip Buyer) ---
+Total signals found: 10500 / 28522 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5053 | Test Size: 3972 | Thr: 0.60 | CalP/R/Pos: 89.86%/42.63%/14.65% | Test Pos: 37.76% | Pred Pos: 8.53% (339) | Out-of-Sample Precision: 46.02%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9025 | Test Size: 3982 | Thr: 0.62 | CalP/R/Pos: 85.19%/56.83%/27.31% | Test Pos: 39.58% | Pred Pos: 13.08% (521) | Out-of-Sample Precision: 50.86%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13007 | Test Size: 5080 | Thr: 0.62 | CalP/R/Pos: 91.67%/23.46%/8.77% | Test Pos: 33.21% | Pred Pos: 7.28% (370) | Out-of-Sample Precision: 54.32%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18087 | Test Size: 4633 | Thr: 0.60 | CalP/R/Pos: 80.59%/28.60%/11.25% | Test Pos: 38.20% | Pred Pos: 15.58% (722) | Out-of-Sample Precision: 50.55%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 22720 | Test Size: 4427 | Thr: 0.62 | CalP/R/Pos: 84.75%/24.70%/11.11% | Test Pos: 42.72% | Pred Pos: 10.98% (486) | Out-of-Sample Precision: 53.09%
+>>> Average Walk-Forward Precision: 50.97%
+>>> Average Tuned Threshold: 0.61
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/choppy_long_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/choppy_long_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: CHOPPY SHORT ENTRY (Rip Seller) ---
+Total signals found: 11594 / 28522 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5053 | Test Size: 3972 | Thr: 0.58 | CalP/R/Pos: 89.39%/44.81%/19.60% | Test Pos: 40.99% | Pred Pos: 27.97% (1111) | Out-of-Sample Precision: 47.97%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9025 | Test Size: 3982 | Thr: 0.62 | CalP/R/Pos: 92.71%/49.51%/24.32% | Test Pos: 43.57% | Pred Pos: 14.01% (558) | Out-of-Sample Precision: 50.00%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13007 | Test Size: 5080 | Thr: 0.60 | CalP/R/Pos: 91.04%/28.35%/12.88% | Test Pos: 34.76% | Pred Pos: 6.24% (317) | Out-of-Sample Precision: 50.47%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18087 | Test Size: 4633 | Thr: 0.58 | CalP/R/Pos: 79.30%/21.38%/7.88% | Test Pos: 40.75% | Pred Pos: 20.44% (947) | Out-of-Sample Precision: 51.74%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 22720 | Test Size: 4427 | Thr: 0.60 | CalP/R/Pos: 82.77%/29.35%/14.44% | Test Pos: 44.45% | Pred Pos: 16.78% (743) | Out-of-Sample Precision: 50.47%
+>>> Average Walk-Forward Precision: 50.13%
+>>> Average Tuned Threshold: 0.60
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/choppy_short_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/choppy_short_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: CHOPPY LONG EXIT (Top Detector) ---
+Total signals found: 16040 / 28522 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5053 | Test Size: 3972 | Thr: 0.52 | CalP/R/Pos: 92.33%/63.00%/37.43% | Test Pos: 55.94% | Pred Pos: 57.85% (2298) | Out-of-Sample Precision: 58.62%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9025 | Test Size: 3982 | Thr: 0.56 | CalP/R/Pos: 92.03%/55.41%/35.46% | Test Pos: 57.61% | Pred Pos: 29.86% (1189) | Out-of-Sample Precision: 59.04%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13007 | Test Size: 5080 | Thr: 0.54 | CalP/R/Pos: 89.47%/44.89%/28.49% | Test Pos: 50.98% | Pred Pos: 20.39% (1036) | Out-of-Sample Precision: 55.79%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18087 | Test Size: 4633 | Thr: 0.52 | CalP/R/Pos: 79.93%/42.75%/24.38% | Test Pos: 56.40% | Pred Pos: 46.97% (2176) | Out-of-Sample Precision: 60.85%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 22720 | Test Size: 4427 | Thr: 0.56 | CalP/R/Pos: 87.20%/32.26%/20.80% | Test Pos: 59.27% | Pred Pos: 26.36% (1167) | Out-of-Sample Precision: 64.27%
+>>> Average Walk-Forward Precision: 59.71%
+>>> Average Tuned Threshold: 0.54
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/choppy_long_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/choppy_long_exit.onnx
+
+=========================================
+--- Walk-Forward Testing: CHOPPY SHORT EXIT (Bottom Detector) ---
+Total signals found: 15051 / 28522 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5053 | Test Size: 3972 | Thr: 0.54 | CalP/R/Pos: 83.29%/68.03%/41.49% | Test Pos: 51.36% | Pred Pos: 37.29% (1481) | Out-of-Sample Precision: 57.73%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9025 | Test Size: 3982 | Thr: 0.56 | CalP/R/Pos: 86.35%/65.48%/41.39% | Test Pos: 55.63% | Pred Pos: 33.05% (1316) | Out-of-Sample Precision: 61.25%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13007 | Test Size: 5080 | Thr: 0.58 | CalP/R/Pos: 94.88%/32.91%/18.03% | Test Pos: 50.14% | Pred Pos: 15.37% (781) | Out-of-Sample Precision: 61.20%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18087 | Test Size: 4633 | Thr: 0.56 | CalP/R/Pos: 84.55%/34.13%/19.68% | Test Pos: 54.18% | Pred Pos: 27.74% (1285) | Out-of-Sample Precision: 62.10%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 22720 | Test Size: 4427 | Thr: 0.60 | CalP/R/Pos: 95.26%/20.34%/11.60% | Test Pos: 57.40% | Pred Pos: 10.03% (444) | Out-of-Sample Precision: 59.23%
+>>> Average Walk-Forward Precision: 60.30%
+>>> Average Tuned Threshold: 0.57
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/choppy_short_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/choppy_short_exit.onnx
+
+=========================================
+--- Training TREND Specialized Models ---
+Rows in regime subset: 28861
+
+=========================================
+--- Walk-Forward Testing: TREND LONG ENTRY (Dip Buyer) ---
+Total signals found: 11402 / 28861 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5039 | Test Size: 4362 | Thr: 0.68 | CalP/R/Pos: 98.77%/22.54%/8.04% | Test Pos: 41.88% | Pred Pos: 4.26% (186) | Out-of-Sample Precision: 51.08%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9401 | Test Size: 3617 | Thr: 0.60 | CalP/R/Pos: 91.90%/48.87%/24.95% | Test Pos: 43.79% | Pred Pos: 14.13% (511) | Out-of-Sample Precision: 54.40%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13018 | Test Size: 5063 | Thr: 0.56 | CalP/R/Pos: 77.16%/51.02%/26.24% | Test Pos: 35.14% | Pred Pos: 16.35% (828) | Out-of-Sample Precision: 49.40%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18081 | Test Size: 4965 | Thr: 0.56 | CalP/R/Pos: 76.04%/26.12%/10.62% | Test Pos: 38.21% | Pred Pos: 30.96% (1537) | Out-of-Sample Precision: 46.84%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 23046 | Test Size: 4538 | Thr: 0.62 | CalP/R/Pos: 87.95%/25.00%/10.80% | Test Pos: 41.52% | Pred Pos: 11.44% (519) | Out-of-Sample Precision: 49.13%
+>>> Average Walk-Forward Precision: 50.17%
+>>> Average Tuned Threshold: 0.60
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/trend_long_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/trend_long_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: TREND SHORT ENTRY (Rip Seller) ---
+Total signals found: 12306 / 28861 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5039 | Test Size: 4362 | Thr: 0.58 | CalP/R/Pos: 90.91%/54.83%/22.94% | Test Pos: 44.04% | Pred Pos: 23.22% (1013) | Out-of-Sample Precision: 48.77%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9401 | Test Size: 3617 | Thr: 0.58 | CalP/R/Pos: 83.91%/64.82%/38.67% | Test Pos: 47.80% | Pred Pos: 19.88% (719) | Out-of-Sample Precision: 51.88%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13018 | Test Size: 5063 | Thr: 0.58 | CalP/R/Pos: 85.85%/36.21%/19.55% | Test Pos: 35.79% | Pred Pos: 7.76% (393) | Out-of-Sample Precision: 49.11%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18081 | Test Size: 4965 | Thr: 0.58 | CalP/R/Pos: 89.72%/21.48%/7.80% | Test Pos: 43.99% | Pred Pos: 20.97% (1041) | Out-of-Sample Precision: 56.10%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 23046 | Test Size: 4538 | Thr: 0.62 | CalP/R/Pos: 91.40%/19.88%/9.59% | Test Pos: 47.77% | Pred Pos: 4.80% (218) | Out-of-Sample Precision: 52.29%
+>>> Average Walk-Forward Precision: 51.63%
+>>> Average Tuned Threshold: 0.59
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/trend_short_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/trend_short_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: TREND LONG EXIT (Top Detector) ---
+Total signals found: 16663 / 28861 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5039 | Test Size: 4362 | Thr: 0.54 | CalP/R/Pos: 87.33%/69.68%/43.89% | Test Pos: 58.02% | Pred Pos: 47.23% (2060) | Out-of-Sample Precision: 60.97%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9401 | Test Size: 3617 | Thr: 0.54 | CalP/R/Pos: 85.67%/78.00%/55.69% | Test Pos: 62.04% | Pred Pos: 42.44% (1535) | Out-of-Sample Precision: 63.65%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13018 | Test Size: 5063 | Thr: 0.56 | CalP/R/Pos: 92.35%/38.26%/25.62% | Test Pos: 53.17% | Pred Pos: 10.47% (530) | Out-of-Sample Precision: 57.74%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18081 | Test Size: 4965 | Thr: 0.54 | CalP/R/Pos: 88.45%/28.08%/16.04% | Test Pos: 58.85% | Pred Pos: 35.83% (1779) | Out-of-Sample Precision: 63.24%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 23046 | Test Size: 4538 | Thr: 0.56 | CalP/R/Pos: 92.60%/31.70%/20.22% | Test Pos: 60.89% | Pred Pos: 19.74% (896) | Out-of-Sample Precision: 64.51%
+>>> Average Walk-Forward Precision: 62.02%
+>>> Average Tuned Threshold: 0.55
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/trend_long_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/trend_long_exit.onnx
+
+=========================================
+--- Walk-Forward Testing: TREND SHORT EXIT (Bottom Detector) ---
+Total signals found: 15824 / 28861 | ModelFamily: random_forest
+Fold 1 | TrainDays: 20 | TestDays: 20 | Train Size: 5039 | Test Size: 4362 | Thr: 0.60 | CalP/R/Pos: 95.02%/35.70%/19.96% | Test Pos: 54.68% | Pred Pos: 22.83% (996) | Out-of-Sample Precision: 57.13%
+Fold 2 | TrainDays: 40 | TestDays: 20 | Train Size: 9401 | Test Size: 3617 | Thr: 0.54 | CalP/R/Pos: 87.94%/71.49%/48.09% | Test Pos: 57.12% | Pred Pos: 42.96% (1554) | Out-of-Sample Precision: 61.71%
+Fold 3 | TrainDays: 60 | TestDays: 20 | Train Size: 13018 | Test Size: 5063 | Thr: 0.54 | CalP/R/Pos: 85.32%/61.06%/39.26% | Test Pos: 51.57% | Pred Pos: 28.30% (1433) | Out-of-Sample Precision: 59.80%
+Fold 4 | TrainDays: 80 | TestDays: 20 | Train Size: 18081 | Test Size: 4965 | Thr: 0.56 | CalP/R/Pos: 85.74%/24.68%/13.77% | Test Pos: 54.52% | Pred Pos: 28.50% (1415) | Out-of-Sample Precision: 60.57%
+Fold 5 | TrainDays: 100 | TestDays: 20 | Train Size: 23046 | Test Size: 4538 | Thr: 0.56 | CalP/R/Pos: 84.19%/43.63%/28.14% | Test Pos: 56.57% | Pred Pos: 33.54% (1522) | Out-of-Sample Precision: 62.09%
+>>> Average Walk-Forward Precision: 60.26%
+>>> Average Tuned Threshold: 0.56
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/trend_short_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/trend_short_exit.onnx
+
+=========================================
+--- Training VOLATILE Specialized Models ---
+Rows in regime subset: 33268
+
+=========================================
+--- Walk-Forward Testing: VOLATILE LONG ENTRY (Dip Buyer) ---
+Total signals found: 14834 / 33268 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 4480 | Test Size: 6400 | Thr: 0.52 | CalP/R/Pos: 79.13%/79.32%/45.98% | Test Pos: 45.73% | Pred Pos: 34.23% (2191) | Out-of-Sample Precision: 52.53%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 10880 | Test Size: 7671 | Thr: 0.62 | CalP/R/Pos: 95.50%/41.30%/21.46% | Test Pos: 48.12% | Pred Pos: 11.75% (901) | Out-of-Sample Precision: 60.71%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 18551 | Test Size: 3799 | Thr: 0.56 | CalP/R/Pos: 80.15%/31.12%/17.79% | Test Pos: 38.59% | Pred Pos: 8.37% (318) | Out-of-Sample Precision: 57.23%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 22350 | Test Size: 5601 | Thr: 0.52 | CalP/R/Pos: 71.40%/47.16%/25.97% | Test Pos: 44.42% | Pred Pos: 35.76% (2003) | Out-of-Sample Precision: 50.57%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 27951 | Test Size: 5196 | Thr: 0.58 | CalP/R/Pos: 81.67%/22.41%/12.20% | Test Pos: 44.40% | Pred Pos: 9.72% (505) | Out-of-Sample Precision: 54.46%
+>>> Average Walk-Forward Precision: 55.10%
+>>> Average Tuned Threshold: 0.56
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/volatile_long_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/volatile_long_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: VOLATILE SHORT ENTRY (Rip Seller) ---
+Total signals found: 14910 / 33268 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 4480 | Test Size: 6400 | Thr: 0.58 | CalP/R/Pos: 88.03%/73.56%/41.96% | Test Pos: 47.69% | Pred Pos: 18.23% (1167) | Out-of-Sample Precision: 53.73%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 10880 | Test Size: 7671 | Thr: 0.54 | CalP/R/Pos: 83.51%/66.60%/39.29% | Test Pos: 48.81% | Pred Pos: 31.99% (2454) | Out-of-Sample Precision: 52.44%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 18551 | Test Size: 3799 | Thr: 0.56 | CalP/R/Pos: 86.73%/23.15%/11.37% | Test Pos: 39.27% | Pred Pos: 1.76% (67) | Out-of-Sample Precision: 43.28%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 22350 | Test Size: 5601 | Thr: 0.54 | CalP/R/Pos: 82.57%/26.17%/12.71% | Test Pos: 44.46% | Pred Pos: 18.39% (1030) | Out-of-Sample Precision: 46.50%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 27951 | Test Size: 5196 | Thr: 0.54 | CalP/R/Pos: 79.80%/25.23%/14.08% | Test Pos: 41.34% | Pred Pos: 10.82% (562) | Out-of-Sample Precision: 53.91%
+>>> Average Walk-Forward Precision: 49.98%
+>>> Average Tuned Threshold: 0.55
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/volatile_short_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/volatile_short_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: VOLATILE LONG EXIT (Top Detector) ---
+Total signals found: 19379 / 33268 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 4480 | Test Size: 6400 | Thr: 0.58 | CalP/R/Pos: 95.52%/62.68%/39.84% | Test Pos: 59.92% | Pred Pos: 16.45% (1053) | Out-of-Sample Precision: 61.54%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 10880 | Test Size: 7671 | Thr: 0.52 | CalP/R/Pos: 86.89%/78.99%/56.07% | Test Pos: 61.01% | Pred Pos: 50.06% (3840) | Out-of-Sample Precision: 61.74%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 18551 | Test Size: 3799 | Thr: 0.50 | CalP/R/Pos: 75.26%/74.91%/56.87% | Test Pos: 55.07% | Pred Pos: 45.38% (1724) | Out-of-Sample Precision: 61.83%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 22350 | Test Size: 5601 | Thr: 0.50 | CalP/R/Pos: 75.83%/69.29%/50.92% | Test Pos: 58.26% | Pred Pos: 64.83% (3631) | Out-of-Sample Precision: 60.20%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 27951 | Test Size: 5196 | Thr: 0.50 | CalP/R/Pos: 70.69%/80.23%/66.15% | Test Pos: 55.31% | Pred Pos: 67.71% (3518) | Out-of-Sample Precision: 57.62%
+>>> Average Walk-Forward Precision: 60.59%
+>>> Average Tuned Threshold: 0.52
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/volatile_long_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/volatile_long_exit.onnx
+
+=========================================
+--- Walk-Forward Testing: VOLATILE SHORT EXIT (Bottom Detector) ---
+Total signals found: 19285 / 33268 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 4480 | Test Size: 6400 | Thr: 0.54 | CalP/R/Pos: 90.49%/66.67%/43.42% | Test Pos: 58.16% | Pred Pos: 31.98% (2047) | Out-of-Sample Precision: 59.26%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 10880 | Test Size: 7671 | Thr: 0.56 | CalP/R/Pos: 91.91%/50.89%/32.95% | Test Pos: 59.55% | Pred Pos: 24.09% (1848) | Out-of-Sample Precision: 63.58%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 18551 | Test Size: 3799 | Thr: 0.52 | CalP/R/Pos: 85.31%/54.91%/37.98% | Test Pos: 53.86% | Pred Pos: 26.64% (1012) | Out-of-Sample Precision: 62.65%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 22350 | Test Size: 5601 | Thr: 0.54 | CalP/R/Pos: 87.12%/31.72%/19.80% | Test Pos: 58.15% | Pred Pos: 22.91% (1283) | Out-of-Sample Precision: 64.85%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 27951 | Test Size: 5196 | Thr: 0.54 | CalP/R/Pos: 86.22%/35.85%/24.15% | Test Pos: 59.12% | Pred Pos: 16.59% (862) | Out-of-Sample Precision: 63.11%
+>>> Average Walk-Forward Precision: 62.69%
+>>> Average Tuned Threshold: 0.54
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/volatile_short_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/volatile_short_exit.onnx
+
+>>> REGIME-SPECIFIC MODEL SCORECARD
+Regime | Model | Signals/Rows | AvgPrecision | AvgThreshold | Export
+choppy | LONG ENTRY (Dip Buyer) | 10500/28522 | 50.97% | 0.61 | model_exports/20260320_192113/choppy_long_entry.onnx
+choppy | SHORT ENTRY (Rip Seller) | 11594/28522 | 50.13% | 0.60 | model_exports/20260320_192113/choppy_short_entry.onnx
+choppy | LONG EXIT (Top Detector) | 16040/28522 | 59.71% | 0.54 | model_exports/20260320_192113/choppy_long_exit.onnx
+choppy | SHORT EXIT (Bottom Detector) | 15051/28522 | 60.30% | 0.57 | model_exports/20260320_192113/choppy_short_exit.onnx
+trend | LONG ENTRY (Dip Buyer) | 11402/28861 | 50.17% | 0.60 | model_exports/20260320_192113/trend_long_entry.onnx
+trend | SHORT ENTRY (Rip Seller) | 12306/28861 | 51.63% | 0.59 | model_exports/20260320_192113/trend_short_entry.onnx
+trend | LONG EXIT (Top Detector) | 16663/28861 | 62.02% | 0.55 | model_exports/20260320_192113/trend_long_exit.onnx
+trend | SHORT EXIT (Bottom Detector) | 15824/28861 | 60.26% | 0.56 | model_exports/20260320_192113/trend_short_exit.onnx
+volatile | LONG ENTRY (Dip Buyer) | 14834/33268 | 55.10% | 0.56 | model_exports/20260320_192113/volatile_long_entry.onnx
+volatile | SHORT ENTRY (Rip Seller) | 14910/33268 | 49.98% | 0.55 | model_exports/20260320_192113/volatile_short_entry.onnx
+volatile | LONG EXIT (Top Detector) | 19379/33268 | 60.59% | 0.52 | model_exports/20260320_192113/volatile_long_exit.onnx
+volatile | SHORT EXIT (Bottom Detector) | 19285/33268 | 62.69% | 0.54 | model_exports/20260320_192113/volatile_short_exit.onnx
+
+=========================================
+--- Training OPENING-30M Specialized Models ---
+Rows in opening subset: 7686
+
+=========================================
+--- Walk-Forward Testing: OPEN30 LONG ENTRY (Dip Buyer) ---
+Total signals found: 3457 / 7686 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 1281 | Test Size: 1281 | Thr: 0.46 | CalP/R/Pos: 82.11%/95.28%/48.05% | Test Pos: 45.67% | Pred Pos: 42.54% (545) | Out-of-Sample Precision: 41.28%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 2562 | Test Size: 1281 | Thr: 0.58 | CalP/R/Pos: 92.61%/67.63%/34.38% | Test Pos: 48.17% | Pred Pos: 25.84% (331) | Out-of-Sample Precision: 53.47%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 3843 | Test Size: 1281 | Thr: 0.54 | CalP/R/Pos: 85.12%/57.55%/27.99% | Test Pos: 38.02% | Pred Pos: 20.92% (268) | Out-of-Sample Precision: 47.39%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 5124 | Test Size: 1281 | Thr: 0.58 | CalP/R/Pos: 90.38%/39.61%/15.23% | Test Pos: 44.73% | Pred Pos: 21.31% (273) | Out-of-Sample Precision: 54.21%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 6405 | Test Size: 1281 | Thr: 0.62 | CalP/R/Pos: 97.04%/28.62%/13.19% | Test Pos: 50.12% | Pred Pos: 10.38% (133) | Out-of-Sample Precision: 63.91%
+>>> Average Walk-Forward Precision: 52.05%
+>>> Average Tuned Threshold: 0.56
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/open30_long_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/open30_long_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: OPEN30 SHORT ENTRY (Rip Seller) ---
+Total signals found: 3784 / 7686 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 1281 | Test Size: 1281 | Thr: 0.60 | CalP/R/Pos: 93.10%/71.05%/33.98% | Test Pos: 45.90% | Pred Pos: 21.86% (280) | Out-of-Sample Precision: 57.86%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 2562 | Test Size: 1281 | Thr: 0.50 | CalP/R/Pos: 83.96%/91.11%/57.23% | Test Pos: 57.14% | Pred Pos: 65.26% (836) | Out-of-Sample Precision: 57.06%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 3843 | Test Size: 1281 | Thr: 0.60 | CalP/R/Pos: 96.15%/34.97%/20.31% | Test Pos: 45.12% | Pred Pos: 6.71% (86) | Out-of-Sample Precision: 66.28%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 5124 | Test Size: 1281 | Thr: 0.50 | CalP/R/Pos: 80.17%/61.05%/33.98% | Test Pos: 58.16% | Pred Pos: 56.44% (723) | Out-of-Sample Precision: 62.52%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 6405 | Test Size: 1281 | Thr: 0.60 | CalP/R/Pos: 92.73%/42.82%/26.85% | Test Pos: 44.03% | Pred Pos: 13.11% (168) | Out-of-Sample Precision: 59.52%
+>>> Average Walk-Forward Precision: 60.65%
+>>> Average Tuned Threshold: 0.56
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/open30_short_entry.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/open30_short_entry.onnx
+
+=========================================
+--- Walk-Forward Testing: OPEN30 LONG EXIT (Top Detector) ---
+Total signals found: 4692 / 7686 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 1281 | Test Size: 1281 | Thr: 0.48 | CalP/R/Pos: 89.52%/78.17%/48.44% | Test Pos: 58.16% | Pred Pos: 64.09% (821) | Out-of-Sample Precision: 57.98%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 2562 | Test Size: 1281 | Thr: 0.50 | CalP/R/Pos: 88.36%/92.50%/65.43% | Test Pos: 64.87% | Pred Pos: 65.89% (844) | Out-of-Sample Precision: 61.61%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 3843 | Test Size: 1281 | Thr: 0.52 | CalP/R/Pos: 93.77%/69.69%/50.13% | Test Pos: 59.95% | Pred Pos: 44.73% (573) | Out-of-Sample Precision: 55.85%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 5124 | Test Size: 1281 | Thr: 0.50 | CalP/R/Pos: 89.35%/88.22%/60.55% | Test Pos: 67.21% | Pred Pos: 69.56% (891) | Out-of-Sample Precision: 66.89%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 6405 | Test Size: 1281 | Thr: 0.52 | CalP/R/Pos: 88.29%/84.09%/64.01% | Test Pos: 58.39% | Pred Pos: 51.21% (656) | Out-of-Sample Precision: 60.52%
+>>> Average Walk-Forward Precision: 60.57%
+>>> Average Tuned Threshold: 0.50
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/open30_long_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/open30_long_exit.onnx
+
+=========================================
+--- Walk-Forward Testing: OPEN30 SHORT EXIT (Bottom Detector) ---
+Total signals found: 4392 / 7686 | ModelFamily: random_forest
+Fold 1 | TrainDays: 21 | TestDays: 21 | Train Size: 1281 | Test Size: 1281 | Thr: 0.48 | CalP/R/Pos: 86.42%/92.72%/63.28% | Test Pos: 57.77% | Pred Pos: 52.54% (673) | Out-of-Sample Precision: 54.38%
+Fold 2 | TrainDays: 42 | TestDays: 21 | Train Size: 2562 | Test Size: 1281 | Thr: 0.56 | CalP/R/Pos: 95.05%/64.65%/39.45% | Test Pos: 56.99% | Pred Pos: 24.20% (310) | Out-of-Sample Precision: 55.81%
+Fold 3 | TrainDays: 63 | TestDays: 21 | Train Size: 3843 | Test Size: 1281 | Thr: 0.54 | CalP/R/Pos: 91.00%/47.29%/27.47% | Test Pos: 54.80% | Pred Pos: 21.70% (278) | Out-of-Sample Precision: 54.68%
+Fold 4 | TrainDays: 84 | TestDays: 21 | Train Size: 5124 | Test Size: 1281 | Thr: 0.54 | CalP/R/Pos: 94.60%/48.88%/27.15% | Test Pos: 52.69% | Pred Pos: 27.56% (353) | Out-of-Sample Precision: 56.09%
+Fold 5 | TrainDays: 105 | TestDays: 21 | Train Size: 6405 | Test Size: 1281 | Thr: 0.52 | CalP/R/Pos: 87.21%/60.59%/36.61% | Test Pos: 62.22% | Pred Pos: 25.37% (325) | Out-of-Sample Precision: 67.69%
+>>> Average Walk-Forward Precision: 57.73%
+>>> Average Tuned Threshold: 0.53
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: model_exports/20260320_192113/open30_short_exit.onnx (ir=7, opset=1,12,12)
+>>> Updated Canonical Model: src/main/resources/open30_short_exit.onnx
+
+>>> OPENING-30M MODEL SCORECARD
+Model | Signals/Rows | AvgPrecision | AvgThreshold | Export
+LONG ENTRY (Dip Buyer) | 3457/7686 | 52.05% | 0.56 | model_exports/20260320_192113/open30_long_entry.onnx
+SHORT ENTRY (Rip Seller) | 3784/7686 | 60.65% | 0.56 | model_exports/20260320_192113/open30_short_entry.onnx
+LONG EXIT (Top Detector) | 4692/7686 | 60.57% | 0.50 | model_exports/20260320_192113/open30_long_exit.onnx
+SHORT EXIT (Bottom Detector) | 4392/7686 | 57.73% | 0.53 | model_exports/20260320_192113/open30_short_exit.onnx
+
+>>> REGIME CLASSIFIER
+MarketRegimeClassifier | AvgAccuracy=72.52% | Export=model_exports/20260320_192113/regime_classifier.onnx
+
+==================================================
+>>> PIPELINE COMPLETE.
+>>> All 30-second models have been exported.
+>>> Versioned copy folder: model_exports/20260320_192113
+>>> Drop the .onnx files directly into your new Java branch.
+==================================================

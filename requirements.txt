@@ -6,3 +6,4 @@ onnx>=1.16
 onnxmltools>=1.12
 lightgbm>=4.4
 catboost>=1.2
+psycopg[binary]>=3.2

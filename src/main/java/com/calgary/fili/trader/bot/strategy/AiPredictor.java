@@ -6,7 +6,11 @@ import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.NodeInfo;
 import ai.onnxruntime.TensorInfo;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -24,47 +28,68 @@ public class AiPredictor {
     private final String modelFileName;
     private final String inputName;
     private final int expectedFeatureCount;
+    private final String modelSource;
 
     public record PredictionOutcome(boolean predictedPositive, double positiveProbability) {}
     public record ClassPredictionOutcome(int classLabel, double confidence) {}
 
     public AiPredictor(String modelFileName) throws Exception {
+        this(modelFileName, null);
+    }
+
+    public AiPredictor(String modelFileName, String modelDir) throws Exception {
         this.modelFileName = modelFileName;
         flowInfo("AI.INIT", "Booting ONNX Runtime Environment model=" + modelFileName);
         this.env = OrtEnvironment.getEnvironment();
-        
-        // Load the AI model file from the resources folder
+
+        ModelBytes modelBytes = resolveModelBytes(modelFileName, modelDir);
+        this.modelSource = modelBytes.sourceDescription();
+        this.session = env.createSession(modelBytes.bytes(), new OrtSession.SessionOptions());
+
+        Map<String, NodeInfo> inputs = session.getInputInfo();
+        if (inputs.isEmpty()) {
+            throw new IllegalStateException("ONNX model has no inputs.");
+        }
+
+        this.inputName = inputs.keySet().iterator().next();
+        NodeInfo nodeInfo = inputs.get(inputName);
+        int detectedFeatures = -1;
+
+        if (nodeInfo != null && nodeInfo.getInfo() instanceof TensorInfo tensorInfo) {
+            long[] shape = tensorInfo.getShape();
+            if (shape != null && shape.length >= 2 && shape[1] > 0) {
+                detectedFeatures = (int) shape[1];
+            }
+        }
+
+        this.expectedFeatureCount = detectedFeatures > 0 ? detectedFeatures : DEFAULT_EXPECTED_FEATURES;
+        flowInfo("AI.INIT", "Successfully loaded model=" + modelFileName + " source=" + modelSource);
+        flowData("AI.INIT", "model=" + modelFileName + " input=" + inputName + " expectedFeatures=" + expectedFeatureCount + " source=" + modelSource);
+        if (expectedFeatureCount == 25 || expectedFeatureCount == 30 || expectedFeatureCount == 34) {
+            flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", true, "model=" + modelFileName + " expected=" + expectedFeatureCount);
+        } else {
+            flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", false, "model=" + modelFileName + " expected=" + expectedFeatureCount + " note=will trim/pad from strategy vector");
+        }
+    }
+
+    private record ModelBytes(byte[] bytes, String sourceDescription) {}
+
+    private ModelBytes resolveModelBytes(String modelFileName, String modelDir) throws IOException {
+        String normalizedDir = modelDir == null ? "" : modelDir.trim();
+        if (!normalizedDir.isEmpty()) {
+            Path candidate = Paths.get(normalizedDir).resolve(modelFileName).normalize();
+            if (Files.exists(candidate) && Files.isRegularFile(candidate)) {
+                flowInfo("AI.INIT", "Loading model from filesystem path=" + candidate);
+                return new ModelBytes(Files.readAllBytes(candidate), candidate.toAbsolutePath().toString());
+            }
+            flowInfo("AI.INIT", "Filesystem model not found; falling back to classpath model=" + modelFileName + " dir=" + normalizedDir);
+        }
+
         try (InputStream is = getClass().getClassLoader().getResourceAsStream(modelFileName)) {
             if (is == null) {
-                throw new RuntimeException("Could not find " + modelFileName + " in resources!");
+                throw new RuntimeException("Could not find " + modelFileName + " in resources or modelDir=" + normalizedDir + "!");
             }
-            byte[] modelBytes = is.readAllBytes();
-            this.session = env.createSession(modelBytes, new OrtSession.SessionOptions());
-
-            Map<String, NodeInfo> inputs = session.getInputInfo();
-            if (inputs.isEmpty()) {
-                throw new IllegalStateException("ONNX model has no inputs.");
-            }
-
-            this.inputName = inputs.keySet().iterator().next();
-            NodeInfo nodeInfo = inputs.get(inputName);
-            int detectedFeatures = -1;
-
-            if (nodeInfo != null && nodeInfo.getInfo() instanceof TensorInfo tensorInfo) {
-                long[] shape = tensorInfo.getShape();
-                if (shape != null && shape.length >= 2 && shape[1] > 0) {
-                    detectedFeatures = (int) shape[1];
-                }
-            }
-
-            this.expectedFeatureCount = detectedFeatures > 0 ? detectedFeatures : DEFAULT_EXPECTED_FEATURES;
-            flowInfo("AI.INIT", "Successfully loaded model=" + modelFileName);
-            flowData("AI.INIT", "model=" + modelFileName + " input=" + inputName + " expectedFeatures=" + expectedFeatureCount);
-            if (expectedFeatureCount == 25 || expectedFeatureCount == 30 || expectedFeatureCount == 34) {
-                flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", true, "model=" + modelFileName + " expected=" + expectedFeatureCount);
-            } else {
-                flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", false, "model=" + modelFileName + " expected=" + expectedFeatureCount + " note=will trim/pad from strategy vector");
-            }
+            return new ModelBytes(is.readAllBytes(), "classpath:" + modelFileName);
         }
     }
 

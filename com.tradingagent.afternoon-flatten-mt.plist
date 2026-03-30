@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingagent.afternoon-flatten-mt</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/filmonghezehey/trading-agent/flatten_shutdown_stack_mt.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/filmonghezehey/trading-agent</string>
+
+  <key>StartInterval</key>
+  <integer>60</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-afternoon-flatten-mt.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-afternoon-flatten-mt.err.log</string>
+</dict>
+</plist>
+

@@ -52,6 +52,47 @@ Before running the suite, ensure the following are available:
 4. Active **U.S. Equities live market data subscription** in IBKR
 5. IBKR account equity requirement for market data/trading permissions (commonly cited at **$500 USD minimum**, but broker policies can change)
 
+For scheduled morning launches, this repo now includes `./ensure_ibkr_workstation.sh`, which can auto-launch TWS / IB Gateway and wait for the API port before starting the bots. Configure optional launch overrides in `runtime/ibkr-launch.env` (see `runtime/ibkr-launch.env.example`).
+
+For local-only credential handling on macOS, this repo also includes:
+
+- `./set_ibkr_keychain_credentials.sh` → stores IBKR username/password in Keychain
+- `./ibkr_keychain_launch.sh` → launches TWS / Gateway and optionally types credentials from Keychain
+
+Typical setup:
+
+```bash
+cp runtime/ibkr-keychain.env.example runtime/ibkr-keychain.env
+./set_ibkr_keychain_credentials.sh
+cp runtime/ibkr-launch.env.example runtime/ibkr-launch.env
+```
+
+Then set this in `runtime/ibkr-launch.env`:
+
+```bash
+IBKR_LAUNCH_CMD='/Users/filmonghezehey/trading-agent/ibkr_keychain_launch.sh'
+```
+
+Important: this keeps secrets out of git, but IBKR 2FA / trusted-device prompts may still require manual approval.
+
+For simple phone confirmations after startup and shutdown, the repo also includes `./send_stack_notification.sh`. Configure `runtime/notifications.env` (see `runtime/notifications.env.example`) with either a local webhook URL or a local `ntfy` topic URL.
+
+For a simple mobile-friendly remote status page, any running bot now serves:
+
+- `GET /api/stack/overview` → aggregated JSON stack summary
+- `/mobile-status.html` → responsive read-only status page
+
+The status page is now an installable PWA with:
+
+- home-screen install support
+- app icons / Apple touch icon
+- cached offline snapshot behavior
+- remembered dark/light mode
+- remembered auto-refresh interval
+- cards for the last successful startup and shutdown
+
+Recommended remote-access pattern: expose only one bot port (for example `8081`) through a secure tunnel or private network tool such as Tailscale or Cloudflare Tunnel, rather than opening all bot ports directly to the internet.
+
 ---
 
 ## Workflow Pipeline (End-to-End)
@@ -94,13 +135,102 @@ Use resulting trade logs and PnL outputs to compare strategy behavior versus exp
 
 To run multiple live bots simultaneously, open split terminals and launch one process per symbol with unique runtime overrides (application name, client ID, server port, trade log file).
 
-Example for running **TSLA** alongside other bots:
+### Filesystem-first ONNX loading
 
-```powershell
-./mvnw spring-boot:run '-Dspring-boot.run.arguments="--spring.application.name=tsla-bot --trading.symbol=TSLA --trading.client-id=1 --server.port=8080 --trading.log.file=tsla-trades.csv"'
+Live runtime now resolves ONNX models in this order:
 
-./mvnw spring-boot:run '-Dspring-boot.run.arguments="--spring.application.name=tsla-bot --trading.symbol=TSLA --trading.client-id=1 --server.port=8080 --trading.log.file=tsla-trades.csv --trading.paused=true"' | tee tsla.txt
+1. `trading.model.dir/<model-name>.onnx` on the local filesystem
+2. bundled classpath resources as a fallback
+
+The default base config uses:
+
+- `trading.model.dir=runtime/models/${trading.symbol}`
+- `trading.state.file=runtime/trader-state-${trading.symbol}.properties`
+- `trading.log.file=runtime/trades-${trading.symbol}.csv`
+- `logging.file.name=runtime/trading-agent-${trading.symbol}.log`
+
+The repo includes dedicated per-symbol runtime override files:
+
+- `runtime/trading-tsla.properties`
+- `runtime/trading-nvda.properties`
+- `runtime/trading-amd.properties`
+
+Each one sets a unique client ID, server port, request IDs, per-symbol state/log files, and points `trading.model.dir` at `runtime/models/<SYMBOL>`.
+
+Example launches:
+
+```bash
+java -jar target/trading-agent-0.0.1-SNAPSHOT.jar \
+  --spring.config.additional-location=file:runtime/trading-tsla.properties
+
+java -jar target/trading-agent-0.0.1-SNAPSHOT.jar \
+  --spring.config.additional-location=file:runtime/trading-nvda.properties
+
+java -jar target/trading-agent-0.0.1-SNAPSHOT.jar \
+  --spring.config.additional-location=file:runtime/trading-amd.properties
 ```
+
+You can still add one-off CLI overrides on top of the per-symbol file. Example for **TSLA**:
+
+```bash
+java -jar target/trading-agent-0.0.1-SNAPSHOT.jar \
+  --spring.config.additional-location=file:runtime/trading-tsla.properties \
+  --trading.trade-amount=70000 \
+  --trading.risk.max-order-notional=100000 2>&1 | tee -a tsla_live_trade_logs1.txt
+```
+
+Populate `runtime/models/TSLA`, `runtime/models/NVDA`, and `runtime/models/AMD` with the exported ONNX bundle for each symbol.
+
+To promote an exported bundle into one or more live runtime symbol folders, use `promote_onnx_bundle.py`:
+
+```bash
+python3 promote_onnx_bundle.py --latest --symbol TSLA
+
+python3 promote_onnx_bundle.py --run-tag 20260320_181522 --symbol TSLA NVDA AMD --clean
+
+python3 promote_onnx_bundle.py --source-dir model_exports/20260320_181522 --symbol TSLA --dry-run
+```
+
+Notes:
+- `--latest` picks the newest directory under `model_exports/`.
+- `--clean` removes existing `.onnx` files from `runtime/models/<SYMBOL>` before copying the new bundle.
+- The helper validates that the bundle contains the expected 21 ONNX files unless you explicitly pass `--allow-partial`.
+
+For day-of-session launch safety, use `run_symbol.sh`. It previews by default and only launches with `--start`:
+
+```bash
+./run_symbol.sh TSLA
+./run_symbol.sh NVDA --start --tee
+./run_symbol.sh AMD --start --max-trades=0
+```
+
+The launcher checks:
+- `target/trading-agent-0.0.1-SNAPSHOT.jar`
+- `runtime/trading-<symbol>.properties`
+- `runtime/postgres-local.properties`
+- `runtime/models/<SYMBOL>` and ONNX file count
+- port conflicts on the configured `server.port`
+
+If symbol-specific `trading.ai.*threshold` values are present in the runtime properties file, the launcher also passes them as explicit CLI args so the live process uses the intended per-symbol gating values.
+
+The live symbol files now also participate in a shared-capital guard through `runtime/shared-capital.properties`. With the current runtime setting of `trading.shared-capital.total-notional=70000`, one symbol taking a ~70k entry will cause the other symbol processes to wait for capital to be released before they can open a new position.
+
+If you need to clear stale shared-capital reservations before the open, use:
+
+```bash
+./reset_shared_capital.sh --check
+./reset_shared_capital.sh --reset
+./reset_shared_capital.sh --reset --force
+```
+
+The helper:
+- discovers `runtime/trading-*.properties`
+- checks reachable bot statuses first
+- refuses reset if any reachable bot is non-flat unless `--force` is supplied
+- uses `POST /api/control/shared-capital/reset` when a bot is reachable
+- falls back to direct file cleanup when no bot is running yet
+
+See `Monday_Runbook.md` for a concrete pre-open and launch checklist.
 
 Recommended isolation per bot instance:
 - Unique `--trading.client-id`
@@ -317,17 +447,23 @@ Use this section as the operational checklist for every script in this repo.
 
 1) **Collect enriched 5s warmup data** (`harvester.py`)
 
-- **Purpose:** Pull IBKR 5s bars/ticks/news and write enriched warmup CSVs.
-- **Main outputs:** warmup/tick/news CSVs (schema includes sentiment + event fields).
+- **Purpose:** Pull IBKR 5s bars/ticks/news and persist harvested data.
+- **Default storage:** PostgreSQL tables `harvest_5s_bars`, `harvest_live_ticks`, and `harvest_news_events` using the existing datasource from `src/main/resources/application.properties` + `runtime/postgres-local.properties`.
+- **Optional compatibility mode:** set `HARVEST_STORAGE_MODE=both` to keep PostgreSQL as the source of truth while also writing the old warmup/tick/news CSV mirrors for downstream scripts.
 
 ```bash
+python3 -m pip install -r requirements-harvester.txt
+
 python3 harvester.py
+
+HARVEST_STORAGE_MODE=both python3 harvester.py
 ```
 
 2) **Aggregate 5s -> 30s + producer features** (`build_30s_from_5s_csv.py`)
 
 - **Purpose:** Build training-ready 30s CSV from enriched 5s source.
 - **Main output:** `TSLA_30Sec_Historical_Bulk_fromTrainer.csv` (or custom path).
+- **Compatibility note:** if you still want the legacy CSV harvest artifacts for this step, start `harvester.py` with `HARVEST_STORAGE_MODE=both`.
 
 ```bash
 python3 build_30s_from_5s_csv.py \
@@ -433,6 +569,12 @@ export REGIME_ENSEMBLE_BACKEND=blend
 export MODEL_FAMILY=lightgbm
 export REGIME_MODEL_FAMILY=catboost
 python3 train_30s_models.py
+```
+
+Promote the newest exported bundle into live runtime directories after training:
+
+```bash
+python3 promote_onnx_bundle.py --latest --symbol TSLA --clean
 ```
 
 Train from a custom file without overwriting the default TSLA dataset:

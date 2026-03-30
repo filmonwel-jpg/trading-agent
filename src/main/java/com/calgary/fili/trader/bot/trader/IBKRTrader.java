@@ -1,6 +1,7 @@
 package com.calgary.fili.trader.bot.trader;
 
 import com.ib.client.*;
+import com.calgary.fili.trader.bot.storage.TradeLogStore;
 import com.calgary.fili.trader.bot.strategy.PingPongStrategy;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -12,6 +13,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
@@ -73,34 +75,66 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.trade-amount:40000}") private int tradeAmount;
     @Value("${trading.max-trades:20}") private int maxTrades;
     @Value("${trading.reversal-percentage:0.0005}") private double reversalPercentage;
-    @Value("${trading.stop-loss-percentage:0.01}") private double stopLossPercentage;
+    @Value("${trading.stop-loss-percentage:0.004}") private double stopLossPercentage;
     @Value("${trading.max-daily-drawdown:500.0}") private double maxDailyDrawdown;
     @Value("${trading.ai.long-entry-threshold:0.68}") private double aiLongEntryThreshold;
     @Value("${trading.ai.short-entry-threshold:0.63}") private double aiShortEntryThreshold;
-    @Value("${trading.ai.long-exit-threshold:0.61}") private double aiLongExitThreshold;
-    @Value("${trading.ai.short-exit-threshold:0.63}") private double aiShortExitThreshold;
+    @Value("${trading.ai.long-exit-threshold:0.58}") private double aiLongExitThreshold;
+    @Value("${trading.ai.short-exit-threshold:0.60}") private double aiShortExitThreshold;
     @Value("${trading.ai.regime-threshold:0.50}") private double aiRegimeThreshold;
     @Value("${trading.market-data-request-id:1001}") private int marketDataRequestId;
     @Value("${trading.risk.max-order-notional:25000}") private double maxOrderNotional;
     @Value("${trading.risk.max-daily-orders:40}") private int maxDailyOrders;
     @Value("${trading.risk.max-share-cap:500}") private int maxShareCap;
+    @Value("${trading.shared-capital.enabled:false}") private boolean sharedCapitalEnabled;
+    @Value("${trading.shared-capital.file:runtime/shared-capital.properties}") private String sharedCapitalFile;
+    @Value("${trading.shared-capital.total-notional:0}") private double sharedCapitalTotalNotional;
+    @Value("${trading.model.dir:}") private String modelDir;
     @Value("${trading.state.file:trader-state.properties}") private String stateFile;
     @Value("${trading.log.file:trades.csv}") private String tradeLogFile;
+    @Value("${trading.log.storage-mode:both}") private String tradeLogStorageMode;
     private String resolvedTradeLogFile;
+    private SharedCapitalManager sharedCapitalManager;
+    private volatile boolean symbolPositionSeenThisCycle = false;
 
     private final MeterRegistry meterRegistry;
+    private final TradeLogStore tradeLogStore;
 
-    private record OrderContext(String symbol, String action, int quantity) {}
+    private record OrderContext(String symbol, String action, int quantity, boolean closingTrade,
+                                double reservedNotional, boolean capitalReserved) {}
+
+    @Autowired
+    public IBKRTrader(MeterRegistry meterRegistry, TradeLogStore tradeLogStore) {
+        this.meterRegistry = meterRegistry;
+        this.tradeLogStore = tradeLogStore;
+    }
 
     public IBKRTrader(MeterRegistry meterRegistry) {
-        this.meterRegistry = meterRegistry;
+        this(meterRegistry, null);
     }
 
     public double getYesterdayClose() { return this.yesterdayClose; }
 
     @PostConstruct
     public void postConstruct() {
+        sharedCapitalManager = new SharedCapitalManager(
+            sharedCapitalEnabled,
+            Paths.get(sharedCapitalFile),
+            sharedCapitalTotalNotional
+        );
         flowInfo("BOOT", "IBKRTrader bean initialized");
+        flowData("BOOT", "tradeLog storageMode=" + normalizedTradeLogStorageMode());
+        if (sharedCapitalManager.isEnabled()) {
+            SharedCapitalManager.Snapshot snapshot = sharedCapitalManager.snapshot();
+            flowData(
+                "BOOT",
+                "sharedCapital enabled=true file=" + snapshot.stateFile()
+                    + " total=" + snapshot.totalNotional()
+                    + " available=" + snapshot.availableNotional()
+            );
+        } else {
+            flowData("BOOT", "sharedCapital enabled=false");
+        }
     }
 
     @Override
@@ -124,14 +158,15 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     private void onConnected() {
         positionSyncComplete = false;
+        symbolPositionSeenThisCycle = false;
         lastScheduleAllowNewEntries = null;
         boolean symbolPresent = symbol != null && !symbol.isBlank();
         flowCondition("BOOT", "SYMBOL_PRESENT", symbolPresent, "rawSymbol=" + symbol);
         symbol = symbolPresent ? symbol.trim().toUpperCase() : "TSLA";
-        flowData("BOOT", "normalizedSymbol=" + symbol);
+        flowData("BOOT", "normalizedSymbol=" + symbol + " modelDir=" + (modelDir == null || modelDir.isBlank() ? "classpath" : modelDir));
 
         if (shopStrategy == null) {
-            shopStrategy = new PingPongStrategy(this, symbol, 0.003, tradeAmount, maxTrades, true, 12, 14, reversalPercentage, stopLossPercentage, maxDailyDrawdown, 1.20, 0.70);
+            shopStrategy = new PingPongStrategy(this, symbol, 0.003, tradeAmount, maxTrades, true, 12, 14, reversalPercentage, stopLossPercentage, maxDailyDrawdown, 1.20, 0.70, modelDir);
             loadStrategyState();
             meterRegistry.gauge("trading.strategy.stop.queue.depth", shopStrategy, PingPongStrategy::getLastStopQueueDepth);
             meterRegistry.gauge("trading.strategy.stop.ack.latency.last", shopStrategy, PingPongStrategy::getLastStopAckLatencyMs);
@@ -386,6 +421,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
         String normalizedOrderType = orderType.trim().toUpperCase();
         int finalQty = Math.min(quantity, getMaxShareCap());
+        int orderIdToUse = currentOrderId;
 
         boolean isClosingTrade = false;
         if (shopStrategy != null) {
@@ -405,6 +441,26 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             flowError("RISK", "Order blocked: max daily order limit reached");
             if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
             return;
+        }
+
+        double requestedNotional = Math.max(0.0, currentPrice * finalQty);
+        boolean capitalReserved = false;
+        if (!isClosingTrade && sharedCapitalManager != null && sharedCapitalManager.isEnabled()) {
+            SharedCapitalManager.ReservationDecision decision = sharedCapitalManager.tryReserve(symbol, requestedNotional);
+            if (!decision.allowed()) {
+                flowError("RISK", "Order blocked: shared capital unavailable " + decision.message());
+                if (shopStrategy != null) shopStrategy.onOrderClosed(orderIdToUse, "Cancelled");
+                return;
+            }
+            SharedCapitalManager.Snapshot snapshot = decision.snapshot();
+            capitalReserved = true;
+            flowData(
+                "RISK",
+                "Shared capital reserved symbol=" + symbol
+                    + " orderId=" + orderIdToUse
+                    + " requested=" + requestedNotional
+                    + " availableAfter=" + snapshot.availableNotional()
+            );
         }
 
         Contract contract = new Contract();
@@ -433,13 +489,28 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             order.tif("IOC");
         }
 
-        flowData("ORDER.SEND", "orderId=" + currentOrderId + " action=" + action + " type=" + normalizedOrderType);
-        client.placeOrder(currentOrderId, contract, order);
-        lastPlacedOrderId = currentOrderId;
+        orderContextById.put(orderIdToUse, new OrderContext(symbol, action, finalQty, isClosingTrade, requestedNotional, capitalReserved));
+        orderSentTimes.put(orderIdToUse, System.currentTimeMillis());
+
+        try {
+            flowData("ORDER.SEND", "orderId=" + orderIdToUse + " action=" + action + " type=" + normalizedOrderType);
+            client.placeOrder(orderIdToUse, contract, order);
+        } catch (Exception e) {
+            orderContextById.remove(orderIdToUse);
+            orderSentTimes.remove(orderIdToUse);
+            if (capitalReserved) {
+                releaseSharedCapital(symbol, "order-send-failed");
+            }
+            flowError("ORDER.SEND", "placeOrder failed orderId=" + orderIdToUse + " reason=" + e.getMessage());
+            if (shopStrategy != null) shopStrategy.onOrderClosed(orderIdToUse, "Cancelled");
+            return;
+        }
+
+        lastPlacedOrderId = orderIdToUse;
         lastPlacedOrderAction = action;
         lastPlacedOrderQuantity = finalQty;
 
-        if (shopStrategy != null) shopStrategy.onOrderSubmitted(currentOrderId, action, finalQty);
+        if (shopStrategy != null) shopStrategy.onOrderSubmitted(orderIdToUse, action, finalQty);
         dailySubmittedOrders++;
         currentOrderId++;
     }
@@ -506,6 +577,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     @Override public void nextValidId(int orderId) { this.currentOrderId = orderId; flowData("IBKR.SYNC", "nextValidId=" + orderId); }
     @Override public void positionEnd() {
+        if (!symbolPositionSeenThisCycle) {
+            releaseSharedCapital(symbol, "position-sync-flat");
+        }
         positionSyncComplete = true;
         if (shopStrategy != null) {
             shopStrategy.setPositionSynced(true);
@@ -532,17 +606,47 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     @Override public void position(String account, Contract contract, Decimal pos, double avgCost) {
         if (contract.symbol().equals(symbol)) {
+            symbolPositionSeenThisCycle = true;
             if (shopStrategy != null) shopStrategy.syncPosition(pos.value().intValue(), avgCost);
+            reconcileSharedCapitalWithPosition(pos.value().intValue(), currentLastPrice > 0.0 ? currentLastPrice : avgCost);
         }
     }
 
     @Override
     public void orderStatus(int orderId, String status, Decimal filled, Decimal remaining, double avgFillPrice, long permId, int parentId, double lastFillPrice, int clientId, String whyHeld, double mktCapPrice) {
+        OrderContext orderContext = orderContextById.get(orderId);
+        int filledQty = filled != null && filled.value() != null ? filled.value().intValue() : 0;
+        int remainingQty = remaining != null && remaining.value() != null ? remaining.value().intValue() : 0;
         if (avgFillPrice > 0.0) {
             lastOrderAvgFillPrice = avgFillPrice;
         }
+        if (orderContext != null) {
+            if (!orderContext.closingTrade() && orderContext.capitalReserved()) {
+                if (isTerminalOrderStatus(status) || remainingQty == 0) {
+                    if (filledQty > 0) {
+                        double reservedAmount = avgFillPrice > 0.0 ? avgFillPrice * filledQty : orderContext.reservedNotional();
+                        reconcileSharedCapitalWithPosition(filledQty, avgFillPrice > 0.0 ? avgFillPrice : currentLastPrice > 0.0 ? currentLastPrice : 0.0, reservedAmount);
+                    } else {
+                        releaseSharedCapital(orderContext.symbol(), "entry-order-terminal-" + status);
+                    }
+                }
+            } else if (orderContext.closingTrade() && (isTerminalOrderStatus(status) || remainingQty == 0)) {
+                if (filledQty > 0 && remainingQty == 0) {
+                    releaseSharedCapital(orderContext.symbol(), "closing-order-terminal-" + status);
+                }
+            }
+            if (isTerminalOrderStatus(status) || remainingQty == 0) {
+                orderContextById.remove(orderId);
+                orderSentTimes.remove(orderId);
+                cumulativeFilledByOrderId.remove(orderId);
+                ScheduledFuture<?> timeoutFuture = staleOrderTimeoutByOrderId.remove(orderId);
+                if (timeoutFuture != null) {
+                    timeoutFuture.cancel(false);
+                }
+            }
+        }
         if (shopStrategy != null) {
-            if ("Filled".equalsIgnoreCase(status) || "Cancelled".equalsIgnoreCase(status) || remaining.value().intValue() == 0) {
+            if ("Filled".equalsIgnoreCase(status) || "Cancelled".equalsIgnoreCase(status) || remainingQty == 0) {
                 shopStrategy.onOrderClosed(orderId, status);
             }
         }
@@ -552,6 +656,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     public void shutdown() {
         isShuttingDown = true;
         persistStrategyState();
+        if (shopStrategy == null || shopStrategy.getCurrentPosition() == 0) {
+            releaseSharedCapital(symbol, "shutdown-flat");
+        }
         if (client != null) client.eDisconnect();
         staleOrderScheduler.shutdown();
         reconnectionScheduler.shutdown();
@@ -575,6 +682,35 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             shopStrategy.onOrderClosed(-1, "Cancelled");
             response.put("message", "SUCCESS: Artificial 'Cancelled' signal sent. Strategy locks cleared.");
         }
+        return response;
+    }
+
+    public Map<String, Object> resetSharedCapitalReservations(boolean force) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        if (sharedCapitalManager == null || !sharedCapitalManager.isEnabled()) {
+            response.put("message", "shared-capital-disabled");
+            response.put("status", controlStatus());
+            return response;
+        }
+
+        int currentPosition = shopStrategy != null ? shopStrategy.getCurrentPosition() : 0;
+        boolean unsafeLocalState = currentPosition != 0 || getOpenOrdersCount() > 0 || isOrderInFlight();
+        if (unsafeLocalState && !force) {
+            response.put(
+                "message",
+                "shared-capital-reset-blocked-local-state position=" + currentPosition
+                    + " openOrders=" + getOpenOrdersCount()
+                    + " orderInFlight=" + isOrderInFlight()
+            );
+            response.put("status", controlStatus());
+            return response;
+        }
+
+        SharedCapitalManager.ReservationDecision decision = sharedCapitalManager.resetAll();
+        response.put("message", decision.message());
+        response.put("allowed", decision.allowed());
+        response.put("sharedCapital", decision.snapshot());
+        response.put("status", controlStatus());
         return response;
     }
 
@@ -602,6 +738,54 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         resolvedTradeLogFile = "trades_log_" + sym + "_trade_date_" + tradeDate + "_" + timestamp + ".csv";
         return resolvedTradeLogFile;
     }
+
+    public boolean isTradeLogFileEnabled() {
+        String storageMode = normalizedTradeLogStorageMode();
+        return "file".equals(storageMode) || "both".equals(storageMode);
+    }
+
+    public boolean isTradeLogDatabaseEnabled() {
+        String storageMode = normalizedTradeLogStorageMode();
+        return "database".equals(storageMode) || "both".equals(storageMode);
+    }
+
+    public void persistTradeLog(String formattedTimestamp,
+                                String tradeSymbol,
+                                String exitAction,
+                                int quantity,
+                                double entryPrice,
+                                double exitPrice,
+                                double tradePnL,
+                                double cumulativePnL,
+                                String logFile) {
+        if (!isTradeLogDatabaseEnabled()) {
+            return;
+        }
+        if (tradeLogStore == null) {
+            flowCondition("TRADE.LOG", "DATABASE_WRITE_OK", false, "symbol=" + tradeSymbol + " action=" + exitAction + " qty=" + quantity + " storageMode=" + normalizedTradeLogStorageMode() + " reason=no-store");
+            return;
+        }
+        boolean persisted = tradeLogStore.saveTrade(
+            formattedTimestamp,
+            tradeSymbol,
+            exitAction,
+            quantity,
+            entryPrice,
+            exitPrice,
+            tradePnL,
+            cumulativePnL,
+            logFile
+        );
+        flowCondition("TRADE.LOG", "DATABASE_WRITE_OK", persisted, "symbol=" + tradeSymbol + " action=" + exitAction + " qty=" + quantity + " storageMode=" + normalizedTradeLogStorageMode());
+    }
+
+    public List<Map<String, Object>> recentTradeLogs(String symbolFilter, int limit) {
+        if (tradeLogStore == null) {
+            return List.of();
+        }
+        return tradeLogStore.recentTrades(symbolFilter, limit);
+    }
+
     public int getStrategyStopQueueDepth() { return shopStrategy != null ? shopStrategy.getLastStopQueueDepth() : 0; }
     public double getStrategyStopAckLatencyMs() { return shopStrategy != null ? shopStrategy.getLastStopAckLatencyMs() : 0.0; }
     public double getStrategyStopAckLatencyP50Ms() { return shopStrategy != null ? shopStrategy.getStopAckLatencyP50Ms() : 0.0; }
@@ -622,6 +806,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         status.put("dailySubmittedOrders", submittedToday);
         status.put("currentPosition", currentPosition);
         status.put("position", currentPosition);
+        status.put("tradeLogStorageMode", normalizedTradeLogStorageMode());
+        status.put("tradeLogFileEnabled", isTradeLogFileEnabled());
+        status.put("tradeLogDatabaseEnabled", isTradeLogDatabaseEnabled());
         status.put("orderInFlight", isOrderInFlight());
         status.put("orderPlaced", submittedToday > 0);
         status.put("ordersPlacedToday", submittedToday);
@@ -636,6 +823,17 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         status.put("stopAckLatencySamples", getStrategyStopAckLatencySamples());
         status.put("reconnecting", isReconnecting);
         status.put("reconnectionAttempts", reconnectionAttempts);
+        if (sharedCapitalManager != null && sharedCapitalManager.isEnabled()) {
+            SharedCapitalManager.Snapshot snapshot = sharedCapitalManager.snapshot();
+            status.put("sharedCapitalEnabled", true);
+            status.put("sharedCapitalFile", snapshot.stateFile().toString());
+            status.put("sharedCapitalTotalNotional", snapshot.totalNotional());
+            status.put("sharedCapitalReservedNotional", snapshot.reservedNotional());
+            status.put("sharedCapitalAvailableNotional", snapshot.availableNotional());
+            status.put("sharedCapitalReservations", snapshot.reservations());
+        } else {
+            status.put("sharedCapitalEnabled", false);
+        }
         return status;
     }
 
@@ -661,7 +859,14 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     public int cancelOpenOrders() {
         if (!isConnected()) return 0;
         int openCount = orderContextById.size();
-        client.reqGlobalCancel(new OrderCancel());
+        CompletableFuture.runAsync(() -> {
+            try {
+                client.reqGlobalCancel(new OrderCancel());
+                log.info(">>> [FLOW][INFO][IBKR.CANCEL] reqGlobalCancel dispatched openCount={}", openCount);
+            } catch (Exception exception) {
+                log.error(">>> [ERROR][IBKR.CANCEL] reqGlobalCancel failed openCount={} reason={}", openCount, exception.getMessage(), exception);
+            }
+        });
         return openCount;
     }
 
@@ -699,6 +904,62 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     protected void setShopStrategy(PingPongStrategy strategy) {
         this.shopStrategy = strategy;
+    }
+
+    private void reconcileSharedCapitalWithPosition(int position, double referencePrice) {
+        reconcileSharedCapitalWithPosition(position, referencePrice, tradeAmount);
+    }
+
+    private void reconcileSharedCapitalWithPosition(int position, double referencePrice, double fallbackNotional) {
+        if (sharedCapitalManager == null || !sharedCapitalManager.isEnabled()) {
+            return;
+        }
+        SharedCapitalManager.ReservationDecision decision = sharedCapitalManager.reconcilePosition(symbol, position, referencePrice, fallbackNotional);
+        SharedCapitalManager.Snapshot snapshot = decision.snapshot();
+        flowData(
+            "RISK",
+            "Shared capital reconcile symbol=" + symbol
+                + " position=" + position
+                + " referencePrice=" + referencePrice
+                + " fallbackNotional=" + fallbackNotional
+                + " allowed=" + decision.allowed()
+                + " message=" + decision.message()
+                + " available=" + snapshot.availableNotional()
+        );
+    }
+
+    private void releaseSharedCapital(String symbol, String reason) {
+        if (sharedCapitalManager == null || !sharedCapitalManager.isEnabled()) {
+            return;
+        }
+        SharedCapitalManager.ReservationDecision decision = sharedCapitalManager.release(symbol);
+        SharedCapitalManager.Snapshot snapshot = decision.snapshot();
+        flowData(
+            "RISK",
+            "Shared capital release symbol=" + symbol
+                + " reason=" + reason
+                + " allowed=" + decision.allowed()
+                + " message=" + decision.message()
+                + " available=" + snapshot.availableNotional()
+        );
+    }
+
+    private boolean isTerminalOrderStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        return "Filled".equalsIgnoreCase(status)
+            || "Cancelled".equalsIgnoreCase(status)
+            || "ApiCancelled".equalsIgnoreCase(status)
+            || "Inactive".equalsIgnoreCase(status);
+    }
+
+    private String normalizedTradeLogStorageMode() {
+        String rawMode = tradeLogStorageMode == null ? "" : tradeLogStorageMode.trim().toLowerCase(Locale.US);
+        return switch (rawMode) {
+            case "file", "database", "both" -> rawMode;
+            default -> "both";
+        };
     }
 
     // Logger Helpers

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingagent.morning-launch.20260325</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/filmonghezehey/trading-agent/start_trading_stack_20260325.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/filmonghezehey/trading-agent</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Month</key>
+    <integer>3</integer>
+    <key>Day</key>
+    <integer>25</integer>
+    <key>Hour</key>
+    <integer>7</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-morning-20260325.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-morning-20260325.err.log</string>
+</dict>
+</plist>
+

@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Trading Stack Status</title>
+	<meta name="theme-color" content="#0f172a">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+	<meta name="apple-mobile-web-app-title" content="TraderStatus">
+	<link rel="manifest" href="/manifest.webmanifest">
+	<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+	<script>
+		(() => {
+			try {
+				const savedTheme = localStorage.getItem('trading-status-theme') || 'dark';
+				document.documentElement.setAttribute('data-theme', savedTheme);
+			} catch (_) {
+				document.documentElement.setAttribute('data-theme', 'dark');
+			}
+		})();
+	</script>
+	<style>
+		:root {
+			--bg: #0f172a;
+			--bg-top: #020617;
+			--panel: rgba(17,24,39,.96);
+			--panel-alt: #1f2937;
+			--text: #e5e7eb;
+			--muted: #94a3b8;
+			--green: #22c55e;
+			--yellow: #f59e0b;
+			--red: #ef4444;
+			--blue: #38bdf8;
+			--border: rgba(148,163,184,.12);
+			--shadow: 0 8px 24px rgba(0,0,0,.25);
+		}
+		html[data-theme="light"] {
+			--bg: #e2e8f0;
+			--bg-top: #f8fafc;
+			--panel: rgba(255,255,255,.94);
+			--panel-alt: #eef2ff;
+			--text: #0f172a;
+			--muted: #475569;
+			--green: #16a34a;
+			--yellow: #d97706;
+			--red: #dc2626;
+			--blue: #0284c7;
+			--border: rgba(15,23,42,.1);
+			--shadow: 0 8px 24px rgba(15,23,42,.1);
+		}
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+			background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 100%);
+			color: var(--text);
+			padding: 14px;
+			transition: background .25s ease, color .25s ease;
+		}
+		.wrap { max-width: 920px; margin: 0 auto; display: grid; gap: 12px; }
+		.hero,.card {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 16px;
+			padding: 14px;
+			box-shadow: var(--shadow);
+			backdrop-filter: blur(10px);
+		}
+		.hero h1 { margin: 0 0 8px; font-size: 22px; }
+		.muted { color: var(--muted); }
+		.status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+		.status-ok { background: rgba(34,197,94,.14); color: var(--green); }
+		.status-attention { background: rgba(245,158,11,.14); color: var(--yellow); }
+		.status-down { background: rgba(239,68,68,.14); color: var(--red); }
+		.grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; }
+		.metric, .settings-card, .success-card { background: var(--panel-alt); border-radius: 12px; padding: 12px; }
+		.metric .label, .field-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+		.metric .value { margin-top: 8px; font-size: 24px; font-weight: 800; }
+		.section-title { margin: 0 0 10px; font-size: 16px; }
+		.symbol-list { display: grid; gap: 10px; }
+		.symbol-card { background: var(--panel-alt); border-radius: 14px; padding: 12px; display: grid; gap: 8px; }
+		.symbol-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+		.symbol-name { font-size: 18px; font-weight: 800; }
+		.kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px; font-size: 14px; }
+		.kv div:nth-child(odd) { color: var(--muted); }
+		.footer-actions, .banner-actions, .settings-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+		.btn { appearance: none; border: none; border-radius: 10px; background: var(--blue); color: white; padding: 10px 14px; font-weight: 700; cursor: pointer; }
+		.btn:active { transform: scale(.98); }
+		.btn-secondary { background: #475569; }
+		html[data-theme="light"] .btn-secondary { background: #94a3b8; color: #0f172a; }
+		a.inline-link { color: var(--blue); }
+		.banner { display: none; background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.25); border-radius: 14px; padding: 12px; }
+		.banner.visible { display: block; }
+		.banner-title { font-weight: 800; margin-bottom: 4px; }
+		select {
+			appearance: none;
+			border: 1px solid var(--border);
+			background: var(--panel);
+			color: var(--text);
+			border-radius: 10px;
+			padding: 10px 12px;
+			font: inherit;
+		}
+		.settings-grid, .success-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 12px; }
+		pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); }
+		.splash {
+			position: fixed;
+			inset: 0;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 100%);
+			z-index: 9999;
+			transition: opacity .35s ease, visibility .35s ease;
+		}
+		.splash.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+		.splash-card {
+			width: min(320px, calc(100vw - 32px));
+			padding: 22px;
+			border-radius: 24px;
+			background: var(--panel);
+			border: 1px solid var(--border);
+			box-shadow: var(--shadow);
+			text-align: center;
+		}
+		.splash-icon {
+			width: 72px;
+			height: 72px;
+			border-radius: 18px;
+			margin: 0 auto 14px;
+			display: block;
+		}
+		.spinner {
+			width: 34px;
+			height: 34px;
+			margin: 14px auto 0;
+			border-radius: 50%;
+			border: 3px solid rgba(148,163,184,.25);
+			border-top-color: var(--blue);
+			animation: spin 1s linear infinite;
+		}
+		@keyframes spin { to { transform: rotate(360deg); } }
+	</style>
+</head>
+<body>
+<div id="splash" class="splash">
+	<div class="splash-card">
+		<img class="splash-icon" src="/icons/icon-192.png" alt="TraderStatus app icon">
+		<div style="font-size:20px; font-weight:800;">TraderStatus</div>
+		<div class="muted" style="margin-top:6px;">Loading stack health, startup history, and IBKR connectivity…</div>
+		<div class="spinner"></div>
+	</div>
+</div>
+
+<div class="wrap">
+	<section id="installBanner" class="banner">
+		<div class="banner-title" id="installTitle">Install app</div>
+		<div class="muted" id="installText">Add this status page to your home screen for quick one-tap access.</div>
+		<div class="banner-actions">
+			<button id="installBtn" class="btn">Install app</button>
+			<button id="installDismissBtn" class="btn btn-secondary">Dismiss</button>
+		</div>
+	</section>
+
+	<section class="hero">
+		<div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+			<div>
+				<h1>Trading Stack Status</h1>
+				<div class="muted">Installable read-only status app for startup, shutdown, IBKR, harvester, and symbol bots.</div>
+			</div>
+			<div id="overallPill" class="status-pill status-attention">Loading…</div>
+		</div>
+		<div style="margin-top:10px;" class="muted">Host: <span id="hostText">—</span> · Serving port: <span id="portText">—</span> · Updated: <span id="updatedText">—</span></div>
+	</section>
+
+	<section class="grid">
+		<div class="metric"><div class="label">IBKR API</div><div class="value" id="ibkrValue">—</div><div class="muted" id="ibkrMeta">—</div></div>
+		<div class="metric"><div class="label">Harvester</div><div class="value" id="harvesterValue">—</div><div class="muted" id="harvesterMeta">—</div></div>
+		<div class="metric"><div class="label">Connected Bots</div><div class="value" id="botValue">—</div><div class="muted" id="botMeta">—</div></div>
+		<div class="metric"><div class="label">Last Automation Event</div><div class="value" id="eventValue">—</div><div class="muted" id="eventMeta">—</div></div>
+	</section>
+
+	<section class="card">
+		<h2 class="section-title">App Settings</h2>
+		<div class="settings-grid">
+			<div class="settings-card">
+				<div class="field-label">Theme</div>
+				<div class="muted" style="margin:8px 0 10px;">Choose how the app should look every time it opens.</div>
+				<div class="settings-actions">
+					<button id="themeDarkBtn" class="btn">Dark</button>
+					<button id="themeLightBtn" class="btn btn-secondary">Light</button>
+				</div>
+			</div>
+			<div class="settings-card">
+				<label class="field-label" for="refreshIntervalSelect">Refresh interval</label>
+				<div class="muted" style="margin:8px 0 10px;">How often the status page should refresh automatically.</div>
+				<select id="refreshIntervalSelect">
+					<option value="5000">5 seconds</option>
+					<option value="10000">10 seconds</option>
+					<option value="15000">15 seconds</option>
+					<option value="30000">30 seconds</option>
+					<option value="60000">60 seconds</option>
+				</select>
+			</div>
+		</div>
+	</section>
+
+	<section class="card">
+		<h2 class="section-title">Last Successful Runs</h2>
+		<div class="success-grid">
+			<div class="success-card">
+				<div class="field-label">Startup</div>
+				<div style="font-size:18px; font-weight:800; margin:8px 0;" id="startupSuccessTitle">—</div>
+				<div class="muted" id="startupSuccessMeta">No successful startup recorded yet.</div>
+				<div style="margin-top:8px; font-size:14px;" id="startupSuccessMessage">—</div>
+				<div style="margin-top:8px; font-size:13px;" class="muted" id="startupSuccessDetails">—</div>
+			</div>
+			<div class="success-card">
+				<div class="field-label">Shutdown</div>
+				<div style="font-size:18px; font-weight:800; margin:8px 0;" id="shutdownSuccessTitle">—</div>
+				<div class="muted" id="shutdownSuccessMeta">No successful shutdown recorded yet.</div>
+				<div style="margin-top:8px; font-size:14px;" id="shutdownSuccessMessage">—</div>
+				<div style="margin-top:8px; font-size:13px;" class="muted" id="shutdownSuccessDetails">—</div>
+			</div>
+		</div>
+	</section>
+
+	<section class="card">
+		<h2 class="section-title">Symbol Bots</h2>
+		<div id="symbols" class="symbol-list"></div>
+	</section>
+
+	<section class="card">
+		<h2 class="section-title">Latest Automation Summary</h2>
+		<div class="kv">
+			<div>Title</div><div id="lastTitle">—</div>
+			<div>Message</div><div id="lastMessage">—</div>
+			<div>Details</div><div id="lastDetails">—</div>
+			<div>Morning Log</div><div id="morningLog">—</div>
+			<div>Afternoon Log</div><div id="afternoonLog">—</div>
+		</div>
+	</section>
+
+	<section class="card">
+		<div class="footer-actions">
+			<button class="btn" onclick="loadStatus({manual: true})">Refresh now</button>
+			<a class="inline-link" href="/TradingDashboard.html" target="_blank" rel="noreferrer">Open full dashboard</a>
+			<a class="inline-link" href="/api/stack/overview" target="_blank" rel="noreferrer">View raw JSON</a>
+		</div>
+		<div style="margin-top:12px;" class="muted">For internet access, expose only one bot port and protect it with a secure tunnel or auth layer.</div>
+	</section>
+</div>
+
+<script>
+const LAST_STATUS_KEY = 'trading-stack-last-overview';
+const THEME_KEY = 'trading-status-theme';
+const REFRESH_KEY = 'trading-status-refresh-ms';
+const DEFAULT_REFRESH_MS = 15000;
+let deferredInstallPrompt = null;
+let refreshTimer = null;
+let splashHidden = false;
+
+function text(v, fallback = '—') { return v === undefined || v === null || v === '' ? fallback : String(v); }
+function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
+function currentRefreshMs() {
+  try {
+    const value = Number(localStorage.getItem(REFRESH_KEY) || DEFAULT_REFRESH_MS);
+    return Number.isFinite(value) && value > 0 ? value : DEFAULT_REFRESH_MS;
+  } catch (_) {
+    return DEFAULT_REFRESH_MS;
+  }
+}
+function persistSnapshot(data) { try { localStorage.setItem(LAST_STATUS_KEY, JSON.stringify(data)); } catch (_) {} }
+function loadSnapshot() {
+  try {
+    const raw = localStorage.getItem(LAST_STATUS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem(THEME_KEY, theme); } catch (_) {}
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'light' ? '#f8fafc' : '#0f172a');
+  document.getElementById('themeDarkBtn').className = 'btn' + (theme === 'dark' ? '' : ' btn-secondary');
+  document.getElementById('themeLightBtn').className = 'btn' + (theme === 'light' ? '' : ' btn-secondary');
+}
+function applyRefreshInterval(ms) {
+  try { localStorage.setItem(REFRESH_KEY, String(ms)); } catch (_) {}
+  document.getElementById('refreshIntervalSelect').value = String(ms);
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => loadStatus(), ms);
+}
+function hideSplash() {
+  if (splashHidden) return;
+  splashHidden = true;
+  document.getElementById('splash').classList.add('hidden');
+}
+function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; }
+function isIosInstallCandidate() {
+  const ua = window.navigator.userAgent || '';
+  return /iphone|ipad|ipod/i.test(ua) && !isStandalone();
+}
+function showInstallBanner(mode, detailText = '') {
+  const banner = document.getElementById('installBanner');
+  const title = document.getElementById('installTitle');
+  const textNode = document.getElementById('installText');
+  const installBtn = document.getElementById('installBtn');
+  if (mode === 'prompt') {
+    title.textContent = 'Install app';
+    textNode.textContent = 'Add this status page to your home screen for quick one-tap access.';
+    installBtn.style.display = 'inline-block';
+  } else if (mode === 'ios') {
+    title.textContent = 'Add to Home Screen';
+    textNode.textContent = detailText || 'In Safari, tap Share and then “Add to Home Screen” to install this app-like status view.';
+    installBtn.style.display = 'none';
+  } else if (mode === 'offline') {
+    title.textContent = 'Offline snapshot';
+    textNode.textContent = detailText || 'Showing the last cached snapshot. Reconnect to refresh live trading status.';
+    installBtn.style.display = deferredInstallPrompt ? 'inline-block' : 'none';
+  }
+  banner.classList.add('visible');
+}
+function hideInstallBanner() { document.getElementById('installBanner').classList.remove('visible'); }
+function renderLastSuccess(prefix, data, fallbackTitle) {
+  document.getElementById(prefix + 'Title').textContent = text(data.title, fallbackTitle);
+  document.getElementById(prefix + 'Meta').textContent = data.timestamp ? `${data.timestamp} · ${text(data.status, 'ok').toUpperCase()}` : `No successful ${fallbackTitle.toLowerCase()} recorded yet.`;
+  document.getElementById(prefix + 'Message').textContent = text(data.message, '—');
+  document.getElementById(prefix + 'Details').textContent = text(data.details, '—');
+}
+
+async function loadStatus(options = {}) {
+  const pill = document.getElementById('overallPill');
+  pill.textContent = options.manual ? 'Refreshing…' : pill.textContent;
+  pill.className = 'status-pill status-attention';
+  try {
+    const response = await fetch('/api/stack/overview', { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    persistSnapshot(data);
+    renderStatus(data, { offline: false });
+  } catch (error) {
+    const snapshot = loadSnapshot();
+    if (snapshot) {
+      renderStatus(snapshot, { offline: true, error: String(error) });
+      return;
+    }
+    pill.textContent = 'Status unavailable';
+    pill.className = 'status-pill status-down';
+    document.getElementById('symbols').innerHTML = '<div class="symbol-card"><pre>' + error + '</pre></div>';
+    showInstallBanner('offline', 'Offline and no cached snapshot is available yet. Open the page once while connected to prime the app shell.');
+    hideSplash();
+  }
+}
+
+function renderStatus(data, options = {}) {
+  const summary = data.summary || {};
+  const ibkr = data.ibkr || {};
+  const harvester = data.harvester || {};
+  const last = data.lastNotification || {};
+  const startup = data.lastSuccessfulStartup || {};
+  const shutdown = data.lastSuccessfulShutdown || {};
+  const symbols = Array.isArray(data.symbols) ? data.symbols : [];
+  const pill = document.getElementById('overallPill');
+  pill.textContent = options.offline ? 'Offline snapshot' : (summary.overallOk ? 'Overall OK' : 'Needs attention');
+  pill.className = 'status-pill ' + (options.offline ? 'status-attention' : (summary.overallOk ? 'status-ok' : 'status-attention'));
+  document.getElementById('hostText').textContent = text(data.host);
+  document.getElementById('portText').textContent = text(data.servingPort);
+  document.getElementById('updatedText').textContent = options.offline ? `${text(data.generatedAt)} (cached)` : text(data.generatedAt);
+  document.getElementById('ibkrValue').textContent = ibkr.reachable ? 'Reachable' : 'Down';
+  document.getElementById('ibkrMeta').textContent = `${text(ibkr.host)}:${text(ibkr.port)}`;
+  document.getElementById('harvesterValue').textContent = harvester.running ? 'Running' : 'Stopped';
+  document.getElementById('harvesterMeta').textContent = `PID count: ${text(harvester.pidCount, '0')}`;
+  document.getElementById('botValue').textContent = `${text(summary.connectedCount, '0')}/${text(summary.symbolCount, '0')}`;
+  document.getElementById('botMeta').textContent = `Healthy: ${text(summary.healthyCount, '0')}`;
+  document.getElementById('eventValue').textContent = text(last.status, 'none').toUpperCase();
+  document.getElementById('eventMeta').textContent = text(last.timestamp, 'No recorded startup/shutdown event yet');
+  document.getElementById('lastTitle').textContent = text(last.title);
+  document.getElementById('lastMessage').textContent = text(last.message);
+  document.getElementById('lastDetails').textContent = text(last.details);
+  document.getElementById('morningLog').textContent = text(data.latestMorningLog);
+  document.getElementById('afternoonLog').textContent = text(data.latestAfternoonLog);
+  renderLastSuccess('startupSuccess', startup, 'Startup');
+  renderLastSuccess('shutdownSuccess', shutdown, 'Shutdown');
+
+  const container = document.getElementById('symbols');
+  container.innerHTML = '';
+  if (!symbols.length) {
+    container.innerHTML = '<div class="symbol-card"><div class="muted">No symbol runtime files were discovered.</div></div>';
+  } else {
+    for (const symbol of symbols) {
+      const ok = symbol.connected === true && symbol.healthOk === true && symbol.killSwitch !== true;
+      const card = document.createElement('div');
+      card.className = 'symbol-card';
+      card.innerHTML = `
+        <div class="symbol-header"><div class="symbol-name">${text(symbol.symbol)}</div><div class="status-pill ${ok ? 'status-ok' : 'status-attention'}">${ok ? 'Connected' : 'Check'}</div></div>
+        <div class="kv">
+          <div>Port</div><div>${text(symbol.port)}</div>
+          <div>Health</div><div>${text(symbol.healthStatus)} / healthOk=${text(symbol.healthOk)}</div>
+          <div>IBKR</div><div>connected=${text(symbol.connected)} strategyEnabled=${text(symbol.strategyEnabled)}</div>
+          <div>Position</div><div>${text(symbol.position)} · openOrders=${text(symbol.openOrders)}</div>
+          <div>Kill switch</div><div>${text(symbol.killSwitch)}</div>
+          <div>Log file</div><div>${text(symbol.appLogFile)}</div>
+          <div>Base URL</div><div>${text(symbol.statusBaseUrl)}</div>
+        </div>`;
+      container.appendChild(card);
+    }
+  }
+
+  if (options.offline) {
+    showInstallBanner('offline', 'Showing the last cached snapshot because the live endpoint is not reachable right now.');
+  } else if (!isStandalone() && deferredInstallPrompt) {
+    showInstallBanner('prompt');
+  } else if (!isStandalone() && isIosInstallCandidate()) {
+    showInstallBanner('ios');
+  } else {
+    hideInstallBanner();
+  }
+
+  setTimeout(hideSplash, 350);
+}
+
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  if (!isStandalone()) showInstallBanner('prompt');
+});
+window.addEventListener('appinstalled', () => { deferredInstallPrompt = null; hideInstallBanner(); });
+document.getElementById('installBtn').addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  try { await deferredInstallPrompt.userChoice; } catch (_) {}
+  deferredInstallPrompt = null;
+  hideInstallBanner();
+});
+document.getElementById('installDismissBtn').addEventListener('click', hideInstallBanner);
+document.getElementById('themeDarkBtn').addEventListener('click', () => applyTheme('dark'));
+document.getElementById('themeLightBtn').addEventListener('click', () => applyTheme('light'));
+document.getElementById('refreshIntervalSelect').addEventListener('change', event => applyRefreshInterval(Number(event.target.value)));
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
+}
+
+applyTheme(currentTheme());
+applyRefreshInterval(currentRefreshMs());
+loadStatus();
+</script>
+</body>
+</html>
+
+
+

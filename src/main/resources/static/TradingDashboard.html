@@ -47,6 +47,42 @@
             text-align: center;
         }
 
+        .title-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            position: relative;
+        }
+
+        .app-link {
+            position: absolute;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #2a2a2a;
+            color: var(--text-main);
+            text-decoration: none;
+            font-size: 12px;
+            border: 1px solid #3b3b3b;
+        }
+
+        .app-link:hover {
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .app-link img {
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+        }
+
         .top-section {
             display: grid;
             grid-template-columns: 1.1fr 1.3fr;
@@ -218,7 +254,13 @@
 <body>
 
 <div class="dashboard">
-    <h2>Algo Mission Control</h2>
+    <div class="title-row">
+        <h2>Algo Mission Control</h2>
+        <a class="app-link" href="/mobile-status.html" title="Open mobile status app">
+            <img src="/icons/icon-192.png" alt="Status app icon">
+            <span>Status App</span>
+        </a>
+    </div>
 
     <div class="top-section">
         <div class="summary-grid">

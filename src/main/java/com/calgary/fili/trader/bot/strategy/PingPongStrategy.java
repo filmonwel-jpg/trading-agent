@@ -49,8 +49,8 @@ public class PingPongStrategy implements TradingStrategy {
     private static final double RSI_SHORT_ENTRY_REGULAR_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortEntryRegularThreshold", "60.0"));
     private static final double DEFAULT_LONG_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longEntryThreshold", "0.68"));
     private static final double DEFAULT_SHORT_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortEntryThreshold", "0.63"));
-    private static final double DEFAULT_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longExitThreshold", "0.61"));
-    private static final double DEFAULT_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortExitThreshold", "0.63"));
+    private static final double DEFAULT_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longExitThreshold", "0.58"));
+    private static final double DEFAULT_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortExitThreshold", "0.60"));
     private static final double DEFAULT_REGIME_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.regimeThreshold", "0.50"));
     private static final int OPEN30_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.open30MinBars", "12"));
     private static final int REGULAR_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.regularMinBars", "60"));
@@ -317,6 +317,14 @@ public class PingPongStrategy implements TradingStrategy {
                             boolean autoRegimeEnabled, int regimeWindowTicks, int rsiPeriod, double reversalPercentage,
                             double stopLossPercentage, double maxDailyDrawdown,
                             double minDirectionalMove, double trendStrengthThreshold) {
+        this(parent, symbol, gapPercentage, tradeQuantity, maxTrades, autoRegimeEnabled, regimeWindowTicks, rsiPeriod,
+            reversalPercentage, stopLossPercentage, maxDailyDrawdown, minDirectionalMove, trendStrengthThreshold, null);
+    }
+
+    public PingPongStrategy(IBKRTrader parent, String symbol, double gapPercentage, int tradeQuantity, int maxTrades,
+                            boolean autoRegimeEnabled, int regimeWindowTicks, int rsiPeriod, double reversalPercentage,
+                            double stopLossPercentage, double maxDailyDrawdown,
+                            double minDirectionalMove, double trendStrengthThreshold, String modelDir) {
         this.parent = parent;
         this.symbol = symbol;
         this.tradeQuantity = tradeQuantity;
@@ -327,50 +335,50 @@ public class PingPongStrategy implements TradingStrategy {
 
         // Load the 4 Distinct ONNX Models
         try {
-            this.longEntryAi = new AiPredictor("long_entry.onnx");
+            this.longEntryAi = new AiPredictor("long_entry.onnx", modelDir);
         } catch (Exception e) {
             flowError("AI.INIT", "Failed to load long_entry.onnx. Trading disabled. " + e.getMessage());
             this.enabled = false;
         }
 
         try {
-            this.shortEntryAi = new AiPredictor("short_entry.onnx");
+            this.shortEntryAi = new AiPredictor("short_entry.onnx", modelDir);
         } catch (Exception e) {
             flowError("AI.INIT", "Failed to load short_entry.onnx. Short entries disabled.");
             this.shortEntryAi = null;
         }
 
         try {
-            this.longExitAi = new AiPredictor("long_exit.onnx");
+            this.longExitAi = new AiPredictor("long_exit.onnx", modelDir);
         } catch (Exception e) {
             flowError("AI.INIT", "Failed to load long_exit.onnx. Longs will rely on hard stop-loss.");
             this.longExitAi = null;
         }
 
         try {
-            this.shortExitAi = new AiPredictor("short_exit.onnx");
+            this.shortExitAi = new AiPredictor("short_exit.onnx", modelDir);
         } catch (Exception e) {
             flowError("AI.INIT", "Failed to load short_exit.onnx. Shorts will rely on hard stop-loss.");
             this.shortExitAi = null;
         }
 
-        this.regimeClassifierAi = tryLoadOptionalModel("regime_classifier.onnx", "Market regime classifier unavailable. Falling back to CHOPPY.");
-        this.choppyLongEntryAi = tryLoadOptionalModel("choppy_long_entry.onnx", "Choppy long-entry model unavailable. Using base model.");
-        this.choppyShortEntryAi = tryLoadOptionalModel("choppy_short_entry.onnx", "Choppy short-entry model unavailable. Using base model.");
-        this.choppyLongExitAi = tryLoadOptionalModel("choppy_long_exit.onnx", "Choppy long-exit model unavailable. Using base model.");
-        this.choppyShortExitAi = tryLoadOptionalModel("choppy_short_exit.onnx", "Choppy short-exit model unavailable. Using base model.");
-        this.trendLongEntryAi = tryLoadOptionalModel("trend_long_entry.onnx", "Trend long-entry model unavailable. Using base model.");
-        this.trendShortEntryAi = tryLoadOptionalModel("trend_short_entry.onnx", "Trend short-entry model unavailable. Using base model.");
-        this.trendLongExitAi = tryLoadOptionalModel("trend_long_exit.onnx", "Trend long-exit model unavailable. Using base model.");
-        this.trendShortExitAi = tryLoadOptionalModel("trend_short_exit.onnx", "Trend short-exit model unavailable. Using base model.");
-        this.volatileLongEntryAi = tryLoadOptionalModel("volatile_long_entry.onnx", "Volatile long-entry model unavailable. Using base model.");
-        this.volatileShortEntryAi = tryLoadOptionalModel("volatile_short_entry.onnx", "Volatile short-entry model unavailable. Using base model.");
-        this.volatileLongExitAi = tryLoadOptionalModel("volatile_long_exit.onnx", "Volatile long-exit model unavailable. Using base model.");
-        this.volatileShortExitAi = tryLoadOptionalModel("volatile_short_exit.onnx", "Volatile short-exit model unavailable. Using base model.");
-        this.open30LongEntryAi = tryLoadOptionalModel("open30_long_entry.onnx", "Open30 long-entry model unavailable. Using regime/base model.");
-        this.open30ShortEntryAi = tryLoadOptionalModel("open30_short_entry.onnx", "Open30 short-entry model unavailable. Using regime/base model.");
-        this.open30LongExitAi = tryLoadOptionalModel("open30_long_exit.onnx", "Open30 long-exit model unavailable. Using regime/base model.");
-        this.open30ShortExitAi = tryLoadOptionalModel("open30_short_exit.onnx", "Open30 short-exit model unavailable. Using regime/base model.");
+        this.regimeClassifierAi = tryLoadOptionalModel("regime_classifier.onnx", modelDir, "Market regime classifier unavailable. Falling back to CHOPPY.");
+        this.choppyLongEntryAi = tryLoadOptionalModel("choppy_long_entry.onnx", modelDir, "Choppy long-entry model unavailable. Using base model.");
+        this.choppyShortEntryAi = tryLoadOptionalModel("choppy_short_entry.onnx", modelDir, "Choppy short-entry model unavailable. Using base model.");
+        this.choppyLongExitAi = tryLoadOptionalModel("choppy_long_exit.onnx", modelDir, "Choppy long-exit model unavailable. Using base model.");
+        this.choppyShortExitAi = tryLoadOptionalModel("choppy_short_exit.onnx", modelDir, "Choppy short-exit model unavailable. Using base model.");
+        this.trendLongEntryAi = tryLoadOptionalModel("trend_long_entry.onnx", modelDir, "Trend long-entry model unavailable. Using base model.");
+        this.trendShortEntryAi = tryLoadOptionalModel("trend_short_entry.onnx", modelDir, "Trend short-entry model unavailable. Using base model.");
+        this.trendLongExitAi = tryLoadOptionalModel("trend_long_exit.onnx", modelDir, "Trend long-exit model unavailable. Using base model.");
+        this.trendShortExitAi = tryLoadOptionalModel("trend_short_exit.onnx", modelDir, "Trend short-exit model unavailable. Using base model.");
+        this.volatileLongEntryAi = tryLoadOptionalModel("volatile_long_entry.onnx", modelDir, "Volatile long-entry model unavailable. Using base model.");
+        this.volatileShortEntryAi = tryLoadOptionalModel("volatile_short_entry.onnx", modelDir, "Volatile short-entry model unavailable. Using base model.");
+        this.volatileLongExitAi = tryLoadOptionalModel("volatile_long_exit.onnx", modelDir, "Volatile long-exit model unavailable. Using base model.");
+        this.volatileShortExitAi = tryLoadOptionalModel("volatile_short_exit.onnx", modelDir, "Volatile short-exit model unavailable. Using base model.");
+        this.open30LongEntryAi = tryLoadOptionalModel("open30_long_entry.onnx", modelDir, "Open30 long-entry model unavailable. Using regime/base model.");
+        this.open30ShortEntryAi = tryLoadOptionalModel("open30_short_entry.onnx", modelDir, "Open30 short-entry model unavailable. Using regime/base model.");
+        this.open30LongExitAi = tryLoadOptionalModel("open30_long_exit.onnx", modelDir, "Open30 long-exit model unavailable. Using regime/base model.");
+        this.open30ShortExitAi = tryLoadOptionalModel("open30_short_exit.onnx", modelDir, "Open30 short-exit model unavailable. Using regime/base model.");
 
         this.eventProcessorThread = new Thread(this::processEvents);
         this.eventProcessorThread.setName("Strategy-Actor-Thread-" + symbol);
@@ -389,9 +397,9 @@ public class PingPongStrategy implements TradingStrategy {
         hotloadWarmupData();
     }
 
-    private AiPredictor tryLoadOptionalModel(String modelName, String fallbackLog) {
+    private AiPredictor tryLoadOptionalModel(String modelName, String modelDir, String fallbackLog) {
         try {
-            return new AiPredictor(modelName);
+            return new AiPredictor(modelName, modelDir);
         } catch (Exception e) {
             flowInfo("AI.INIT", fallbackLog + " model=" + modelName + " reason=" + e.getMessage());
             return null;
@@ -1402,7 +1410,15 @@ public class PingPongStrategy implements TradingStrategy {
         String formattedTimestamp = timestamp.atZone(MARKET_ZONE).format(MARKET_TS_FORMAT);
 
         File datedLogFile = new File(parent.getTradeLogFile());
-        appendTradeCsv(datedLogFile, formattedTimestamp, exitAction, qty, entryPrice, exitPrice, tradePnL);
+        appendTradeLog(datedLogFile, formattedTimestamp, exitAction, qty, entryPrice, exitPrice, tradePnL);
+    }
+
+    private void appendTradeLog(File logFile, String formattedTimestamp, String exitAction, int qty,
+                                double entryPrice, double exitPrice, double tradePnL) {
+        if (parent.isTradeLogFileEnabled()) {
+            appendTradeCsv(logFile, formattedTimestamp, exitAction, qty, entryPrice, exitPrice, tradePnL);
+        }
+        parent.persistTradeLog(formattedTimestamp, symbol, exitAction, qty, entryPrice, exitPrice, tradePnL, totalNetPnL, logFile.getPath());
     }
 
     private void appendTradeCsv(File logFile, String formattedTimestamp, String exitAction, int qty,

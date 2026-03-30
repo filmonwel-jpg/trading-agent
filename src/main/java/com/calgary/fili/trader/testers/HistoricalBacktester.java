@@ -302,6 +302,7 @@ public class HistoricalBacktester extends IBKRTrader {
         String symbol = (overrideSymbol != null && !overrideSymbol.isBlank()) 
             ? overrideSymbol.trim().toUpperCase() 
             : "TSLA";
+        String modelDir = System.getProperty("trading.model.dir", "");
 
         System.out.println(">>> [WARNING] HYPER-AGGRESSIVE GOD MODE ACTIVATED.");
 
@@ -315,16 +316,17 @@ public class HistoricalBacktester extends IBKRTrader {
             300,        // regimeWindowTicks
             14,         // rsiPeriod
             0.001,      // reversalPercentage: 0.1% profit target
-            0.0030,     // stopLossPercentage: 0.30% hard stop (aligned to ENTRY_RISK_PCT)
+            0.0040,     // stopLossPercentage: 0.40% hard stop for longer trade duration
             5000.0,     // maxDailyDrawdown
             1.20,       // minDirectionalMove
-            0.70        // trendStrengthThreshold
+            0.70,       // trendStrengthThreshold
+            modelDir.isBlank() ? null : modelDir
         );
         testStrategy.setAiThresholds(
             parseThresholdProperty("trading.ai.long-entry-threshold", 0.68),
             parseThresholdProperty("trading.ai.short-entry-threshold", 0.63),
-            parseThresholdProperty("trading.ai.long-exit-threshold", 0.61),
-            parseThresholdProperty("trading.ai.short-exit-threshold", 0.63),
+            parseThresholdProperty("trading.ai.long-exit-threshold", 0.58),
+            parseThresholdProperty("trading.ai.short-exit-threshold", 0.60),
             parseThresholdProperty("trading.ai.regime-threshold", 0.50)
         );
         testStrategy.setMaxVolatilityPercent(10.0);

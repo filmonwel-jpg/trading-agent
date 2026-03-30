@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/filmonghezehey/miniforge3/bin/python3
 
 import asyncio
 
@@ -12,10 +12,12 @@ import os
 import math
 import re
 import hashlib
+import signal
 import numpy as np
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from harvest_storage import HarvestStorageManager, normalize_storage_mode
 
 ib = IB()
 IB_HOST = os.getenv('IB_HOST', '127.0.0.1')
@@ -25,6 +27,11 @@ RECONNECT_RETRY_SECONDS = float(os.getenv('RECONNECT_RETRY_SECONDS', '3'))
 STREAM_WATCHDOG_INTERVAL_SECONDS = float(os.getenv('STREAM_WATCHDOG_INTERVAL_SECONDS', '10'))
 BAR_STALE_SECONDS = float(os.getenv('BAR_STALE_SECONDS', '90'))
 TICK_STALE_SECONDS = float(os.getenv('TICK_STALE_SECONDS', '90'))
+STREAM_WATCHDOG_ACTIVE_SESSIONS = {
+    token.strip().upper()
+    for token in os.getenv('STREAM_WATCHDOG_ACTIVE_SESSIONS', 'REGULAR').split(',')
+    if token.strip()
+}
 NEWS_LIVE_POLL_ENABLED = os.getenv('NEWS_LIVE_POLL_ENABLED', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 NEWS_LIVE_POLL_INTERVAL_SECONDS = float(os.getenv('NEWS_LIVE_POLL_INTERVAL_SECONDS', '30'))
 NEWS_LIVE_POLL_LOOKBACK_MINUTES = int(os.getenv('NEWS_LIVE_POLL_LOOKBACK_MINUTES', '20'))
@@ -82,21 +89,49 @@ def _parse_symbol_aliases(raw_value):
     return aliases
 
 
-# Add all symbols you want to harvest (env override: HARVEST_SYMBOLS=TSLA,QQQ,NVDA,AMD).
-DEFAULT_SYMBOLS = ['TSLA', 'QQQ', 'NVDA', 'AMD']
+# Add all symbols you want to harvest.
+# Env override example:
+# HARVEST_SYMBOLS=TSLA,QQQ,NVDA,AMD,AMZN
+DEFAULT_SYMBOLS = [
+    'TSLA', 'QQQ', 'NVDA', 'AMD', 'AMZN',
+]
 symbols = _parse_symbol_list(os.getenv('HARVEST_SYMBOLS', ''), DEFAULT_SYMBOLS)
 # Market-context symbols default to all harvested symbols (optional override: MARKET_CONTEXT_SYMBOLS).
 market_context_symbols = _parse_symbol_list(os.getenv('MARKET_CONTEXT_SYMBOLS', ''), symbols)
+# Default to the current observed safe tick-by-tick capacity for this five-symbol setup.
+RECOMMENDED_MAX_TICK_BY_TICK_STREAMS = min(len(symbols), 5)
+
+
+def _resolve_max_tick_by_tick_streams(symbol_count):
+    auto_default = min(symbol_count, RECOMMENDED_MAX_TICK_BY_TICK_STREAMS)
+    raw_value = os.getenv('MAX_TICK_BY_TICK_STREAMS', '').strip()
+    if not raw_value:
+        return auto_default, 'auto'
+    try:
+        configured = int(raw_value)
+    except ValueError:
+        print(f"[CONFIG] Invalid MAX_TICK_BY_TICK_STREAMS={raw_value!r}; using auto={auto_default}.")
+        return auto_default, 'auto-invalid'
+    return max(0, min(symbol_count, configured)), 'env'
+
+
+MAX_TICK_BY_TICK_STREAMS, MAX_TICK_BY_TICK_STREAMS_SOURCE = _resolve_max_tick_by_tick_streams(len(symbols))
+
 DEFAULT_NEWS_SYMBOL_ALIASES = {
+    'AMZN': ['AMAZON', 'AMAZON COM', 'AMAZON.COM'],
     'TSLA': ['TESLA', 'TESLA INC', 'TESLA MOTORS'],
     'NVDA': ['NVIDIA', 'NVIDIA CORP', 'NVIDIA CORPORATION'],
     'AMD': ['ADVANCED MICRO DEVICES', 'ADVANCED MICRO'],
     'QQQ': ['NASDAQ 100', 'NASDAQ-100', 'INVESCO QQQ'],
 }
 CONFIGURED_NEWS_SYMBOL_ALIASES = _parse_symbol_aliases(NEWS_SYMBOL_ALIASES)
-MAX_TICK_BY_TICK_STREAMS = int(os.getenv('MAX_TICK_BY_TICK_STREAMS', '4'))
+ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'test'))
 MARKET_ZONE = ZoneInfo('America/New_York')
+HARVEST_STORAGE_MODE = normalize_storage_mode(os.getenv('HARVEST_STORAGE_MODE', 'postgres'))
+HARVEST_STORAGE = None
+ticker_news_unavailable_symbols = []
+startup_stream_summary_emitted = False
 
 # Dictionaries to keep track of active subscriptions and data state
 contracts = {}
@@ -214,6 +249,55 @@ active_news_provider_codes = ''
 active_broadtape_provider_codes = []
 finbert_pipeline = None
 finbert_label_map = {}
+shutdown_requested = False
+
+
+def _shutdown_runtime_resources():
+    cancel_broadtape_news()
+    for sym in list(symbol_runtime.keys()):
+        cancel_symbol_streams(sym)
+    if ib.isConnected():
+        ib.disconnect()
+    if HARVEST_STORAGE is not None:
+        HARVEST_STORAGE.close()
+
+
+def _request_graceful_shutdown(reason='external signal'):
+    global shutdown_requested
+
+    if shutdown_requested:
+        return
+
+    shutdown_requested = True
+    print(f"[SHUTDOWN] Graceful shutdown requested ({reason}).")
+
+    def _stop_runtime():
+        try:
+            if ib.isConnected():
+                ib.disconnect()
+            if EVENT_LOOP.is_running():
+                EVENT_LOOP.stop()
+        except Exception as exc:
+            print(f"[SHUTDOWN] Runtime stop warning: {exc}")
+
+    try:
+        if EVENT_LOOP.is_running():
+            EVENT_LOOP.call_soon_threadsafe(_stop_runtime)
+        else:
+            _stop_runtime()
+    except RuntimeError:
+        _stop_runtime()
+
+
+def _handle_termination_signal(signum, _frame):
+    try:
+        signal_name = signal.Signals(signum).name
+    except ValueError:
+        signal_name = str(signum)
+    _request_graceful_shutdown(f'signal={signal_name}')
+
+
+signal.signal(signal.SIGTERM, _handle_termination_signal)
 
 
 def safe_num(val, default=0.0):
@@ -228,6 +312,21 @@ def safe_str(val, default=''):
         return default
     text = str(val).strip()
     return text if text else default
+
+
+def get_harvest_storage():
+    if HARVEST_STORAGE is None:
+        raise RuntimeError('Harvest storage is not initialized. Call main() before subscribing streams.')
+    return HARVEST_STORAGE
+
+
+def describe_harvest_target(csv_path='', postgres_table=''):
+    storage = get_harvest_storage()
+    if storage.csv_enabled and csv_path:
+        return os.path.basename(csv_path)
+    if storage.postgres_enabled and postgres_table:
+        return f'postgres:{postgres_table}'
+    return 'memory-only'
 
 
 def _register_seen_news_id(sym, provider_code, article_id, raw_ts):
@@ -250,9 +349,16 @@ def mark_stream_alive(sym, stream_name):
     runtime[f'last_{stream_name}_event_ts'] = _now_utc()
 
 
+def _append_unique(items, value):
+    if value not in items:
+        items.append(value)
+
+
 def to_market_dt(raw_dt):
     if raw_dt is None:
         return datetime.now(MARKET_ZONE)
+    if isinstance(raw_dt, (int, float)):
+        return datetime.fromtimestamp(float(raw_dt), tz=timezone.utc).astimezone(MARKET_ZONE)
     if raw_dt.tzinfo is None:
         return raw_dt.replace(tzinfo=timezone.utc).astimezone(MARKET_ZONE)
     return raw_dt.astimezone(MARKET_ZONE)
@@ -507,6 +613,77 @@ def _session_bucket(market_dt):
     if (hour > 9 or (hour == 9 and minute >= 30)) and hour < 16:
         return 'REGULAR'
     return 'POST'
+
+
+def _watchdog_session_active(market_dt=None):
+    market_dt = to_market_dt(market_dt if market_dt is not None else _now_utc())
+    if market_dt.weekday() >= 5:
+        return False
+    return _session_bucket(market_dt) in STREAM_WATCHDOG_ACTIVE_SESSIONS
+
+
+def _estimate_ibkr_stream_load(symbol_count, tbt_count, broadtape_count):
+    req_mkt_data = symbol_count + broadtape_count
+    keep_up_to_date_bars = symbol_count
+    tick_by_tick = tbt_count
+    fallback_symbols = max(0, symbol_count - tbt_count)
+    total_persistent_streams = req_mkt_data + keep_up_to_date_bars + tick_by_tick
+    return {
+        'symbols': symbol_count,
+        'req_mkt_data': req_mkt_data,
+        'keep_up_to_date_bars': keep_up_to_date_bars,
+        'tick_by_tick': tick_by_tick,
+        'fallback_symbols': fallback_symbols,
+        'broadtape': broadtape_count,
+        'total_persistent_streams': total_persistent_streams,
+        'news_poll_req_per_cycle': symbol_count,
+    }
+
+
+def emit_startup_stream_summary():
+    global startup_stream_summary_emitted
+    if startup_stream_summary_emitted:
+        return
+
+    symbol_count = len(symbols)
+    tbt_symbols = [sym for sym, runtime in symbol_runtime.items() if runtime.get('uses_tbt', False)]
+    fallback_symbols = [sym for sym in symbols if sym not in tbt_symbols]
+    broadtape_count = len(active_broadtape_provider_codes)
+    estimate = _estimate_ibkr_stream_load(symbol_count, len(tbt_symbols), broadtape_count)
+
+    print(
+        "[IBKR-PLAN] "
+        f"symbols={estimate['symbols']} "
+        f"reqMktData={estimate['req_mkt_data']} "
+        f"keepUpToDateBars={estimate['keep_up_to_date_bars']} "
+        f"tickByTick={estimate['tick_by_tick']} "
+        f"broadtape={estimate['broadtape']} "
+        f"fallbackSymbols={estimate['fallback_symbols']} "
+        f"totalPersistentStreams≈{estimate['total_persistent_streams']} "
+        f"newsPollReqPer{int(NEWS_LIVE_POLL_INTERVAL_SECONDS)}s={estimate['news_poll_req_per_cycle']}"
+    )
+    print(
+        "[IBKR-PLAN] "
+        f"MAX_TICK_BY_TICK_STREAMS={MAX_TICK_BY_TICK_STREAMS} "
+        f"source={MAX_TICK_BY_TICK_STREAMS_SOURCE} "
+        f"recommended={RECOMMENDED_MAX_TICK_BY_TICK_STREAMS} "
+        f"tbtSymbols={','.join(tbt_symbols) if tbt_symbols else 'none'}"
+    )
+    if MAX_TICK_BY_TICK_STREAMS > RECOMMENDED_MAX_TICK_BY_TICK_STREAMS:
+        print(
+            "[IBKR-PLAN][WARN] "
+            f"Configured MAX_TICK_BY_TICK_STREAMS={MAX_TICK_BY_TICK_STREAMS} exceeds the current default "
+            f"recommendation of {RECOMMENDED_MAX_TICK_BY_TICK_STREAMS}; IBKR may reject excess requests with error 10190."
+        )
+    if fallback_symbols:
+        print(f"[IBKR-PLAN] mktData tick fallback symbols={','.join(fallback_symbols)}")
+    if ticker_news_unavailable_symbols:
+        print(
+            "[NEWS] Direct ticker tickNews stream unavailable in current IB client; "
+            f"using historical fallback polling for {len(ticker_news_unavailable_symbols)} symbol(s): "
+            f"{','.join(ticker_news_unavailable_symbols)}"
+        )
+    startup_stream_summary_emitted = True
 
 
 def _news_coverage_score(news_count_300s):
@@ -829,36 +1006,36 @@ def record_news_event(sym, news_csv_path, news_dt, provider_code, article_id, he
     while state['events'] and state['events'][0]['published_dt'] < cutoff:
         state['events'].popleft()
 
-    with open(news_csv_path, 'a', newline='') as f:
-        csv.writer(f).writerow([
-            format_market_timestamp(published_dt),
-            safe_str(provider_code, ''),
-            safe_str(provider_name or news_provider_name_by_code.get(provider_code, ''), ''),
-            safe_str(article_id, ''),
-            safe_str(headline, ''),
-            f"{sentiment_score:.4f}",
-            f"{sentiment_confidence:.4f}",
-            sentiment_label,
-            SENTIMENT_MODEL,
-            event_label,
-            f"{event_confidence:.4f}",
-            f"{event_probs['earnings_beat_miss']:.4f}",
-            f"{event_probs['analyst_upgrade_downgrade']:.4f}",
-            f"{event_probs['legal_regulatory']:.4f}",
-            f"{event_probs['product_capex']:.4f}",
-            f"{event_probs['macro_spillover']:.4f}",
-            format_market_timestamp(published_dt),
-            format_market_timestamp(received_market_dt),
-            format_market_timestamp(tradable_dt),
-            '1' if is_historical_seed else '0',
-            source_raw,
-            source_site,
-            duplicate_meta['dup_cluster_id'],
-            duplicate_meta['dup_seq_asof'],
-            duplicate_meta['dup_provider_count_asof'],
-            duplicate_meta['dup_first_seen_ts'],
-            duplicate_meta['dup_is_repeat'],
-        ])
+    news_row = [
+        format_market_timestamp(published_dt),
+        safe_str(provider_code, ''),
+        safe_str(provider_name or news_provider_name_by_code.get(provider_code, ''), ''),
+        safe_str(article_id, ''),
+        safe_str(headline, ''),
+        f"{sentiment_score:.4f}",
+        f"{sentiment_confidence:.4f}",
+        sentiment_label,
+        SENTIMENT_MODEL,
+        event_label,
+        f"{event_confidence:.4f}",
+        f"{event_probs['earnings_beat_miss']:.4f}",
+        f"{event_probs['analyst_upgrade_downgrade']:.4f}",
+        f"{event_probs['legal_regulatory']:.4f}",
+        f"{event_probs['product_capex']:.4f}",
+        f"{event_probs['macro_spillover']:.4f}",
+        format_market_timestamp(published_dt),
+        format_market_timestamp(received_market_dt),
+        format_market_timestamp(tradable_dt),
+        '1' if is_historical_seed else '0',
+        source_raw,
+        source_site,
+        duplicate_meta['dup_cluster_id'],
+        duplicate_meta['dup_seq_asof'],
+        duplicate_meta['dup_provider_count_asof'],
+        duplicate_meta['dup_first_seen_ts'],
+        duplicate_meta['dup_is_repeat'],
+    ]
+    get_harvest_storage().write_news(sym, published_dt, NEWS_HEADER, news_row, news_csv_path)
 
 
 def get_news_features(sym, bar_dt):
@@ -1072,9 +1249,11 @@ def _broadtape_runtime(provider_code):
 
     warmup_date = datetime.now(MARKET_ZONE).strftime('%Y%m%d')
     broadtape_dir = os.path.join(OUTPUT_DIR, '_broadtape')
-    os.makedirs(broadtape_dir, exist_ok=True)
+    if get_harvest_storage().csv_enabled:
+        os.makedirs(broadtape_dir, exist_ok=True)
     csv_path = os.path.join(broadtape_dir, f'{provider_code}_live_news_{warmup_date}.csv')
-    ensure_news_csv_file(csv_path)
+    if get_harvest_storage().csv_enabled:
+        ensure_news_csv_file(csv_path)
     runtime = {
         'sym': f'{BROADTAPE_PSEUDO_SYMBOL_PREFIX}_{provider_code}',
         'csv_path': csv_path,
@@ -1129,7 +1308,7 @@ def _record_broadtape_news_item(provider_code, article_id, headline, raw_ts, sou
             provider_name=provider_name,
             source_raw=source_raw,
         )
-        print(f"[NEWS-LIVE] Archived {provider_code} headline -> {os.path.basename(runtime['csv_path'])}")
+        print(f"[NEWS-LIVE] Archived {provider_code} headline -> {describe_harvest_target(runtime['csv_path'], 'harvest_news_events')}")
 
     runtime['last_event_ts'] = received_dt
 
@@ -1208,7 +1387,7 @@ def subscribe_broadtape_news(provider_codes=None):
                 snapshot=False,
                 regulatorySnapshot=False,
             )
-            print(f"[NEWS-LIVE] Subscribed broadtape feed {provider_code} -> {os.path.basename(runtime['csv_path'])}")
+            print(f"[NEWS-LIVE] Subscribed broadtape feed {provider_code} -> {describe_harvest_target(runtime['csv_path'], 'harvest_news_events')}")
         except Exception as exc:
             broadtape_contracts.pop(provider_code, None)
             broadtape_tickers.pop(provider_code, None)
@@ -1238,7 +1417,7 @@ async def subscribe_broadtape_news_async(provider_codes=None):
                 snapshot=False,
                 regulatorySnapshot=False,
             )
-            print(f"[NEWS-LIVE] Subscribed broadtape feed {provider_code} -> {os.path.basename(runtime['csv_path'])}")
+            print(f"[NEWS-LIVE] Subscribed broadtape feed {provider_code} -> {describe_harvest_target(runtime['csv_path'], 'harvest_news_events')}")
         except Exception as exc:
             broadtape_contracts.pop(provider_code, None)
             broadtape_tickers.pop(provider_code, None)
@@ -1576,6 +1755,8 @@ def normalize_warmup_csv(csv_path):
 
 
 def ensure_news_csv_file(news_csv):
+    if not get_harvest_storage().csv_enabled:
+        return
     normalize_news_csv(news_csv)
     if not os.path.exists(news_csv):
         with open(news_csv, 'w', newline='') as f:
@@ -1583,6 +1764,8 @@ def ensure_news_csv_file(news_csv):
 
 
 def ensure_csv_files(bar_csv, tick_csv, news_csv):
+    if not get_harvest_storage().csv_enabled:
+        return
     normalize_warmup_csv(bar_csv)
     ensure_news_csv_file(news_csv)
 
@@ -1611,7 +1794,7 @@ def cancel_symbol_streams(sym):
         except Exception as exc:
             print(f"[RECONNECT] {sym} cancelHistoricalData warning: {exc}")
 
-    if contract is not None:
+    if contract is not None and _contract_is_qualified(contract):
         try:
             ib.cancelMktData(contract)
         except Exception as exc:
@@ -1675,9 +1858,8 @@ def _begin_symbol_subscription(sym):
     ticker_obj.updateEvent += create_quote_capture_callback(sym, ticker_obj)
     if _supports_ticker_news_stream(ticker_obj):
         ticker_obj.updateEvent += create_news_callback(sym, runtime['news_csv'], ticker_obj)
-    elif not runtime.get('news_stream_notice_emitted', False):
-        print(f"[NEWS] {sym}: direct ticker tickNews stream unavailable in current IB client; relying on historical fallback polling.")
-        runtime['news_stream_notice_emitted'] = True
+    else:
+        _append_unique(ticker_news_unavailable_symbols, sym)
     tickers[sym] = ticker_obj
     return runtime, contract, ticker_obj
 
@@ -1695,7 +1877,6 @@ def _attach_symbol_tick_stream(sym, contract, runtime, ticker_obj):
     else:
         ticker_obj.updateEvent += create_mktdata_tick_callback(sym, runtime['tick_csv'], ticker_obj)
         ticks_dict[sym] = ticker_obj
-        print(f"[!] {sym}: using mktData fallback (tick-by-tick cap reached: {MAX_TICK_BY_TICK_STREAMS})")
 
 
 def subscribe_symbol_streams(sym, provider_codes):
@@ -1770,6 +1951,9 @@ async def stream_heartbeat_watchdog(provider_codes):
             continue
 
         now_utc = _now_utc()
+        if not _watchdog_session_active(now_utc):
+            continue
+
         for sym in symbols:
             runtime = symbol_runtime.get(sym)
             if not runtime:
@@ -2189,71 +2373,71 @@ def create_bar_callback(sym, csv_path, ticker_obj):
                 quality_flags.append('partial_market_context')
             data_quality_flags = 'none' if not quality_flags else '|'.join(dict.fromkeys(quality_flags))
 
-            with open(csv_path, 'a', newline='') as f:
-                csv.writer(f).writerow([
-                    market_ts,
-                    f"{safe_num(bar.open):.4f}",
-                    f"{safe_num(bar.high):.4f}",
-                    f"{safe_num(bar.low):.4f}",
-                    f"{safe_num(bar.close):.4f}",
-                    f"{bar_volume:.18f}",
-                    f"{safe_num(bar_wap if bar_wap > 0 else bar.close):.18f}",
-                    bar_count,
-                    f"{safe_num(y_close if y_close > 0 else state['yesterday_close']):.4f}",
-                    f"{bid:.4f}",
-                    f"{ask:.4f}",
-                    f"{bid_size:.0f}",
-                    f"{ask_size:.0f}",
-                    put_vol,
-                    call_vol,
-                    f"{shortable:.0f}",
-                    news_features['news_count_300s'],
-                    f"{news_features['sentiment_mean_300s']:.4f}",
-                    f"{news_features['sentiment_min_300s']:.4f}",
-                    f"{news_features['sentiment_max_300s']:.4f}",
-                    f"{news_features['minutes_since_news']:.4f}",
-                    market_ts,
-                    int(market_dt.timestamp()),
-                    session_bucket,
-                    minute_of_day,
-                    seconds_from_open,
-                    f"{spread_bps:.4f}",
-                    f"{l1_imbalance:.4f}",
-                    news_features['news_count_60s'],
-                    news_features['news_unique_providers_300s'],
-                    f"{news_features['sentiment_std_300s']:.4f}",
-                    f"{news_features['sentiment_latest']:.4f}",
-                    f"{news_features['news_event_earnings_beat_miss_300s']:.4f}",
-                    f"{news_features['news_event_analyst_upgrade_downgrade_300s']:.4f}",
-                    f"{news_features['news_event_legal_regulatory_300s']:.4f}",
-                    f"{news_features['news_event_product_capex_300s']:.4f}",
-                    f"{news_features['news_event_macro_spillover_300s']:.4f}",
-                    SENTIMENT_MODEL,
-                    f"{news_features['sentiment_conf_mean_300s']:.4f}",
-                    f"{news_features['sentiment_conf_latest']:.4f}",
-                    f"{news_features['news_asof_lag_sec']:.2f}",
-                    f"{news_features['news_coverage_300s']:.4f}",
-                    f"{feature_completeness:.4f}",
-                    data_quality_flags,
-                    f"{quote_metrics['bid_last']:.4f}",
-                    f"{quote_metrics['ask_last']:.4f}",
-                    f"{quote_metrics['bid_size_last']:.0f}",
-                    f"{quote_metrics['ask_size_last']:.0f}",
-                    quote_metrics['put_vol_delta_5s'],
-                    quote_metrics['call_vol_delta_5s'],
-                    f"{quote_metrics['shortable_delta_5s']:.0f}",
-                    f"{quote_metrics['shortable_min_5s']:.0f}",
-                    f"{quote_metrics['shortable_max_5s']:.0f}",
-                    quote_metrics['quote_update_count_5s'],
-                    f"{quote_metrics['quote_coverage_5s']:.4f}",
-                    f"{quote_metrics['quote_age_ms']:.1f}",
-                    f"{quote_metrics['spread_min_bps_5s']:.4f}",
-                    f"{quote_metrics['spread_max_bps_5s']:.4f}",
-                    f"{quote_metrics['l1_imbalance_std_5s']:.4f}",
-                    f"{quote_metrics['at_bid_vol']:.4f}",
-                    f"{quote_metrics['at_ask_vol']:.4f}",
-                    quote_metrics['trade_print_count_5s'],
-                ] + [market_context_features[col] for col in MARKET_CONTEXT_HEADER + MARKET_CONTEXT_SUMMARY_HEADER])
+            warmup_row = [
+                market_ts,
+                f"{safe_num(bar.open):.4f}",
+                f"{safe_num(bar.high):.4f}",
+                f"{safe_num(bar.low):.4f}",
+                f"{safe_num(bar.close):.4f}",
+                f"{bar_volume:.18f}",
+                f"{safe_num(bar_wap if bar_wap > 0 else bar.close):.18f}",
+                bar_count,
+                f"{safe_num(y_close if y_close > 0 else state['yesterday_close']):.4f}",
+                f"{bid:.4f}",
+                f"{ask:.4f}",
+                f"{bid_size:.0f}",
+                f"{ask_size:.0f}",
+                put_vol,
+                call_vol,
+                f"{shortable:.0f}",
+                news_features['news_count_300s'],
+                f"{news_features['sentiment_mean_300s']:.4f}",
+                f"{news_features['sentiment_min_300s']:.4f}",
+                f"{news_features['sentiment_max_300s']:.4f}",
+                f"{news_features['minutes_since_news']:.4f}",
+                market_ts,
+                int(market_dt.timestamp()),
+                session_bucket,
+                minute_of_day,
+                seconds_from_open,
+                f"{spread_bps:.4f}",
+                f"{l1_imbalance:.4f}",
+                news_features['news_count_60s'],
+                news_features['news_unique_providers_300s'],
+                f"{news_features['sentiment_std_300s']:.4f}",
+                f"{news_features['sentiment_latest']:.4f}",
+                f"{news_features['news_event_earnings_beat_miss_300s']:.4f}",
+                f"{news_features['news_event_analyst_upgrade_downgrade_300s']:.4f}",
+                f"{news_features['news_event_legal_regulatory_300s']:.4f}",
+                f"{news_features['news_event_product_capex_300s']:.4f}",
+                f"{news_features['news_event_macro_spillover_300s']:.4f}",
+                SENTIMENT_MODEL,
+                f"{news_features['sentiment_conf_mean_300s']:.4f}",
+                f"{news_features['sentiment_conf_latest']:.4f}",
+                f"{news_features['news_asof_lag_sec']:.2f}",
+                f"{news_features['news_coverage_300s']:.4f}",
+                f"{feature_completeness:.4f}",
+                data_quality_flags,
+                f"{quote_metrics['bid_last']:.4f}",
+                f"{quote_metrics['ask_last']:.4f}",
+                f"{quote_metrics['bid_size_last']:.0f}",
+                f"{quote_metrics['ask_size_last']:.0f}",
+                quote_metrics['put_vol_delta_5s'],
+                quote_metrics['call_vol_delta_5s'],
+                f"{quote_metrics['shortable_delta_5s']:.0f}",
+                f"{quote_metrics['shortable_min_5s']:.0f}",
+                f"{quote_metrics['shortable_max_5s']:.0f}",
+                quote_metrics['quote_update_count_5s'],
+                f"{quote_metrics['quote_coverage_5s']:.4f}",
+                f"{quote_metrics['quote_age_ms']:.1f}",
+                f"{quote_metrics['spread_min_bps_5s']:.4f}",
+                f"{quote_metrics['spread_max_bps_5s']:.4f}",
+                f"{quote_metrics['l1_imbalance_std_5s']:.4f}",
+                f"{quote_metrics['at_bid_vol']:.4f}",
+                f"{quote_metrics['at_ask_vol']:.4f}",
+                quote_metrics['trade_print_count_5s'],
+            ] + [market_context_features[col] for col in MARKET_CONTEXT_HEADER + MARKET_CONTEXT_SUMMARY_HEADER]
+            get_harvest_storage().write_bar(sym, market_dt, WARMUP_HEADER, warmup_row, csv_path)
 
             state['last_close'] = safe_num(bar.close)
             print(f"[BAR] {sym} {market_ts} | Close: {bar.close} | Vol: {bar.volume}")
@@ -2310,27 +2494,27 @@ def create_tick_callback(sym, csv_path, ticker_obj):
             ask=current_ask,
         )
 
-        with open(csv_path, 'a', newline='') as f:
-            csv.writer(f).writerow([
-                tick_time,
-                tick_price,
-                tick_size,
-                current_bid,
-                current_ask,
-                current_bid_size,
-                current_ask_size,
-                last_price,
-                last_size,
-                mid,
-                spread,
-                put_vol,
-                call_vol,
-                shortable,
-                volume,
-                vwap,
-                bbo_exchange,
-                emitted_last_exchange
-            ])
+        tick_row = [
+            tick_time,
+            tick_price,
+            tick_size,
+            current_bid,
+            current_ask,
+            current_bid_size,
+            current_ask_size,
+            last_price,
+            last_size,
+            mid,
+            spread,
+            put_vol,
+            call_vol,
+            shortable,
+            volume,
+            vwap,
+            bbo_exchange,
+            emitted_last_exchange
+        ]
+        get_harvest_storage().write_tick(sym, to_market_dt(tick_time), TICK_HEADER, tick_row, csv_path)
     return onTickUpdate
 
 
@@ -2383,90 +2567,103 @@ def create_mktdata_tick_callback(sym, csv_path, ticker_obj):
             ask=current_ask,
         )
 
-        with open(csv_path, 'a', newline='') as f:
-            csv.writer(f).writerow([
-                tick_time,
-                tick_price,
-                tick_size,
-                current_bid,
-                current_ask,
-                current_bid_size,
-                current_ask_size,
-                last_price,
-                last_size,
-                mid,
-                spread,
-                put_vol,
-                call_vol,
-                shortable,
-                volume,
-                vwap,
-                bbo_exchange,
-                emitted_last_exchange
-            ])
+        tick_row = [
+            tick_time,
+            tick_price,
+            tick_size,
+            current_bid,
+            current_ask,
+            current_bid_size,
+            current_ask_size,
+            last_price,
+            last_size,
+            mid,
+            spread,
+            put_vol,
+            call_vol,
+            shortable,
+            volume,
+            vwap,
+            bbo_exchange,
+            emitted_last_exchange
+        ]
+        get_harvest_storage().write_tick(sym, to_market_dt(tick_time), TICK_HEADER, tick_row, csv_path)
 
     return onMktDataUpdate
 
 
 def main():
-    connect_to_ib()
+    global HARVEST_STORAGE
+    watchdog_task = None
+    stream_watchdog_task = None
+    news_poll_task = None
 
-    init_sentiment_model()
-    run_finbert_self_test()
-    print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()} hf_auth={get_hf_auth_status()}")
-    news_provider_codes = resolve_news_provider_codes() if ib.isConnected() else ''
+    try:
+        HARVEST_STORAGE = HarvestStorageManager(HARVEST_STORAGE_MODE, ROOT_DIR)
+        print(f"[STORAGE] {HARVEST_STORAGE.summary()}")
 
-    for idx, sym in enumerate(symbols):
-        print(f"[*] Setting up data streams for {sym}...")
-        contract = Stock(sym, 'SMART', 'USD')
-        contracts[sym] = contract
+        connect_to_ib()
 
-        warmup_date = datetime.now(MARKET_ZONE).strftime('%Y%m%d')
-        symbol_dir = os.path.join(OUTPUT_DIR, sym)
-        os.makedirs(symbol_dir, exist_ok=True)
+        init_sentiment_model()
+        run_finbert_self_test()
+        print(f"[SENTIMENT] Startup summary: active={get_active_sentiment_engine()} hf_auth={get_hf_auth_status()}")
+        news_provider_codes = resolve_news_provider_codes() if ib.isConnected() else ''
 
-        symbol_runtime[sym] = {
-            'bar_csv': os.path.join(symbol_dir, f'{sym}_5s_warmup_{warmup_date}.csv'),
-            'tick_csv': os.path.join(symbol_dir, f'{sym}_live_ticks_{warmup_date}.csv'),
-            'news_csv': os.path.join(symbol_dir, f'{sym}_news_{warmup_date}.csv'),
-            'uses_tbt': idx < MAX_TICK_BY_TICK_STREAMS,
-            'news_seeded': False,
-            'news_stream_notice_emitted': False,
-            'last_bar_event_ts': _now_utc(),
-            'last_tick_event_ts': _now_utc(),
-            'last_news_event_ts': _now_utc(),
-        }
+        for idx, sym in enumerate(symbols):
+            if shutdown_requested:
+                print('[SHUTDOWN] Startup aborted before all symbol streams were initialized.')
+                return
+
+            print(f"[*] Setting up data streams for {sym}...")
+            contract = Stock(sym, 'SMART', 'USD')
+            contracts[sym] = contract
+
+            warmup_date = datetime.now(MARKET_ZONE).strftime('%Y%m%d')
+            symbol_dir = os.path.join(OUTPUT_DIR, sym)
+            if HARVEST_STORAGE.csv_enabled:
+                os.makedirs(symbol_dir, exist_ok=True)
+
+            symbol_runtime[sym] = {
+                'bar_csv': os.path.join(symbol_dir, f'{sym}_5s_warmup_{warmup_date}.csv'),
+                'tick_csv': os.path.join(symbol_dir, f'{sym}_live_ticks_{warmup_date}.csv'),
+                'news_csv': os.path.join(symbol_dir, f'{sym}_news_{warmup_date}.csv'),
+                'uses_tbt': idx < MAX_TICK_BY_TICK_STREAMS,
+                'news_seeded': False,
+                'last_bar_event_ts': _now_utc(),
+                'last_tick_event_ts': _now_utc(),
+                'last_news_event_ts': _now_utc(),
+            }
+
+            if ib.isConnected():
+                subscribe_symbol_streams(sym, news_provider_codes)
+            else:
+                print(f"[RECONNECT] {sym}: startup subscription deferred until IBKR reconnects.")
+
+        if shutdown_requested:
+            print('[SHUTDOWN] Startup aborted before live tasks were armed.')
+            return
 
         if ib.isConnected():
-            subscribe_symbol_streams(sym, news_provider_codes)
-        else:
-            print(f"[RECONNECT] {sym}: startup subscription deferred until IBKR reconnects.")
+            subscribe_broadtape_news(active_broadtape_provider_codes)
 
-    if ib.isConnected():
-        subscribe_broadtape_news(active_broadtape_provider_codes)
+        emit_startup_stream_summary()
 
-    if MAX_TICK_BY_TICK_STREAMS < len(symbols):
-        print(f"[!] Tick-by-tick cap active: {MAX_TICK_BY_TICK_STREAMS} of {len(symbols)} symbols use AllLast stream.")
+        ib.disconnectedEvent += lambda: (clear_broadtape_subscription_cache(), print('[RECONNECT] disconnectedEvent received from IBKR.'))
+        ib.connectedEvent += lambda: print('[RECONNECT] connectedEvent received from IBKR.')
 
-    ib.disconnectedEvent += lambda: (clear_broadtape_subscription_cache(), print('[RECONNECT] disconnectedEvent received from IBKR.'))
-    ib.connectedEvent += lambda: print('[RECONNECT] connectedEvent received from IBKR.')
+        watchdog_task = EVENT_LOOP.create_task(reconnect_watchdog(news_provider_codes))
+        stream_watchdog_task = EVENT_LOOP.create_task(stream_heartbeat_watchdog(news_provider_codes))
+        news_poll_task = EVENT_LOOP.create_task(news_fallback_poll_watchdog(news_provider_codes))
 
-    watchdog_task = EVENT_LOOP.create_task(reconnect_watchdog(news_provider_codes))
-    stream_watchdog_task = EVENT_LOOP.create_task(stream_heartbeat_watchdog(news_provider_codes))
-    news_poll_task = EVENT_LOOP.create_task(news_fallback_poll_watchdog(news_provider_codes))
-
-    print("\n[+] Harvester fully armed. Streaming all symbols concurrently...")
-    try:
+        print("\n[+] Harvester fully armed. Streaming all symbols concurrently...")
         ib.run()
     except KeyboardInterrupt:
         print("\n[*] Harvester stopped.")
     finally:
-        watchdog_task.cancel()
-        stream_watchdog_task.cancel()
-        news_poll_task.cancel()
-        cancel_broadtape_news()
-        if ib.isConnected():
-            ib.disconnect()
+        for task in (watchdog_task, stream_watchdog_task, news_poll_task):
+            if task is not None:
+                task.cancel()
+        _shutdown_runtime_resources()
 
 
 if __name__ == '__main__':

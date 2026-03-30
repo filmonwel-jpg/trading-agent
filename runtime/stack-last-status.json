@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-03-30 14:30:08",
+  "event": "afternoon-shutdown",
+  "status": "ok",
+  "title": "Trading stack shutdown OK",
+  "message": "Bots flattened, harvester stopped, and IBKR shutdown completed.",
+  "details": "Log: /Users/filmonghezehey/trading-agent/runtime/afternoon-flatten-20260330_142957.log",
+  "host": "Filmons-MacBook-Pro.local"
+}
