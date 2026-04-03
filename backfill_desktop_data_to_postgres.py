@@ -77,6 +77,18 @@ BAR_ASK_FIELDS  = ("Ask", "AskLast")
 BAR_PUT_FIELDS  = ("PutVol", "PutVolDelta5s")
 BAR_CALL_FIELDS = ("CallVol", "CallVolDelta5s")
 
+# Epoch threshold: timestamps above this value are treated as milliseconds
+EPOCH_MS_THRESHOLD = 1e12
+
+# Maximum characters of a headline included in the event_key hash
+HEADLINE_KEY_MAX_LENGTH = 80
+
+# Maximum sample issue rows stored per symbol/day in the validation report
+MAX_SAMPLE_ISSUES = 5
+
+# Maximum symbol/day rows shown with full sample detail in the printed report
+MAX_DETAILED_PROBLEM_ROWS = 10
+
 # Legacy CSV format markers
 _EPOCH_RE   = re.compile(r"^\d{9,13}(\.\d+)?$")
 _YYYYMMDD_RE = re.compile(
@@ -110,7 +122,7 @@ def _parse_timestamp(raw) -> datetime | None:
     if _EPOCH_RE.match(s):
         try:
             epoch_val = float(s)
-            if epoch_val > 1e12:          # milliseconds → seconds
+            if epoch_val > EPOCH_MS_THRESHOLD:  # milliseconds → seconds
                 epoch_val /= 1000.0
             return datetime.fromtimestamp(epoch_val, tz=timezone.utc)
         except (ValueError, OverflowError, OSError):
@@ -357,7 +369,7 @@ def _import_ticks_file(conn, path: Path, symbol: str, dry_run: bool,
                 "tick_time":  dt_utc.isoformat(),
                 "market_day": _market_day(dt_utc),
                 "price":      price,
-                "size":       round(size) if size is not None else None,
+                "size":       int(round(size)) if size is not None else None,
                 "payload":    json.dumps(payload),
             })
 
@@ -433,7 +445,7 @@ def _import_news_file(conn, path: Path, symbol: str, dry_run: bool,
                        for i in range(len(header))}
 
             key = _event_key(symbol, provider, article_id,
-                             dt_utc.isoformat(), headline[:80])
+                             dt_utc.isoformat(), headline[:HEADLINE_KEY_MAX_LENGTH])
 
             rows_batch.append({
                 "event_key":    key,
@@ -767,7 +779,7 @@ def run_validation(conn, dry_run: bool, batch_size: int) -> dict:
 
 def _record_sample(rpt: dict, symbol: str, bar_time: datetime,
                    payload: dict, note: str):
-    if len(rpt["sample_issues"]) >= 5:
+    if len(rpt["sample_issues"]) >= MAX_SAMPLE_ISSUES:
         return
     rpt["sample_issues"].append({
         "symbol":   symbol,
@@ -826,7 +838,7 @@ def print_validation_report(vr: dict):
                   f"{v['no_ticks_to_repair']:>9,}")
 
         print("\n  Sample issue rows (up to 5 per symbol/day):")
-        for (sym, day), v in problem_rows[:10]:
+        for (sym, day), v in problem_rows[:MAX_DETAILED_PROBLEM_ROWS]:
             for sample in v["sample_issues"][:2]:
                 print(f"    {sym} {day}  bar_time={sample['bar_time']}  "
                       f"Bid={sample['Bid']}  Ask={sample['Ask']}  "
