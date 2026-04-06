@@ -46,3 +46,9 @@ runtime/postgres-local.properties
 backtest_trades_log*.csv
 tsla_live_trade_logs*.txt
 trades.csv
+
+### Databento bridge local files ###
+databento_ibkr_bridge/.venv/
+databento_ibkr_bridge/.env
+runtime/databento.env
+
