@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./start_all_databento_bots.sh [--start] [--symbols=CSV] [--exclude=CSV] [--max-trades=N] [--tee] [--tee-db] [--stagger-seconds=N] [--ibkr-client-cap=N] [--allow-over-ibkr-client-cap] [--ensure-ibkr] [--skip-ibkr-preflight] [--ibkr-shared-gateway] [--no-ibkr-shared-gateway] [--ibkr-shared-gateway-host=HOST] [--ibkr-shared-gateway-port=PORT] [--ibkr-shared-gateway-skip-direct-connection] [--ibkr-shared-gateway-allow-direct-fallback] [--startup-history-seconds=N] [--startup-history-schema=SCHEMA] [--list] [-- <extra run_symbol args...>]
+  ./start_all_databento_bots.sh [--start] [--symbols=CSV] [--exclude=CSV] [--max-trades=N] [--tee] [--tee-db] [--stagger-seconds=N] [--ibkr-client-cap=N] [--allow-over-ibkr-client-cap] [--ensure-ibkr] [--skip-ibkr-preflight] [--skip-local-data-preflight] [--ibkr-shared-gateway] [--no-ibkr-shared-gateway] [--ibkr-shared-gateway-host=HOST] [--ibkr-shared-gateway-port=PORT] [--ibkr-shared-gateway-skip-direct-connection] [--ibkr-shared-gateway-allow-direct-fallback] [--startup-history-seconds=N] [--startup-history-schema=SCHEMA] [--list] [-- <extra run_symbol args...>]
 
 Behavior:
   - Discovers Databento bot configs from runtime/databento/bots/trading-*.properties.
@@ -12,6 +12,7 @@ Behavior:
   - Use --start to actually launch all selected bots in the background.
   - In --start mode, the script first runs a preflight preview for every selected symbol and aborts if any one fails.
   - Bulk preview/start always require an already-built packaged jar; they never trigger a Maven rebuild.
+  - Bulk preview/start first verify startup-critical model/config data is present locally and not hidden behind broken external-disk symlinks.
   - In --start mode, the script automatically waits for IBKR to be reachable before launch unless you pass --skip-ibkr-preflight.
   - Bulk launch enables the shared IBKR gateway by default and points every symbol bot at the same gateway host/port.
   - By default the bulk launcher also sets trading.ibkr.shared-gateway.skip-direct-connection=true, so symbol bots do not consume one direct IBKR API client each.
@@ -42,6 +43,7 @@ gateway_probe_script="$repo_root/databento_ibkr_bridge/src/databento_ibkr_bridge
 run_symbol_script="$repo_root/run_symbol.sh"
 ensure_ibkr_script="$repo_root/ensure_ibkr_workstation.sh"
 start_shared_ibkr_gateway_script="$repo_root/start_shared_ibkr_gateway.sh"
+local_startup_data_verifier_script="$repo_root/verify_databento_local_startup_data.sh"
 jar_path="$repo_root/target/trading-agent-0.0.1-SNAPSHOT.jar"
 default_direct_ibkr_client_cap=32
 
@@ -49,6 +51,7 @@ start_mode=0
 tee_mode=0
 tee_db_mode=0
 ensure_ibkr_mode="auto"
+local_data_preflight_enabled=1
 list_mode=0
 symbols_csv=""
 exclude_csv=""
@@ -417,6 +420,9 @@ while [[ $# -gt 0 ]]; do
     --skip-ibkr-preflight|--no-ensure-ibkr)
       ensure_ibkr_mode="no"
       ;;
+    --skip-local-data-preflight)
+      local_data_preflight_enabled=0
+      ;;
     --list)
       list_mode=1
       ;;
@@ -606,7 +612,11 @@ case "$ibkr_shared_gateway_ack_timeout_ms" in
     ;;
 esac
 
-mkdir -p "$launch_dir"
+mkdir -p \
+  "$launch_dir" \
+  "$repo_root/runtime/databento/logs" \
+  "$repo_root/runtime/databento/output" \
+  "$repo_root/runtime/databento/state"
 
 all_symbols=()
 while IFS= read -r symbol; do
@@ -699,6 +709,25 @@ printf '[BULK-LAUNCH] direct_ibkr_symbols=%s shared_gateway_only_symbols=%s\n' "
 
 if [[ $list_mode -eq 1 ]]; then
   exit 0
+fi
+
+if [[ $local_data_preflight_enabled -eq 1 ]]; then
+  if [[ ! -x "$local_startup_data_verifier_script" ]]; then
+    echo "[BULK-LAUNCH][ERROR] Missing or non-executable local startup data verifier: $local_startup_data_verifier_script" >&2
+    exit 1
+  fi
+  selected_symbols_csv="$(printf '%s,' "${selected_symbols[@]}" | sed 's/,$//')"
+  local_data_verifier_args=("--symbols=$selected_symbols_csv")
+  if [[ $tee_mode -eq 1 ]]; then
+    local_data_verifier_args+=(--tee)
+  fi
+  if [[ ${#extra_args[@]} -gt 0 ]]; then
+    local_data_verifier_args+=(-- "${extra_args[@]}")
+  fi
+  log "verifying local startup data for selected symbols"
+  "$local_startup_data_verifier_script" "${local_data_verifier_args[@]}"
+else
+  log "skipping local startup data preflight by request"
 fi
 
 ensure_bulk_shared_prereqs
