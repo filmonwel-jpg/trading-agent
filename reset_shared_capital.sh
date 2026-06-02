@@ -67,10 +67,12 @@ check_mode = bool(int(sys.argv[2]))
 reset_mode = bool(int(sys.argv[3]))
 force_mode = bool(int(sys.argv[4]))
 runtime_dir = repo_root / 'runtime'
-prop_files = sorted(runtime_dir.glob('trading-*.properties'))
+prop_files = sorted((runtime_dir / 'databento' / 'bots').glob('trading-*.properties'))
+if not prop_files:
+    prop_files = sorted(runtime_dir.glob('trading-*.properties'))
 
 if not prop_files:
-    print('[RESET][ERROR] No runtime/trading-*.properties files found.', file=sys.stderr)
+    print('[RESET][ERROR] No bot properties files found under runtime/databento/bots or runtime/.', file=sys.stderr)
     sys.exit(1)
 
 

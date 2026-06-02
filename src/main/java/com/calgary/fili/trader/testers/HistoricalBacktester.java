@@ -2,10 +2,10 @@ package com.calgary.fili.trader.testers;
 
 import com.calgary.fili.trader.bot.trader.IBKRTrader;
 import com.calgary.fili.trader.bot.strategy.PingPongStrategy;
-import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -13,8 +13,11 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class HistoricalBacktester extends IBKRTrader {
@@ -82,6 +85,17 @@ public class HistoricalBacktester extends IBKRTrader {
     }
 
     public void runBacktest(String csvFilePath) {
+        String source = System.getProperty("backtest.source", "csv").trim().toLowerCase(Locale.US);
+        if ("databento".equals(source) || Boolean.parseBoolean(System.getProperty("backtest.useDatabentoHistoricalStream", "false"))) {
+            flowError("BACKTEST", "Databento historical streaming has moved to DatabentoHistoricalStreamingBacktester. Use scripts/run_databento_historical_streaming_backtest_20260523.sh instead of HistoricalBacktester.");
+            return;
+        }
+
+        if (Boolean.parseBoolean(System.getProperty("backtest.useDatabentoReplayProvider", "false"))) {
+            runBacktestWithDatabentoReplayProvider(csvFilePath);
+            return;
+        }
+
         flowInfo("BACKTEST", "==============================================");
         flowInfo("BACKTEST", "INITIATING 5-SECOND HISTORICAL BACKTEST");
         flowInfo("BACKTEST", "Reading data from: " + csvFilePath);
@@ -284,6 +298,150 @@ public class HistoricalBacktester extends IBKRTrader {
         } catch (Exception e) {
             flowError("BACKTEST", "Error reading CSV: " + e.getMessage());
         }
+    }
+
+    private void runBacktestWithDatabentoReplayProvider(String csvFilePath) {
+        String cadence = System.getProperty("backtest.databentoReplayCadence", "5s");
+        flowInfo("BACKTEST", "==============================================");
+        flowInfo("BACKTEST", "INITIATING DATABENTO HISTORICAL REPLAY PROVIDER BACKTEST cadence=" + cadence);
+        flowInfo("BACKTEST", "Reading data from: " + csvFilePath);
+        flowInfo("BACKTEST", "Writing trades to: " + getTradeLogFile());
+        flowInfo("BACKTEST", "==============================================");
+
+        if (testStrategy == null) {
+            initializeStrategyFromProperties(null);
+        }
+
+        int processedRows = 0;
+        int skippedRows = 0;
+        try {
+            DatabentoHistoricalReplayProvider provider = DatabentoHistoricalReplayProvider.fromCsv(cadence, csvFilePath);
+            for (DatabentoHistoricalReplayProvider.ReplayBar event : provider.events()) {
+                try {
+                    LocalDateTime rowDateTime = event.timestamp();
+                    testStrategy.setCurrentMarketTime(rowDateTime);
+                    testStrategy.onOptionVolumeUpdate(event.putVolume(), event.callVolume());
+                    testStrategy.onQuoteSnapshot(event.bid(), event.ask(), event.bidSize(), event.askSize(), 0.0);
+                    testStrategy.on5SecondBar(
+                        rowDateTime.atZone(MARKET_ZONE).toEpochSecond(),
+                        event.open(),
+                        event.high(),
+                        event.low(),
+                        event.close(),
+                        event.volume(),
+                        event.wap()
+                    );
+                    drainQueue();
+                    processedRows++;
+                } catch (Exception rowException) {
+                    skippedRows++;
+                    flowError("BACKTEST.REPLAY", "Skipped replay event reason=" + rowException.getMessage());
+                }
+            }
+        } catch (Exception exception) {
+            flowError("BACKTEST.REPLAY", "Replay provider failed: " + exception.getMessage());
+        }
+
+        flowInfo("BACKTEST", "Replay provider backtest completed. processedRows=" + processedRows + " skippedRows=" + skippedRows);
+        if (testStrategy != null) {
+            testStrategy.stop();
+        }
+    }
+
+    private void runBacktestWithDatabentoHistoricalStream() {
+        String cadence = System.getProperty("backtest.databentoReplayCadence", "5s");
+        String symbol = configuredSymbol();
+        List<String> command = buildDatabentoHistoricalStreamCommand(symbol);
+        flowInfo("BACKTEST", "==============================================");
+        flowInfo("BACKTEST", "INITIATING DATABENTO HISTORICAL STREAM BACKTEST cadence=" + cadence + " symbol=" + symbol);
+        flowInfo("BACKTEST", "Streaming command: " + String.join(" ", command));
+        flowInfo("BACKTEST", "Writing trades to: " + getTradeLogFile());
+        flowInfo("BACKTEST", "==============================================");
+
+        if (testStrategy == null) {
+            initializeStrategyFromProperties(symbol);
+        }
+
+        int processedRows = 0;
+        int skippedRows = 0;
+        try {
+            Path workingDirectory = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+            DatabentoHistoricalReplayProvider provider = DatabentoHistoricalReplayProvider.fromDatabentoHistoricalStream(
+                cadence,
+                command,
+                workingDirectory,
+                symbol
+            );
+            for (DatabentoHistoricalReplayProvider.ReplayBar event : provider.events()) {
+                try {
+                    replayDatabentoBar(event);
+                    processedRows++;
+                } catch (Exception rowException) {
+                    skippedRows++;
+                    flowError("BACKTEST.STREAM", "Skipped stream event reason=" + rowException.getMessage());
+                }
+            }
+        } catch (Exception exception) {
+            flowError("BACKTEST.STREAM", "Databento historical stream failed: " + exception.getMessage());
+        }
+
+        flowInfo("BACKTEST", "Databento historical stream backtest completed. processedRows=" + processedRows + " skippedRows=" + skippedRows);
+        if (testStrategy != null) {
+            testStrategy.stop();
+        }
+    }
+
+    private List<String> buildDatabentoHistoricalStreamCommand(String symbol) {
+        List<String> command = new ArrayList<>();
+        command.add(System.getProperty("backtest.databento.python", "python3"));
+        command.add(System.getProperty("backtest.databento.streamer", "scripts/databento_historical_streamer.py"));
+        command.add("--source");
+        command.add("api");
+        command.add("--symbols");
+        command.add(symbol);
+        addOptionalArg(command, "--start", System.getProperty("backtest.databento.start", ""));
+        addOptionalArg(command, "--end", System.getProperty("backtest.databento.end", ""));
+        addOptionalArg(command, "--equity-dataset", System.getProperty("backtest.databento.equityDataset", ""));
+        addOptionalArg(command, "--equity-schema", System.getProperty("backtest.databento.equitySchema", ""));
+        addOptionalArg(command, "--equity-stype-in", System.getProperty("backtest.databento.equityStypeIn", ""));
+        addOptionalArg(command, "--options-dataset", System.getProperty("backtest.databento.optionsDataset", ""));
+        addOptionalArg(command, "--options-schema", System.getProperty("backtest.databento.optionsSchema", ""));
+        addOptionalArg(command, "--options-stype-in", System.getProperty("backtest.databento.optionsStypeIn", ""));
+        if (Boolean.parseBoolean(System.getProperty("backtest.databento.dryRun", "false"))) {
+            command.add("--dry-run");
+        }
+        return command;
+    }
+
+    private static void addOptionalArg(List<String> command, String flag, String value) {
+        if (value != null && !value.isBlank()) {
+            command.add(flag);
+            command.add(value.trim());
+        }
+    }
+
+    private String configuredSymbol() {
+        if (testStrategy != null && testStrategy.getSymbol() != null && !testStrategy.getSymbol().isBlank()) {
+            return testStrategy.getSymbol().trim().toUpperCase(Locale.US);
+        }
+        return System.getProperty("backtest.symbol", "TSLA").trim().toUpperCase(Locale.US);
+    }
+
+    private void replayDatabentoBar(DatabentoHistoricalReplayProvider.ReplayBar event) {
+        LocalDateTime rowDateTime = event.timestamp();
+        testStrategy.setCurrentMarketTime(rowDateTime);
+        testStrategy.onOptionVolumeUpdate(event.putVolume(), event.callVolume());
+        testStrategy.onQuoteSnapshot(event.bid(), event.ask(), event.bidSize(), event.askSize(), 0.0);
+        testStrategy.on5SecondBar(
+            rowDateTime.atZone(MARKET_ZONE).toEpochSecond(),
+            event.open(),
+            event.high(),
+            event.low(),
+            event.close(),
+            event.volume(),
+            event.wap()
+        );
+        drainQueue();
     }
 
     @Override

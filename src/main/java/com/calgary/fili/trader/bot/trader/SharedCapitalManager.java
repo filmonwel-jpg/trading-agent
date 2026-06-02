@@ -13,6 +13,23 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 
+/**
+ * Cross-process capital reservation coordinator.
+ *
+ * <p>Each symbol bot runs in its own JVM, so in-memory accounting is not enough to prevent the fleet from
+ * overspending a shared notional budget. This manager uses one small properties file plus an OS-level file lock
+ * as the serialization point for all reservation mutations.</p>
+ *
+ * <p>Why a file lock instead of a database transaction here?</p>
+ * <ul>
+ *   <li>it works locally with minimal operational dependencies</li>
+ *   <li>every bot can participate without a separate service process</li>
+ *   <li>the critical section is tiny: read state, update reservations, persist, release lock</li>
+ * </ul>
+ *
+ * <p>Important invariant: every reservation-changing method must go through {@code withLockedState(...)} so the
+ * state file remains the single source of truth across many symbol processes.</p>
+ */
 public class SharedCapitalManager {
     private static final String TOTAL_NOTIONAL_KEY = "total.notional";
     private static final String UPDATED_AT_KEY = "updated.at";
@@ -43,6 +60,9 @@ public class SharedCapitalManager {
     }
 
     public ReservationDecision tryReserve(String symbol, double requestedNotional) {
+        // Reservation means "this symbol intends to consume up to this notional budget".
+        // We overwrite the symbol's existing reservation rather than incrementing blindly so retries/requotes can
+        // converge on the latest intended exposure without leaking old reservations.
         if (!enabled) {
             Snapshot snapshot = snapshot();
             return new ReservationDecision(true, "shared-capital-disabled", snapshot);
@@ -121,6 +141,8 @@ public class SharedCapitalManager {
     }
 
     public ReservationDecision reconcilePosition(String symbol, int position, double referencePrice, double fallbackNotional) {
+        // Reconciliation is the repair path used after fills/sync events. Instead of reasoning from pending order
+        // intent, we derive what the reservation should be from the actual broker position and overwrite the file.
         if (!enabled) {
             Snapshot snapshot = snapshot();
             return new ReservationDecision(true, "shared-capital-disabled", snapshot);
@@ -169,6 +191,8 @@ public class SharedCapitalManager {
     }
 
     private <T> T withLockedState(StateFunction<T> action) throws IOException {
+        // This method is the true concurrency boundary for shared capital.
+        // The file lock ensures read-modify-write is atomic across all JVM processes that cooperate on the same file.
         Path parent = stateFile.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
@@ -198,6 +222,8 @@ public class SharedCapitalManager {
     }
 
     private static final class State {
+        // Mutable view of the on-disk properties file while the file lock is held.
+        // The outer manager never exposes this directly; callers only get immutable snapshots/decisions.
         private final FileChannel channel;
         private final Path stateFile;
         private final Properties props;
@@ -270,6 +296,8 @@ public class SharedCapitalManager {
         }
 
         void persist() throws IOException {
+            // Persist by rewriting the reservation section under the held lock. The file is intentionally small, so a
+            // full rewrite keeps the format simple and avoids partial in-place update complexity.
             Properties next = new Properties();
             next.putAll(props);
             next.setProperty(TOTAL_NOTIONAL_KEY, format(totalNotional));

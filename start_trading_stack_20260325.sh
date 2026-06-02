@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="/Users/filmonghezehey/trading-agent"
+repo_root="$(cd "$(dirname "$0")" && pwd)"
 runtime_dir="$repo_root/runtime"
 mkdir -p "$runtime_dir"
 

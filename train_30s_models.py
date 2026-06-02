@@ -37,16 +37,21 @@ DEFAULT_CSV_FILE = Path(__file__).resolve().parent / "TSLA_30Sec_Historical_Bulk
 DEFAULT_SOURCE_5S_CLEAN_FILE = Path(__file__).resolve().parent / "TSLA_5Sec_Historical_Bulk_20260228_1558_clean.csv"
 AUTO_BUILD_30S_IF_MISSING = os.getenv('AUTO_BUILD_30S_IF_MISSING', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
-# Hybrid targets for Entries (best overall from 3-way comparison)
-ENTRY_PROFIT_PCT = 0.0014    # +0.14%
-ENTRY_RISK_PCT = 0.0030      # -0.30%
+# Stronger targets for Entries (enforce positive R and handle costs better)
+ENTRY_PROFIT_PCT = 0.0035    # +0.35%
+ENTRY_RISK_PCT = 0.0025      # -0.25%
+ENTRY_FILL_MODE = os.getenv('ENTRY_FILL_MODE', 'next_open').strip().lower()
+ENTRY_SLIPPAGE_BPS = float(os.getenv('ENTRY_SLIPPAGE_BPS', '2.0'))
+EXIT_SLIPPAGE_BPS = float(os.getenv('EXIT_SLIPPAGE_BPS', '2.0'))
+MIN_NET_R_MULTIPLE = float(os.getenv('MIN_NET_R_MULTIPLE', '1.2'))
+SUPPORTED_ENTRY_FILL_MODES = {'current_close', 'next_open', 'next_open_with_slippage'}
 
-# Hybrid targets for Exits
-EXIT_DROP_PCT = 0.0009       # 0.09%
-EXIT_RISK_PCT = 0.0017       # 0.17%
+# Adjusted targets for Exits to act as material hazard/unwind detectors
+EXIT_DROP_PCT = 0.0020       # 0.20%
+EXIT_RISK_PCT = 0.0010       # 0.10%
 
-# CHANGED: 10 bars * 30 seconds = 5 minutes lookahead
-FUTURE_WINDOW_BARS = 10      
+# CHANGED: 20 bars * 30 seconds = 10 minutes lookahead for cleaner follow-through detection
+FUTURE_WINDOW_BARS = 20      
 
 # Walk-Forward Settings
 N_SPLITS = 5                 # Number of sliding windows to test
@@ -58,9 +63,12 @@ USE_EXTENDED_FEATURES = False
 
 # Optional training-only meta features emitted by build_30s_from_5s_csv.py producer baselines.
 # Keep disabled by default so production Java shape remains unchanged unless explicitly enabled.
-USE_META_PRODUCER_FEATURES = False
+USE_META_PRODUCER_FEATURES = os.getenv('USE_META_PRODUCER_FEATURES', '0').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_NEWS_BAR_FEATURES = os.getenv('USE_NEWS_BAR_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_REGIME_PROB_FEATURES = os.getenv('USE_REGIME_PROB_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+TRAIN_LEGACY_30S_EXIT_MODELS = os.getenv('TRAIN_LEGACY_30S_EXIT_MODELS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+UPDATE_CANONICAL_MODEL_ALIASES = os.getenv('UPDATE_CANONICAL_MODEL_ALIASES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+MODEL_EXPORTS_ROOT = Path(os.getenv('MODEL_EXPORTS_ROOT', 'model_exports')).expanduser()
 
 MODEL_FAMILY = os.getenv('MODEL_FAMILY', 'random_forest').strip().lower()
 REGIME_MODEL_FAMILY = os.getenv('REGIME_MODEL_FAMILY', MODEL_FAMILY).strip().lower()
@@ -150,54 +158,19 @@ MIN_REGIME_SIGNALS = 25
 MIN_OPEN30_ROWS = 800
 MIN_OPEN30_SIGNALS = 20
 
+# --- CONFIGURATION: DERIVED PARAMETERS ---
+# CHANGED: 20 bars * 30 seconds = 10 minutes lookahead
+FUTURE_WINDOW_SECONDS = FUTURE_WINDOW_BARS * 30
 
-def ensure_training_csv_available(csv_file, source_5s_clean_file):
-    csv_file = Path(csv_file)
-    source_5s_clean_file = Path(source_5s_clean_file) if source_5s_clean_file else DEFAULT_SOURCE_5S_CLEAN_FILE
-
-    if csv_file.exists():
-        return True
-
-    if not AUTO_BUILD_30S_IF_MISSING:
-        return False
-
-    if not source_5s_clean_file.exists():
-        return False
-
-    try:
-        from build_30s_from_5s_csv import build_30s_from_5s_csv
-        print(f">>> 30s dataset missing. Auto-building from {source_5s_clean_file.name}...")
-        build_30s_from_5s_csv(str(source_5s_clean_file), str(csv_file), add_meta_features=True)
-    except Exception as exc:
-        print(f"ERROR: Failed to auto-build 30s dataset from clean 5s source: {exc}")
-        return False
-
-    return csv_file.exists()
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Train/export 30-second trade and regime models from a chosen 30s CSV.'
-    )
-    parser.add_argument(
-        '--input-csv',
-        type=str,
-        default=str(DEFAULT_CSV_FILE),
-        help='Path to the 30-second training CSV (defaults to the repo TSLA training file).',
-    )
-    parser.add_argument(
-        '--source-5s-csv',
-        type=str,
-        default=str(DEFAULT_SOURCE_5S_CLEAN_FILE),
-        help='Optional clean 5s CSV to auto-build the 30s file when --input-csv is missing.',
-    )
-    return parser.parse_args()
+# --- CONFIGURATION: FEATURE ENGINEERING PARAMETERS ---
+# --- CONFIGURATION: MODEL TRAINING PARAMETERS ---
 
 # Threshold optimization on probabilities
 # Slightly stricter floors reduce fold collapse where thresholding predicts almost no positives.
 MIN_RECALL = 0.10
 MIN_PRED_POS_RATE = 0.04
-THRESHOLD_GRID = np.arange(0.30, 0.91, 0.02)
+MIN_TUNED_THRESHOLD = 0.60
+THRESHOLD_GRID = np.arange(MIN_TUNED_THRESHOLD, 0.91, 0.02)
 # Adaptive thresholding controls (relative to calibration label prevalence).
 MIN_POS_FRACTION_OF_BASE = 0.20
 TARGET_POS_FRACTION_OF_BASE = 0.35
@@ -284,8 +257,77 @@ def build_classifier(model_family='random_forest', random_state=42, multi_class=
     return build_rf_classifier(random_state=random_state)
 
 
+def ensure_training_csv_available(csv_file, source_5s_clean_file):
+    csv_file = Path(csv_file)
+    source_5s_clean_file = Path(source_5s_clean_file) if source_5s_clean_file else DEFAULT_SOURCE_5S_CLEAN_FILE
+
+    if csv_file.exists():
+        return True
+
+    if not AUTO_BUILD_30S_IF_MISSING:
+        return False
+
+    if not source_5s_clean_file.exists():
+        return False
+
+    try:
+        from build_30s_from_5s_csv import build_30s_from_5s_csv
+        print(f">>> 30s dataset missing. Auto-building from {source_5s_clean_file.name}...")
+        build_30s_from_5s_csv(str(source_5s_clean_file), str(csv_file), add_meta_features=True)
+    except Exception as exc:
+        print(f"ERROR: Failed to auto-build 30s dataset from clean 5s source: {exc}")
+        return False
+
+    return csv_file.exists()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Train/export 30-second trade and regime models from a chosen 30s CSV.'
+    )
+    parser.add_argument(
+        '--input-csv',
+        type=str,
+        default=str(DEFAULT_CSV_FILE),
+        help='Path to the 30-second training CSV (defaults to the repo TSLA training file).',
+    )
+    parser.add_argument(
+        '--source-5s-csv',
+        type=str,
+        default=str(DEFAULT_SOURCE_5S_CLEAN_FILE),
+        help='Optional clean 5s CSV to auto-build the 30s file when --input-csv is missing.',
+    )
+    return parser.parse_args()
+
+
+def filter_legacy_exit_model_specs(model_specs, context):
+    if TRAIN_LEGACY_30S_EXIT_MODELS:
+        return model_specs
+    kept = [spec for spec in model_specs if spec[1] not in {'Label_Long_Exit', 'Label_Short_Exit'}]
+    skipped = len(model_specs) - len(kept)
+    if skipped:
+        print(f">>> Skipping {skipped} legacy 30s exit model(s) for {context} (TRAIN_LEGACY_30S_EXIT_MODELS=0).")
+    return kept
+
+
+def _ensure_symbol_column(df):
+    out = df.copy()
+    if 'Symbol' not in out.columns:
+        out['Symbol'] = 'SINGLE'
+    out['Symbol'] = out['Symbol'].astype(str).str.strip().replace('', 'SINGLE').str.upper()
+    return out
+
+
+def _groupby_symbol(df):
+    return df.groupby('Symbol', sort=False)
+
+
+def _groupby_symbol_date(df):
+    return df.groupby(['Symbol', 'Date'], sort=False)
+
+
 def filter_raw_to_regular_session(raw_df):
-    parsed = raw_df.copy()
+    parsed = _ensure_symbol_column(raw_df)
     ts_str = parsed['Timestamp'].astype(str).str.strip()
     parsed_ts = pd.to_datetime(
         ts_str,
@@ -320,7 +362,7 @@ def _hour_bucket(hour):
 
 def calculate_features(df):
     print(">>> Calculating Java-equivalent features (30-second adjusted)...")
-    df = df.copy()
+    df = _ensure_symbol_column(df)
 
     ts_str = df['Timestamp'].astype(str).str.strip()
     df['Timestamp'] = pd.to_datetime(
@@ -335,11 +377,13 @@ def calculate_features(df):
         bad_samples = ts_str[df['Timestamp'].isna()].head(3).tolist()
         raise ValueError(f"Unable to parse some Timestamp values. Examples: {bad_samples}")
 
-    # Keep row order strictly chronological for all walk-forward folds.
-    df = df.sort_values('Timestamp').reset_index(drop=True)
+    # Keep row order strictly chronological within each symbol for all stateful transforms.
+    df = df.sort_values(['Symbol', 'Timestamp']).reset_index(drop=True)
 
     df['Date'] = df['Timestamp'].dt.date
-    
+    symbol_group = _groupby_symbol(df)
+    symbol_date_group = _groupby_symbol_date(df)
+
     # Time of Day (normalized 0-1 for intraday patterns)
     df['Hour'] = df['Timestamp'].dt.hour
     df['Minute'] = df['Timestamp'].dt.minute
@@ -349,55 +393,55 @@ def calculate_features(df):
     # 1. VWAP
     df['TypicalPrice'] = (df['High'] + df['Low'] + df['Close']) / 3.0
     df['VolxTP'] = df['Volume'] * df['TypicalPrice']
-    df['CumVol'] = df.groupby('Date')['Volume'].cumsum()
-    df['CumPv'] = df.groupby('Date')['VolxTP'].cumsum()
+    df['CumVol'] = symbol_date_group['Volume'].cumsum()
+    df['CumPv'] = symbol_date_group['VolxTP'].cumsum()
     df['VWAP'] = df['CumPv'] / df['CumVol']
     df['VWAP'] = df['VWAP'].fillna(df['Close'])
     
     # 2. Daily High/Low
-    df['DayHigh'] = df.groupby('Date')['High'].cummax()
-    df['DayLow'] = df.groupby('Date')['Low'].cummin()
-    
+    df['DayHigh'] = symbol_date_group['High'].cummax()
+    df['DayLow'] = symbol_date_group['Low'].cummin()
+
     # 3. Rolling Windows (On a 30s chart: 12-bar = 6 mins, 60-bar = 30 mins)
-    df['SMA_12'] = df['Close'].rolling(window=12).mean()
-    df['STD_12'] = df['Close'].rolling(window=12).std(ddof=1) 
+    df['SMA_12'] = symbol_group['Close'].transform(lambda s: s.rolling(window=12).mean())
+    df['STD_12'] = symbol_group['Close'].transform(lambda s: s.rolling(window=12).std(ddof=1))
     df['BB_Lower'] = df['SMA_12'] - (2.5 * df['STD_12'])
     df['BB_Upper'] = df['SMA_12'] + (2.5 * df['STD_12'])
-    df['SMA_60'] = df['Close'].rolling(window=60).mean()
-    
+    df['SMA_60'] = symbol_group['Close'].transform(lambda s: s.rolling(window=60).mean())
+
     # 4. MACD
-    df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
-    df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['EMA_12'] = symbol_group['Close'].transform(lambda s: s.ewm(span=12, adjust=False).mean())
+    df['EMA_26'] = symbol_group['Close'].transform(lambda s: s.ewm(span=26, adjust=False).mean())
     df['MACD'] = df['EMA_12'] - df['EMA_26']
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_Signal'] = symbol_group['MACD'].transform(lambda s: s.ewm(span=9, adjust=False).mean())
     df['MACD_Diff'] = df['MACD'] - df['MACD_Signal']
     
     # 5. ATR (12-bar)
-    df['PrevClose'] = df['Close'].shift(1)
-    df['TR'] = np.maximum(df['High'] - df['Low'], 
+    df['PrevClose'] = symbol_group['Close'].shift(1)
+    df['TR'] = np.maximum(df['High'] - df['Low'],
                np.maximum(abs(df['High'] - df['PrevClose']), 
                           abs(df['Low'] - df['PrevClose'])))
-    df['ATR_12'] = df['TR'].ewm(alpha=1/12, adjust=False).mean()
+    df['ATR_12'] = symbol_group['TR'].transform(lambda s: s.ewm(alpha=1/12, adjust=False).mean())
 
     # --- Extended intraday context indicators ---
     # 1) Relative volume vs same minute-of-day baseline
-    minute_median_vol = df.groupby('MinuteOfDay')['Volume'].transform('median')
+    minute_median_vol = df.groupby(['Symbol', 'MinuteOfDay'], sort=False)['Volume'].transform('median')
     df['f_rel_volume_30s'] = df['Volume'] / (minute_median_vol + 1.0)
 
     # 2) Realized volatility regime (20 bars ~= 10 minutes)
-    df['Ret_30s'] = df['Close'].pct_change()
-    df['f_realized_vol_20'] = df['Ret_30s'].rolling(window=20).std(ddof=1)
-    vol_mean = df['f_realized_vol_20'].rolling(window=100).mean()
-    vol_std = df['f_realized_vol_20'].rolling(window=100).std(ddof=1)
+    df['Ret_30s'] = symbol_group['Close'].pct_change()
+    df['f_realized_vol_20'] = symbol_group['Ret_30s'].transform(lambda s: s.rolling(window=20).std(ddof=1))
+    vol_mean = symbol_group['f_realized_vol_20'].transform(lambda s: s.rolling(window=100).mean())
+    vol_std = symbol_group['f_realized_vol_20'].transform(lambda s: s.rolling(window=100).std(ddof=1))
     df['f_realized_vol_z'] = (df['f_realized_vol_20'] - vol_mean) / (vol_std + 1e-9)
 
     # 3) Opening range distances (first 10 bars = first 5 minutes)
     first_10_high = (
-        df.groupby('Date')['High']
+        symbol_date_group['High']
         .transform(lambda s: s.iloc[:10].max() if len(s) > 0 else np.nan)
     )
     first_10_low = (
-        df.groupby('Date')['Low']
+        symbol_date_group['Low']
         .transform(lambda s: s.iloc[:10].min() if len(s) > 0 else np.nan)
     )
     df['f_dist_or_high_atr'] = (first_10_high - df['Close']) / (df['ATR_12'] + 1e-9)
@@ -409,8 +453,8 @@ def calculate_features(df):
         ask = pd.to_numeric(df['Ask'], errors='coerce').fillna(df['Close'])
         mid = (bid + ask) / 2.0
         df['f_spread_pct'] = (ask - bid) / (mid + 1e-9)
-        spread_mean = df['f_spread_pct'].rolling(window=100).mean()
-        spread_std = df['f_spread_pct'].rolling(window=100).std(ddof=1)
+        spread_mean = symbol_group['f_spread_pct'].transform(lambda s: s.rolling(window=100).mean())
+        spread_std = symbol_group['f_spread_pct'].transform(lambda s: s.rolling(window=100).std(ddof=1))
         df['f_spread_z'] = (df['f_spread_pct'] - spread_mean) / (spread_std + 1e-9)
     else:
         df['f_spread_pct'] = 0.0
@@ -436,17 +480,17 @@ def calculate_features(df):
         df['f_signed_flow_30s'] = 0.0
     
     # 6. RSI (14-bar Wilder)
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    delta = symbol_group['Close'].diff()
+    gain = symbol_group['Close'].transform(lambda s: s.diff().where(s.diff() > 0, 0).ewm(alpha=1/14, adjust=False).mean())
+    loss = symbol_group['Close'].transform(lambda s: (-s.diff().where(s.diff() < 0, 0)).ewm(alpha=1/14, adjust=False).mean())
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     df['RSI'] = df['RSI'].fillna(50)
 
     # --- NEW: Price Action & Support/Resistance ---
     # 60-bar (30-minute) local resistance and support
-    df['SwingHigh_60'] = df['High'].rolling(window=60).max()
-    df['SwingLow_60'] = df['Low'].rolling(window=60).min()
+    df['SwingHigh_60'] = symbol_group['High'].transform(lambda s: s.rolling(window=60).max())
+    df['SwingLow_60'] = symbol_group['Low'].transform(lambda s: s.rolling(window=60).min())
 
     # 7. Construct Final 23 Features
     df['f_dist_vwap'] = (df['Close'] - df['VWAP']) / df['VWAP']
@@ -492,9 +536,9 @@ def calculate_features(df):
             out.append(streak)
         return pd.Series(out, index=series.index)
 
-    df['f_red_streak'] = df.groupby('Date', sort=False)['is_red'].apply(_streak).reset_index(level=0, drop=True)
-    df['f_green_streak'] = df.groupby('Date', sort=False)['is_green'].apply(_streak).reset_index(level=0, drop=True)
-    
+    df['f_red_streak'] = symbol_date_group['is_red'].apply(_streak).reset_index(level=[0, 1], drop=True)
+    df['f_green_streak'] = symbol_date_group['is_green'].apply(_streak).reset_index(level=[0, 1], drop=True)
+
     # Use real order-flow/options fields when present, else safe defaults.
     if {'BidVol', 'Volume'}.issubset(df.columns):
         df['f_vol_bid_ratio'] = pd.to_numeric(df['BidVol'], errors='coerce').fillna(0.0) / (df['Volume'] + 1.0)
@@ -696,15 +740,60 @@ def _adaptive_thresholds(hour, atr_norm):
     return entry_profit, entry_risk, exit_drop, exit_risk
 
 
+def _validate_entry_fill_config():
+    if ENTRY_FILL_MODE not in SUPPORTED_ENTRY_FILL_MODES:
+        raise ValueError(
+            f"Unsupported ENTRY_FILL_MODE={ENTRY_FILL_MODE!r}. "
+            f"Supported modes: {sorted(SUPPORTED_ENTRY_FILL_MODES)}"
+        )
+
+    round_trip_cost_pct = (ENTRY_SLIPPAGE_BPS + EXIT_SLIPPAGE_BPS) / 10000.0
+    net_reward = max(0.0, ENTRY_PROFIT_PCT - round_trip_cost_pct)
+    net_risk = ENTRY_RISK_PCT + round_trip_cost_pct
+    net_r_multiple = net_reward / net_risk if net_risk > 0.0 else 0.0
+    print(
+        ">>> Entry fill config: "
+        f"mode={ENTRY_FILL_MODE} entry_slippage_bps={ENTRY_SLIPPAGE_BPS:.2f} "
+        f"exit_slippage_bps={EXIT_SLIPPAGE_BPS:.2f} net_r_multiple={net_r_multiple:.2f}"
+    )
+    if net_r_multiple < MIN_NET_R_MULTIPLE:
+        print(
+            "WARNING: Net entry reward/risk after configured costs is below "
+            f"MIN_NET_R_MULTIPLE={MIN_NET_R_MULTIPLE:.2f}: {net_r_multiple:.2f}"
+        )
+
+
+def _entry_fill_price(side, i, opens, closes):
+    if ENTRY_FILL_MODE == 'current_close':
+        fill = closes[i]
+    else:
+        fill = opens[i + 1] if np.isfinite(opens[i + 1]) else closes[i + 1]
+
+    if ENTRY_FILL_MODE == 'next_open_with_slippage':
+        slippage = ENTRY_SLIPPAGE_BPS / 10000.0
+        if side == 'long':
+            fill *= (1.0 + slippage)
+        elif side == 'short':
+            fill *= (1.0 - slippage)
+
+    return float(fill)
+
+
 def generate_labels(df):
-    print(">>> Generating 4 event-ordered path-dependent labels...")
+    if TRAIN_LEGACY_30S_EXIT_MODELS:
+        print(">>> Generating 4 event-ordered path-dependent labels...")
+    else:
+        print(">>> Generating entry labels only; legacy 30s exit labels/model training disabled.")
+    _validate_entry_fill_config()
 
     df = df.copy()
     n = len(df)
     closes = df['Close'].values
+    opens = df['Open'].values if 'Open' in df.columns else closes
     highs = df['High'].values
     lows = df['Low'].values
     dates = df['Date'].values
+    symbols = df['Symbol'].values if 'Symbol' in df.columns else np.asarray(['SINGLE'] * n)
     hours = df['Hour'].values
     atr_norm = (df['ATR_12'] / df['Close']).replace([np.inf, -np.inf], np.nan).fillna(0.0010).values
 
@@ -717,13 +806,22 @@ def generate_labels(df):
     for i in range(usable):
         ep, er, xd, xr = _adaptive_thresholds(hours[i], atr_norm[i])
         current_date = dates[i]
+        current_symbol = symbols[i]
 
         c = closes[i]
-        le_tp = c * (1.0 + ep)
-        le_sl = c * (1.0 - er)
+        can_use_next_open = (i + 1 < n and dates[i + 1] == current_date and symbols[i + 1] == current_symbol)
+        if ENTRY_FILL_MODE == 'current_close' or can_use_next_open:
+            long_entry_fill = _entry_fill_price('long', i, opens, closes)
+            short_entry_fill = _entry_fill_price('short', i, opens, closes)
+        else:
+            long_entry_fill = np.nan
+            short_entry_fill = np.nan
 
-        se_tp = c * (1.0 - ep)
-        se_sl = c * (1.0 + er)
+        le_tp = long_entry_fill * (1.0 + ep)
+        le_sl = long_entry_fill * (1.0 - er)
+
+        se_tp = short_entry_fill * (1.0 - ep)
+        se_sl = short_entry_fill * (1.0 + er)
 
         lx_tp = c * (1.0 - xd)
         lx_sl = c * (1.0 + xr)
@@ -731,75 +829,78 @@ def generate_labels(df):
         sx_tp = c * (1.0 + xd)
         sx_sl = c * (1.0 - xr)
 
-        for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
-            # Never let a label look into the next trading day.
-            if dates[j] != current_date:
-                break
-            h = highs[j]
-            l = lows[j]
-
-            # LONG ENTRY: TP up, SL down.
-            if y_long_entry[i] == 0:
-                le_hit_tp = h >= le_tp
-                le_hit_sl = l <= le_sl
-                if le_hit_tp and le_hit_sl:
+        if np.isfinite(long_entry_fill):
+            for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+                # Never let a label look into the next trading day.
+                if dates[j] != current_date or symbols[j] != current_symbol:
                     break
-                if le_hit_tp:
-                    y_long_entry[i] = 1
+                h = highs[j]
+                l = lows[j]
+
+                # LONG ENTRY: TP up, SL down.
+                if y_long_entry[i] == 0:
+                    le_hit_tp = h >= le_tp
+                    le_hit_sl = l <= le_sl
+                    if le_hit_tp and le_hit_sl:
+                        break
+                    if le_hit_tp:
+                        y_long_entry[i] = 1
+                        break
+                    if le_hit_sl:
+                        break
+
+        if np.isfinite(short_entry_fill):
+            for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+                if dates[j] != current_date or symbols[j] != current_symbol:
                     break
-                if le_hit_sl:
+                h = highs[j]
+                l = lows[j]
+
+                # SHORT ENTRY: TP down, SL up.
+                se_hit_tp = l <= se_tp
+                se_hit_sl = h >= se_sl
+                if se_hit_tp and se_hit_sl:
+                    break
+                if se_hit_tp:
+                    y_short_entry[i] = 1
+                    break
+                if se_hit_sl:
                     break
 
-        for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
-            if dates[j] != current_date:
-                break
-            h = highs[j]
-            l = lows[j]
+        if TRAIN_LEGACY_30S_EXIT_MODELS:
+            for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+                if dates[j] != current_date or symbols[j] != current_symbol:
+                    break
+                h = highs[j]
+                l = lows[j]
 
-            # SHORT ENTRY: TP down, SL up.
-            se_hit_tp = l <= se_tp
-            se_hit_sl = h >= se_sl
-            if se_hit_tp and se_hit_sl:
-                break
-            if se_hit_tp:
-                y_short_entry[i] = 1
-                break
-            if se_hit_sl:
-                break
+                # LONG EXIT: trigger down, invalidation up.
+                lx_hit_tp = l <= lx_tp
+                lx_hit_sl = h >= lx_sl
+                if lx_hit_tp and lx_hit_sl:
+                    break
+                if lx_hit_tp:
+                    y_long_exit[i] = 1
+                    break
+                if lx_hit_sl:
+                    break
 
-        for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
-            if dates[j] != current_date:
-                break
-            h = highs[j]
-            l = lows[j]
+            for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
+                if dates[j] != current_date or symbols[j] != current_symbol:
+                    break
+                h = highs[j]
+                l = lows[j]
 
-            # LONG EXIT: trigger down, invalidation up.
-            lx_hit_tp = l <= lx_tp
-            lx_hit_sl = h >= lx_sl
-            if lx_hit_tp and lx_hit_sl:
-                break
-            if lx_hit_tp:
-                y_long_exit[i] = 1
-                break
-            if lx_hit_sl:
-                break
-
-        for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
-            if dates[j] != current_date:
-                break
-            h = highs[j]
-            l = lows[j]
-
-            # SHORT EXIT: trigger up, invalidation down.
-            sx_hit_tp = h >= sx_tp
-            sx_hit_sl = l <= sx_sl
-            if sx_hit_tp and sx_hit_sl:
-                break
-            if sx_hit_tp:
-                y_short_exit[i] = 1
-                break
-            if sx_hit_sl:
-                break
+                # SHORT EXIT: trigger up, invalidation down.
+                sx_hit_tp = h >= sx_tp
+                sx_hit_sl = l <= sx_sl
+                if sx_hit_tp and sx_hit_sl:
+                    break
+                if sx_hit_tp:
+                    y_short_exit[i] = 1
+                    break
+                if sx_hit_sl:
+                    break
 
     df['Label_Long_Entry'] = y_long_entry
     df['Label_Short_Entry'] = y_short_entry
@@ -890,8 +991,7 @@ def train_regime_classifier(X, y, dates, feature_count, out_dir, model_family='r
     final_model.fit(X, y)
 
     versioned_path = out_dir / "regime_classifier.onnx"
-    resources_path = Path("src") / "main" / "resources" / "regime_classifier.onnx"
-    export_to_onnx(final_model, feature_count, str(versioned_path), alias_filename=str(resources_path))
+    export_to_onnx(final_model, feature_count, str(versioned_path), alias_filename=maybe_alias_path("regime_classifier.onnx"))
 
     avg_acc = float(np.mean(fold_acc)) if fold_acc else 0.0
     print(f">>> Regime classifier average walk-forward accuracy: {avg_acc:.2%}")
@@ -928,6 +1028,7 @@ def train_regime_specific_models(df, feature_cols, out_dir):
         ("LONG EXIT (Top Detector)", "Label_Long_Exit", "long_exit.onnx"),
         ("SHORT EXIT (Bottom Detector)", "Label_Short_Exit", "short_exit.onnx"),
     ]
+    model_specs = filter_legacy_exit_model_specs(model_specs, 'regime-specific training')
 
     summary_rows = []
     for regime_name in ['choppy', 'trend', 'volatile']:
@@ -965,8 +1066,7 @@ def train_regime_specific_models(df, feature_cols, out_dir):
                 continue
 
             versioned_path = out_dir / versioned_name
-            resources_path = Path("src") / "main" / "resources" / resources_name
-            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=str(resources_path))
+            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(resources_name))
 
             summary_rows.append({
                 'regime': regime_name,
@@ -988,6 +1088,7 @@ def train_open30_models(df, feature_cols, out_dir):
         ("LONG EXIT (Top Detector)", "Label_Long_Exit", "open30_long_exit.onnx"),
         ("SHORT EXIT (Bottom Detector)", "Label_Short_Exit", "open30_short_exit.onnx"),
     ]
+    model_specs = filter_legacy_exit_model_specs(model_specs, 'opening-30m training')
 
     # 09:30:00 <= t < 10:00:00 ET
     open30_mask = (
@@ -1027,8 +1128,7 @@ def train_open30_models(df, feature_cols, out_dir):
             continue
 
         versioned_path = out_dir / filename
-        resources_path = Path("src") / "main" / "resources" / filename
-        export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=str(resources_path))
+        export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(filename))
 
         summary_rows.append({
             'model': model_name,
@@ -1117,8 +1217,14 @@ def export_to_onnx(model, feature_count, filename, alias_filename=None):
         print(f">>> Updated Canonical Model: {alias_filename}")
 
 
+def maybe_alias_path(filename):
+    if not UPDATE_CANONICAL_MODEL_ALIASES:
+        return None
+    return str(Path("src") / "main" / "resources" / filename)
+
+
 def optimize_threshold(y_true, probas):
-    best_thr = 0.50
+    best_thr = MIN_TUNED_THRESHOLD
     best_prec = -1.0
     best_recall = 0.0
     best_pos_rate = 0.0
@@ -1152,8 +1258,8 @@ def optimize_threshold(y_true, probas):
             best_pos_rate = float(pos_rate)
 
     if best_prec < 0:
-        # Fallback: keep default threshold
-        return 0.50, 0.0, 0.0, 0.0
+        # Fallback: keep production-safe minimum tuned threshold.
+        return MIN_TUNED_THRESHOLD, 0.0, 0.0, 0.0
     return best_thr, best_prec, best_recall, best_pos_rate
 
 def build_day_walk_forward_splits(dates, n_splits=5, day_gap=0):
@@ -1203,7 +1309,7 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
             'total_signals': total_signals,
             'total_rows': len(y),
             'avg_precision': 0.0,
-            'avg_threshold': 0.50,
+            'avg_threshold': MIN_TUNED_THRESHOLD,
             'folds_used': 0,
         }
 
@@ -1238,12 +1344,12 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         if calib_size > 0:
             X_cal = X_train[-calib_size:]
             y_cal = y_train[-calib_size:]
-            cal_proba = model.predict_proba(X_cal)[:, 1]
+            cal_proba = predict_positive_proba(model, X_cal)
             thr, cal_prec, cal_rec, cal_pos = optimize_threshold(y_cal, cal_proba)
         else:
-            thr, cal_prec, cal_rec, cal_pos = (0.5, 0.0, 0.0, 0.0)
+            thr, cal_prec, cal_rec, cal_pos = (MIN_TUNED_THRESHOLD, 0.0, 0.0, 0.0)
 
-        test_proba = model.predict_proba(X_test)[:, 1]
+        test_proba = predict_positive_proba(model, X_test)
         y_pred = (test_proba >= thr).astype(np.int8)
         pred_pos_rate = float(y_pred.mean()) if len(y_pred) else 0.0
         test_pos_rate = float(y_test.mean()) if len(y_test) else 0.0
@@ -1263,7 +1369,7 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         fold += 1
 
     avg_precision = np.mean(precisions) if precisions else 0.0
-    avg_threshold = np.mean(thresholds) if thresholds else 0.5
+    avg_threshold = np.mean(thresholds) if thresholds else MIN_TUNED_THRESHOLD
     if precisions:
         print(f">>> Average Walk-Forward Precision: {avg_precision:.2%}")
         print(f">>> Average Tuned Threshold: {avg_threshold:.2f}")
@@ -1281,6 +1387,18 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         'avg_threshold': float(avg_threshold),
         'folds_used': len(precisions),
     }
+
+
+def predict_positive_proba(model, X):
+    raw = model.predict_proba(X)
+    classes = getattr(model, 'classes_', None)
+    if classes is None:
+        return raw[:, 1] if raw.ndim == 2 and raw.shape[1] > 1 else np.zeros(len(X), dtype=np.float32)
+
+    for idx, class_value in enumerate(classes):
+        if int(class_value) == 1:
+            return raw[:, idx]
+    return np.zeros(len(X), dtype=np.float32)
 
 def ensure_optional_numeric_columns(df, columns, default_value=0.0):
     out = df.copy()
@@ -1337,10 +1455,11 @@ def main():
     source_5s_clean_file = Path(args.source_5s_csv).expanduser().resolve() if args.source_5s_csv else DEFAULT_SOURCE_5S_CLEAN_FILE
 
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    versioned_out_dir = Path("model_exports") / run_tag
+    versioned_out_dir = MODEL_EXPORTS_ROOT / run_tag
 
     print(f">>> Training model family: {_normalize_model_family(MODEL_FAMILY)}")
     print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
+    print(f">>> Train legacy 30s exit models: {TRAIN_LEGACY_30S_EXIT_MODELS}")
 
     print(f">>> Loading historical data from {csv_file}...")
     if not ensure_training_csv_available(csv_file, source_5s_clean_file):
@@ -1449,6 +1568,13 @@ def main():
         ("LONG EXIT (Top Detector)", df_rest['Label_Long_Exit'].values, "long_exit.onnx"),
         ("SHORT EXIT (Bottom Detector)", df_rest['Label_Short_Exit'].values, "short_exit.onnx")
     ]
+    models = [
+        (name, y_data, filename)
+        for name, y_data, filename in models
+        if TRAIN_LEGACY_30S_EXIT_MODELS or filename not in {'long_exit.onnx', 'short_exit.onnx'}
+    ]
+    if not TRAIN_LEGACY_30S_EXIT_MODELS:
+        print(">>> Skipping legacy base 30s exit model training (long_exit.onnx, short_exit.onnx).")
 
     score_rows = []
     for name, y_data, filename in models:
@@ -1456,8 +1582,7 @@ def main():
         exported_path = "-"
         if result['model'] is not None:
             versioned_path = versioned_out_dir / filename
-            resources_path = Path("src") / "main" / "resources" / filename
-            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=str(resources_path))
+            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(filename))
             exported_path = str(versioned_path)
 
         score_rows.append({
@@ -1525,7 +1650,10 @@ def main():
 
     print("\n==================================================")
     print(">>> PIPELINE COMPLETE.")
-    print(">>> All 30-second models have been exported.")
+    if TRAIN_LEGACY_30S_EXIT_MODELS:
+        print(">>> All 30-second models have been exported.")
+    else:
+        print(">>> Entry/regime 30-second models have been exported; legacy exit models were skipped.")
     print(f">>> Versioned copy folder: {versioned_out_dir}")
     print(">>> Drop the .onnx files directly into your new Java branch.")
     print("==================================================")

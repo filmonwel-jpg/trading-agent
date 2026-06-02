@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-03-30 14:30:08",
-  "event": "afternoon-shutdown",
-  "status": "ok",
-  "title": "Trading stack shutdown OK",
-  "message": "Bots flattened, harvester stopped, and IBKR shutdown completed.",
-  "details": "Log: /Users/filmonghezehey/trading-agent/runtime/afternoon-flatten-20260330_142957.log",
+  "timestamp": "2026-05-19 15:41:29",
+  "event": "after-market-flatten",
+  "status": "fail",
+  "title": "After-market flatten needs attention",
+  "message": "One or more selected positions did not flatten cleanly.",
+  "details": "Mode: gateway; Log: /Users/filmonghezehey/trading-agent/worktrees/databento/runtime/after-market-flatten-positions-20260519_154129.log",
   "host": "Filmons-MacBook-Pro.local"
 }

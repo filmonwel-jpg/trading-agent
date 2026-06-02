@@ -36,16 +36,47 @@ build/
 __pycache__/
 *.py[cod]
 
+### OS metadata ###
+.DS_Store
+
 ### Runtime / local state ###
 runtime/git checkout 
 runtime/trading-agent.log
 runtime/trading-agent.log.*
 runtime/postgres-local.properties
+runtime/databento/logs/
+runtime/databento/launchers/
+runtime/databento/state/
+runtime/databento/shared-feed-relay.lock
+runtime/**/*.lock
+runtime/**/*.pid
+runtime/*.log
+runtime/*.log.*
+runtime/**/*_live_trade_logs.txt
+runtime/backtests/
+runtime/logs/
+runtime/databento/snapshots/
+runtime/databento/promotions/
+runtime/lifecycle_micro_*/
+runtime/tmp_*/
+runtime/**/*.csv
+runtime/**/*.json
+hs_err_pid*.log
 
 ### Generated logs and backtests ###
 backtest_trades_log*.csv
 tsla_live_trade_logs*.txt
 trades.csv
+
+### Generated historical/training datasets ###
+/*_1_Sec_Data.csv
+/*_5Sec_Historical_Bulk*.csv
+/*_30Sec_Historical_Bulk*.csv
+/*_5s_warmup_*.csv
+/training_data/**
+
+### Generated model export runs ###
+/model_exports/*/
 
 ### Databento bridge local files ###
 databento_ibkr_bridge/.venv/

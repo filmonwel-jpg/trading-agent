@@ -11,6 +11,10 @@ This project targets microscopic bounce opportunities (roughly **0.05%–0.10%**
 
 ## Architecture Overview
 
+For the current Databento market-data + IBKR execution upgrade flow, see the visual diagram in
+[`docs/databento-ibkr-data-flow.md`](docs/databento-ibkr-data-flow.md), or open
+[`docs/databento-ibkr-data-flow.html`](docs/databento-ibkr-data-flow.html) in a browser if Mermaid appears as code.
+
 ### 1) Live Trading Engine (`IBKRTrader.java` + `PingPongStrategy.java`)
 The live engine executes the strategy in real time and includes a **Synthetic 1-Second Bar Generator** so live data matches backtest assumptions.
 
@@ -229,6 +233,42 @@ The helper:
 - refuses reset if any reachable bot is non-flat unless `--force` is supplied
 - uses `POST /api/control/shared-capital/reset` when a bot is reachable
 - falls back to direct file cleanup when no bot is running yet
+
+For bulk shutdowns, use `stop_all_databento_bots.sh`:
+
+```bash
+./stop_all_databento_bots.sh --dry-run
+./stop_all_databento_bots.sh --symbols=TSLA --copy-live-logs-on-stop
+```
+
+Notes:
+- log copying during stop is **disabled by default**
+- pass `--copy-live-logs-on-stop` when you want a pre-stop snapshot of each selected bot's current app log, trade CSV, and mirrored live trade log
+- snapshots are written under `runtime/databento/snapshots/<date>_pre-stop_<timestamp>/`
+- each snapshot run also writes a `manifest.txt` describing the copied files
+
+To move a snapshot folder to the external Databento vault and leave a local symlink behind, use:
+
+```bash
+./move_snapshot_to_databento_disk.sh --dry-run
+./move_snapshot_to_databento_disk.sh
+./move_snapshot_to_databento_disk.sh --all
+./move_snapshot_to_databento_disk.sh 2026-05-28_pre-stop_20260528T131819
+```
+
+When no folder name is supplied, the helper selects the latest local dated folder under `runtime/databento/snapshots`. Use `--all` to offload every remaining local dated snapshot folder. After the external copy is verified and the symlink is created, the original local directory is deleted to free internal disk space. By default it writes to `/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/databento/snapshots`; override with `DATABENTO_VAULT`, `--vault`, or `--dest-base` if needed.
+
+For repo-wide generated-data offload, GitHub push-size checks, and resume steps after accidental external-disk removal, see [`docs/repository_offload_and_github_push.md`](docs/repository_offload_and_github_push.md).
+
+For an after-market position-only flatten that does **not** stop bots, harvesters, or IBKR, use `after_market_flatten_positions_mt.sh`:
+
+```bash
+./after_market_flatten_positions_mt.sh --force-run --dry-run
+./after_market_flatten_positions_mt.sh --force-run --symbols=AAPL,NVDA
+./after_market_flatten_positions_mt.sh --force-run --mode=bot --symbols=AAPL,NVDA
+```
+
+By default it runs only once per weekday inside the 14:05-14:30 `America/Denver` window and uses `flatten_all_via_shared_ibkr_gateway.py --execute` for broker-position flattening. Because this is an after-market workflow, gateway mode submits extended-hours limit orders instead of market orders: short covers use current ask + 1%, and long-position sells use current bid - 1%, with `outsideRth` / after-hours allowed. Override the offset or TIF with `AFTER_MARKET_LIMIT_OFFSET_PCT` and `AFTER_MARKET_LIMIT_TIF` if needed. The companion `com.tradingagent.after-market-flatten-positions-mt.plist` can be loaded with `launchctl` if you want launchd to call the gated script every minute.
 
 See `Monday_Runbook.md` for a concrete pre-open and launch checklist.
 

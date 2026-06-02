@@ -1,0 +1,1 @@
+/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/cvx_live_trade_logs.txt

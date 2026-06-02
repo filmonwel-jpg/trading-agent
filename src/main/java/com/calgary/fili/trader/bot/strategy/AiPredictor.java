@@ -32,6 +32,7 @@ public class AiPredictor {
 
     public record PredictionOutcome(boolean predictedPositive, double positiveProbability) {}
     public record ClassPredictionOutcome(int classLabel, double confidence) {}
+    public record MultiClassPredictionOutcome(int classLabel, double confidence, Map<Integer, Double> classProbabilities) {}
 
     public AiPredictor(String modelFileName) throws Exception {
         this(modelFileName, null);
@@ -65,7 +66,18 @@ public class AiPredictor {
         this.expectedFeatureCount = detectedFeatures > 0 ? detectedFeatures : DEFAULT_EXPECTED_FEATURES;
         flowInfo("AI.INIT", "Successfully loaded model=" + modelFileName + " source=" + modelSource);
         flowData("AI.INIT", "model=" + modelFileName + " input=" + inputName + " expectedFeatures=" + expectedFeatureCount + " source=" + modelSource);
-        if (expectedFeatureCount == 25 || expectedFeatureCount == 30 || expectedFeatureCount == 34) {
+        if (expectedFeatureCount == 25
+            || expectedFeatureCount == 30
+            || expectedFeatureCount == 31
+            || expectedFeatureCount == 34
+            || expectedFeatureCount == 41
+            || expectedFeatureCount == 44
+            || expectedFeatureCount == 51
+            || expectedFeatureCount == 57
+            || expectedFeatureCount == 61
+            || expectedFeatureCount == 65
+            || expectedFeatureCount == 83
+            || expectedFeatureCount == 93) {
             flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", true, "model=" + modelFileName + " expected=" + expectedFeatureCount);
         } else {
             flowCondition("AI.INIT", "FEATURE_COUNT_SUPPORTED", false, "model=" + modelFileName + " expected=" + expectedFeatureCount + " note=will trim/pad from strategy vector");
@@ -143,11 +155,16 @@ public class AiPredictor {
     }
 
     public ClassPredictionOutcome predictClassWithConfidence(float[] features, int fallbackLabel) {
+        MultiClassPredictionOutcome outcome = predictMultiClassOutcome(features, fallbackLabel);
+        return new ClassPredictionOutcome(outcome.classLabel(), outcome.confidence());
+    }
+
+    public MultiClassPredictionOutcome predictMultiClassOutcome(float[] features, int fallbackLabel) {
         boolean validFeatures = features != null && features.length > 0;
         flowCondition("AI.INPUT", "FEATURE_VECTOR_PRESENT", validFeatures, "model=" + modelFileName + " featureCount=" + (features == null ? 0 : features.length));
         if (!validFeatures) {
             flowError("AI.INPUT", "Features cannot be null or empty model=" + modelFileName + " usingFallbackLabel=" + fallbackLabel);
-            return new ClassPredictionOutcome(fallbackLabel, 0.0);
+            return new MultiClassPredictionOutcome(fallbackLabel, 0.0, Collections.emptyMap());
         }
 
         try {
@@ -184,11 +201,11 @@ public class AiPredictor {
                         + " classLabel=" + predictedLabel
                         + " confidence=" + String.format("%.4f", confidence)
                 );
-                return new ClassPredictionOutcome(predictedLabel, confidence);
+                return new MultiClassPredictionOutcome(predictedLabel, confidence, classProbabilities);
             }
         } catch (Exception e) {
             flowError("AI.RESPONSE", "Class prediction failed model=" + modelFileName + " reason=" + e.getMessage() + " usingFallbackLabel=" + fallbackLabel);
-            return new ClassPredictionOutcome(fallbackLabel, 0.0);
+            return new MultiClassPredictionOutcome(fallbackLabel, 0.0, Collections.emptyMap());
         }
     }
 
@@ -234,6 +251,10 @@ public class AiPredictor {
 
     public boolean shouldBuyDip(float[] features) {
         return predict(features);
+    }
+
+    public int getExpectedFeatureCount() {
+        return expectedFeatureCount;
     }
 
     private long extractLabel(OrtSession.Result result) {

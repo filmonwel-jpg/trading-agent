@@ -20,8 +20,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -29,12 +32,266 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Single-symbol trading strategy implemented as an actor.
+ *
+ * <p>The most important design choice in this class is that strategy state is mutated from exactly one thread:
+ * the internal {@code eventProcessorThread}. External callers such as Databento readers, IBKR callbacks, REST
+ * controllers, and execution acknowledgements do not directly touch strategy state. They enqueue typed events,
+ * and the actor thread applies them in order.</p>
+ *
+ * <p>Why that matters:</p>
+ * <ul>
+ *   <li>Live trading receives callbacks from multiple sources concurrently.</li>
+ *   <li>Position, quote, tape, AI bars, and order acknowledgements must be observed in a consistent order.</li>
+ *   <li>A single-writer design avoids ad-hoc locking around dozens of live state fields.</li>
+ * </ul>
+ *
+ * <p>Data flow inside this class:</p>
+ * <ol>
+ *   <li>1-second or legacy-named source bars arrive and are aggregated into 30-second buckets.</li>
+ *   <li>At bucket close, technical features and regime features are computed.</li>
+ *   <li>The appropriate ONNX models are selected based on opening-window vs regime routing.</li>
+ *   <li>Entry/exit decisions are evaluated.</li>
+ *   <li>Execution requests are emitted back to {@code IBKRTrader}, which performs broker/risk routing.</li>
+ * </ol>
+ *
+ * <p>Execution intent inside this strategy is quote-aware. Entry sizing and exit references now prefer ask/bid
+ * instead of last trade so the strategy's requested prices better match the side it is trying to execute.</p>
+ */
 public class PingPongStrategy implements TradingStrategy {
 
     private enum MarketRegime {
         CHOPPY,
         TREND,
         VOLATILE
+    }
+
+    private enum ThresholdAction {
+        LONG_ENTRY,
+        SHORT_ENTRY,
+        LONG_EXIT,
+        SHORT_EXIT
+    }
+
+    private record RegimeDecision(MarketRegime regime, Map<String, Float> probabilityFeatures) {}
+
+    private record MicroBar(long epoch, double open, double high, double low, double close, long volume, double wap) {}
+
+    public record AiThresholdConfig(
+        double baseLongEntryThreshold,
+        double baseShortEntryThreshold,
+        double baseLongExitThreshold,
+        double baseShortExitThreshold,
+        double open30LongEntryThreshold,
+        double open30ShortEntryThreshold,
+        double open30LongExitThreshold,
+        double open30ShortExitThreshold,
+        double choppyLongEntryThreshold,
+        double choppyShortEntryThreshold,
+        double choppyLongExitThreshold,
+        double choppyShortExitThreshold,
+        double trendLongEntryThreshold,
+        double trendShortEntryThreshold,
+        double trendLongExitThreshold,
+        double trendShortExitThreshold,
+        double volatileLongEntryThreshold,
+        double volatileShortEntryThreshold,
+        double volatileLongExitThreshold,
+        double volatileShortExitThreshold,
+        double regimeClassifierThreshold
+    ) {
+        public static AiThresholdConfig defaults() {
+            return new AiThresholdConfig(
+                DEFAULT_LONG_ENTRY_THRESHOLD,
+                DEFAULT_SHORT_ENTRY_THRESHOLD,
+                DEFAULT_LONG_EXIT_THRESHOLD,
+                DEFAULT_SHORT_EXIT_THRESHOLD,
+                DEFAULT_LONG_ENTRY_THRESHOLD,
+                DEFAULT_SHORT_ENTRY_THRESHOLD,
+                DEFAULT_LONG_EXIT_THRESHOLD,
+                DEFAULT_SHORT_EXIT_THRESHOLD,
+                DEFAULT_LONG_ENTRY_THRESHOLD,
+                DEFAULT_SHORT_ENTRY_THRESHOLD,
+                DEFAULT_LONG_EXIT_THRESHOLD,
+                DEFAULT_SHORT_EXIT_THRESHOLD,
+                DEFAULT_LONG_ENTRY_THRESHOLD,
+                DEFAULT_SHORT_ENTRY_THRESHOLD,
+                DEFAULT_LONG_EXIT_THRESHOLD,
+                DEFAULT_SHORT_EXIT_THRESHOLD,
+                DEFAULT_LONG_ENTRY_THRESHOLD,
+                DEFAULT_SHORT_ENTRY_THRESHOLD,
+                DEFAULT_LONG_EXIT_THRESHOLD,
+                DEFAULT_SHORT_EXIT_THRESHOLD,
+                DEFAULT_REGIME_THRESHOLD
+            );
+        }
+
+        public AiThresholdConfig normalized() {
+            double baseLongEntry = normalize(baseLongEntryThreshold, DEFAULT_LONG_ENTRY_THRESHOLD);
+            double baseShortEntry = normalize(baseShortEntryThreshold, DEFAULT_SHORT_ENTRY_THRESHOLD);
+            double baseLongExit = normalize(baseLongExitThreshold, DEFAULT_LONG_EXIT_THRESHOLD);
+            double baseShortExit = normalize(baseShortExitThreshold, DEFAULT_SHORT_EXIT_THRESHOLD);
+            return new AiThresholdConfig(
+                baseLongEntry,
+                baseShortEntry,
+                baseLongExit,
+                baseShortExit,
+                normalize(open30LongEntryThreshold, baseLongEntry),
+                normalize(open30ShortEntryThreshold, baseShortEntry),
+                normalize(open30LongExitThreshold, baseLongExit),
+                normalize(open30ShortExitThreshold, baseShortExit),
+                normalize(choppyLongEntryThreshold, baseLongEntry),
+                normalize(choppyShortEntryThreshold, baseShortEntry),
+                normalize(choppyLongExitThreshold, baseLongExit),
+                normalize(choppyShortExitThreshold, baseShortExit),
+                normalize(trendLongEntryThreshold, baseLongEntry),
+                normalize(trendShortEntryThreshold, baseShortEntry),
+                normalize(trendLongExitThreshold, baseLongExit),
+                normalize(trendShortExitThreshold, baseShortExit),
+                normalize(volatileLongEntryThreshold, baseLongEntry),
+                normalize(volatileShortEntryThreshold, baseShortEntry),
+                normalize(volatileLongExitThreshold, baseLongExit),
+                normalize(volatileShortExitThreshold, baseShortExit),
+                normalize(regimeClassifierThreshold, DEFAULT_REGIME_THRESHOLD)
+            );
+        }
+
+        public double thresholdFor(boolean openingThirty, MarketRegime regime, ThresholdAction action) {
+            if (openingThirty) {
+                return switch (action) {
+                    case LONG_ENTRY -> open30LongEntryThreshold;
+                    case SHORT_ENTRY -> open30ShortEntryThreshold;
+                    case LONG_EXIT -> open30LongExitThreshold;
+                    case SHORT_EXIT -> open30ShortExitThreshold;
+                };
+            }
+            return switch (regime) {
+                case TREND -> switch (action) {
+                    case LONG_ENTRY -> trendLongEntryThreshold;
+                    case SHORT_ENTRY -> trendShortEntryThreshold;
+                    case LONG_EXIT -> trendLongExitThreshold;
+                    case SHORT_EXIT -> trendShortExitThreshold;
+                };
+                case VOLATILE -> switch (action) {
+                    case LONG_ENTRY -> volatileLongEntryThreshold;
+                    case SHORT_ENTRY -> volatileShortEntryThreshold;
+                    case LONG_EXIT -> volatileLongExitThreshold;
+                    case SHORT_EXIT -> volatileShortExitThreshold;
+                };
+                case CHOPPY -> switch (action) {
+                    case LONG_ENTRY -> choppyLongEntryThreshold;
+                    case SHORT_ENTRY -> choppyShortEntryThreshold;
+                    case LONG_EXIT -> choppyLongExitThreshold;
+                    case SHORT_EXIT -> choppyShortExitThreshold;
+                };
+            };
+        }
+
+        public String summary() {
+            return "base{le=" + fmt(baseLongEntryThreshold) + " se=" + fmt(baseShortEntryThreshold) + " lx=" + fmt(baseLongExitThreshold) + " sx=" + fmt(baseShortExitThreshold)
+                + " regime=" + fmt(regimeClassifierThreshold) + "}"
+                + " open30{le=" + fmt(open30LongEntryThreshold) + " se=" + fmt(open30ShortEntryThreshold) + " lx=" + fmt(open30LongExitThreshold) + " sx=" + fmt(open30ShortExitThreshold) + "}"
+                + " choppy{le=" + fmt(choppyLongEntryThreshold) + " se=" + fmt(choppyShortEntryThreshold) + " lx=" + fmt(choppyLongExitThreshold) + " sx=" + fmt(choppyShortExitThreshold) + "}"
+                + " trend{le=" + fmt(trendLongEntryThreshold) + " se=" + fmt(trendShortEntryThreshold) + " lx=" + fmt(trendLongExitThreshold) + " sx=" + fmt(trendShortExitThreshold) + "}"
+                + " volatile{le=" + fmt(volatileLongEntryThreshold) + " se=" + fmt(volatileShortEntryThreshold) + " lx=" + fmt(volatileLongExitThreshold) + " sx=" + fmt(volatileShortExitThreshold) + "}";
+        }
+
+        private static double normalize(double threshold, double fallback) {
+            if (Double.isNaN(threshold) || Double.isInfinite(threshold)) {
+                return fallback;
+            }
+            return Math.max(0.0, Math.min(1.0, threshold));
+        }
+
+        private static String fmt(double value) {
+            return String.format(Locale.US, "%.4f", value);
+        }
+    }
+
+    private static final class LazyAiPredictor {
+        private final String modelName;
+        private final String modelDir;
+        private final String fallbackLog;
+        private volatile AiPredictor delegate;
+        private volatile boolean attemptedLoad = false;
+
+        private LazyAiPredictor(String modelName, String modelDir, String fallbackLog) {
+            this.modelName = modelName;
+            this.modelDir = modelDir;
+            this.fallbackLog = fallbackLog == null ? "" : fallbackLog;
+        }
+
+        static LazyAiPredictor eager(String modelName, String modelDir) throws Exception {
+            LazyAiPredictor predictor = new LazyAiPredictor(modelName, modelDir, "");
+            predictor.loadRequired();
+            return predictor;
+        }
+
+        static LazyAiPredictor lazy(String modelName, String modelDir, String fallbackLog) {
+            return new LazyAiPredictor(modelName, modelDir, fallbackLog);
+        }
+
+        private synchronized void loadRequired() throws Exception {
+            if (delegate != null) {
+                return;
+            }
+            attemptedLoad = true;
+            delegate = new AiPredictor(modelName, modelDir);
+        }
+
+        private AiPredictor ensureLoaded() {
+            AiPredictor current = delegate;
+            if (current != null) {
+                return current;
+            }
+            synchronized (this) {
+                current = delegate;
+                if (current != null) {
+                    return current;
+                }
+                if (attemptedLoad) {
+                    return null;
+                }
+                attemptedLoad = true;
+                try {
+                    delegate = new AiPredictor(modelName, modelDir);
+                    return delegate;
+                } catch (Exception e) {
+                    log.info(">>> [FLOW][INFO][AI.INIT] {} model={} reason={}", fallbackLog, modelName, e.getMessage());
+                    return null;
+                }
+            }
+        }
+
+        boolean isAvailable() {
+            return ensureLoaded() != null;
+        }
+
+        double predictProbability(float[] features) {
+            AiPredictor current = ensureLoaded();
+            return current == null ? 0.0 : current.predictProbability(features);
+        }
+
+        AiPredictor.MultiClassPredictionOutcome predictMultiClassOutcome(float[] features, int fallbackLabel) {
+            AiPredictor current = ensureLoaded();
+            return current == null
+                ? new AiPredictor.MultiClassPredictionOutcome(fallbackLabel, 0.0, Map.of())
+                : current.predictMultiClassOutcome(features, fallbackLabel);
+        }
+
+        int expectedFeatureCountOr(int fallbackFeatureCount) {
+            AiPredictor current = ensureLoaded();
+            return current == null ? fallbackFeatureCount : current.getExpectedFeatureCount();
+        }
+
+        void close() {
+            AiPredictor current = delegate;
+            delegate = null;
+            if (current != null) {
+                current.close();
+            }
+        }
     }
 
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
@@ -52,10 +309,207 @@ public class PingPongStrategy implements TradingStrategy {
     private static final double DEFAULT_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.longExitThreshold", "0.58"));
     private static final double DEFAULT_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.shortExitThreshold", "0.60"));
     private static final double DEFAULT_REGIME_THRESHOLD = Double.parseDouble(System.getProperty("strategy.ai.regimeThreshold", "0.50"));
+    private static final boolean UPGRADED_MODEL_ROUTE_REQUIRED = Boolean.parseBoolean(System.getProperty("strategy.model.upgradedRouteRequired", "false"));
+    private static final boolean LEGACY_30S_EXIT_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.exit.legacy30sEnabled", "false"));
+    private static final boolean LIFECYCLE_EXIT_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.exit.lifecycleEnabled", "false"));
+    private static final boolean MICRO_ENTRY_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.entryEnabled", "false"));
+    private static final boolean MICRO_EXIT_GUARD_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.exitGuardEnabled", "false"));
+    private static final String LIFECYCLE_MODEL_DIR = System.getProperty("strategy.lifecycle.modelDir", "").trim();
+    private static final String MICRO_MODEL_DIR = System.getProperty("strategy.micro.modelDir", "").trim();
+    private static final double LIFECYCLE_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.longThreshold", "0.60"));
+    private static final double LIFECYCLE_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.shortThreshold", "0.60"));
+    private static final double MICRO_LONG_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.micro.longEntryThreshold", "0.58"));
+    private static final double MICRO_SHORT_ENTRY_THRESHOLD = Double.parseDouble(System.getProperty("strategy.micro.shortEntryThreshold", "0.58"));
+    private static final double MICRO_LONG_EXIT_GUARD_THRESHOLD = Double.parseDouble(System.getProperty("strategy.micro.longExitGuardThreshold", "0.70"));
+    private static final double MICRO_SHORT_EXIT_GUARD_THRESHOLD = Double.parseDouble(System.getProperty("strategy.micro.shortExitGuardThreshold", "0.70"));
+    private static final long MICRO_ARM_TTL_SECONDS = Long.parseLong(System.getProperty("strategy.micro.armTtlSeconds", "30"));
+    private static final double LIFECYCLE_ENTRY_RISK_PCT = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.entryRiskPct", "0.0025"));
+    private static final double LIFECYCLE_ENTRY_PROFIT_PCT = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.entryProfitPct", "0.0035"));
+    private static final int LIFECYCLE_HORIZON_30S = Integer.parseInt(System.getProperty("strategy.exit.lifecycle.horizon30s", "20"));
+    private static final long DEFAULT_POST_HARD_STOP_ENTRY_COOLDOWN_MS = 300_000L;
+    private static final int DEFAULT_MAX_HARD_STOPS_PER_DAY = 3;
     private static final int OPEN30_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.open30MinBars", "12"));
     private static final int REGULAR_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.regularMinBars", "60"));
+    private static final List<String> LEGACY_FEATURE_COLUMNS = List.of(
+        "f_dist_vwap", "f_bb_lower_dist", "f_bb_upper_dist", "f_macd_diff",
+        "f_body_size", "f_lower_wick", "f_upper_wick", "f_atr_norm",
+        "f_dist_sma", "f_dist_high", "f_dist_low", "f_rsi", "f_gap_from_prev_close",
+        "f_time_of_day", "f_dist_swing_high", "f_dist_swing_low", "f_is_new_high",
+        "f_is_new_low", "f_dist_whole_num", "f_is_green", "f_green_streak",
+        "f_red_streak", "f_put_call_ratio", "f_vol_ask_ratio", "f_vol_bid_ratio"
+    );
+    private static final List<String> BASE_FEATURE_COLUMNS = List.of(
+        "f_dist_vwap", "f_bb_lower_dist", "f_bb_upper_dist", "f_macd_diff",
+        "f_body_size", "f_lower_wick", "f_upper_wick", "f_atr_norm",
+        "f_dist_sma", "f_dist_high", "f_dist_low", "f_rsi", "f_gap_from_prev_close",
+        "f_time_of_day", "f_dist_swing_high", "f_dist_swing_low", "f_is_new_high",
+        "f_is_new_low", "f_dist_whole_num", "f_is_green", "f_green_streak",
+        "f_red_streak", "f_put_call_ratio", "f_vol_ask_ratio", "f_vol_bid_ratio",
+        "f_rel_volume_30s", "f_realized_vol_20", "f_realized_vol_z",
+        "f_dist_or_high_atr", "f_dist_or_low_atr"
+    );
+    private static final List<String> EXTENDED_FEATURE_COLUMNS = List.of(
+        "f_dist_vwap", "f_bb_lower_dist", "f_bb_upper_dist", "f_macd_diff",
+        "f_body_size", "f_lower_wick", "f_upper_wick", "f_atr_norm",
+        "f_dist_sma", "f_dist_high", "f_dist_low", "f_rsi", "f_gap_from_prev_close",
+        "f_time_of_day", "f_dist_swing_high", "f_dist_swing_low", "f_is_new_high",
+        "f_is_new_low", "f_dist_whole_num", "f_is_green", "f_green_streak",
+        "f_red_streak", "f_put_call_ratio", "f_vol_ask_ratio", "f_vol_bid_ratio",
+        "f_rel_volume_30s", "f_realized_vol_20", "f_realized_vol_z",
+        "f_dist_or_high_atr", "f_dist_or_low_atr",
+        "f_spread_pct", "f_spread_z", "f_l1_imbalance", "f_signed_flow_30s"
+    );
+    private static final List<String> NEWS_BAR_FEATURE_COLUMNS = List.of(
+        "f_news_intensity_60s",
+        "f_news_intensity_300s",
+        "f_news_freshness",
+        "f_news_provider_breadth",
+        "f_news_confidence",
+        "f_news_sentiment_level",
+        "f_news_sentiment_shift",
+        "f_news_sentiment_dispersion",
+        "f_news_coverage",
+        "f_news_relevance",
+        "f_news_surprise",
+        "f_news_directional_impulse",
+        "f_news_event_earnings",
+        "f_news_event_analyst",
+        "f_news_event_legal",
+        "f_news_event_product",
+        "f_news_event_macro",
+        "f_news_model_relevance",
+        "f_news_model_impact",
+        "f_news_model_novelty",
+        "f_news_directional_conviction",
+        "f_news_alpha_bias_60s",
+        "f_news_alpha_bias_300s",
+        "f_news_alpha_ret_60s_norm",
+        "f_news_alpha_ret_300s_norm",
+        "f_news_vol_shock",
+        "f_news_event_strength"
+    );
+    private static final List<String> REGIME_PROBABILITY_FEATURE_COLUMNS = List.of(
+        "f_regime_prob_choppy",
+        "f_regime_prob_trend",
+        "f_regime_prob_volatile",
+        "f_regime_prob_entropy"
+    );
+    private static final List<String> META_PRODUCER_FEATURE_COLUMNS = EnhancedLiveFeatureProducer.META_PRODUCER_FEATURE_COLUMNS;
+    private static final Set<String> REGIME_EXCLUDED_FEATURE_COLUMNS = Set.of(
+        "f_atr_norm",
+        "f_realized_vol_20",
+        "f_realized_vol_z",
+        "f_spread_z",
+        "f_rsi",
+        "f_macd_diff",
+        "f_dist_sma"
+    );
+    private static final int LEGACY_LIVE_FEATURE_COUNT = LEGACY_FEATURE_COLUMNS.size();
+    private static final int BASE_LIVE_FEATURE_COUNT = BASE_FEATURE_COLUMNS.size();
+    private static final int EXTENDED_LIVE_FEATURE_COUNT = EXTENDED_FEATURE_COLUMNS.size();
+    private static final List<String> BASE_PLUS_NEWS_FEATURE_COLUMNS = concatFeatureColumns(BASE_FEATURE_COLUMNS, NEWS_BAR_FEATURE_COLUMNS);
+    private static final List<String> BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS = concatFeatureColumns(BASE_PLUS_NEWS_FEATURE_COLUMNS, REGIME_PROBABILITY_FEATURE_COLUMNS);
+    private static final List<String> EXTENDED_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS = concatFeatureColumns(EXTENDED_FEATURE_COLUMNS, NEWS_BAR_FEATURE_COLUMNS, REGIME_PROBABILITY_FEATURE_COLUMNS);
+    private static final List<String> BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS = concatFeatureColumns(BASE_PLUS_NEWS_FEATURE_COLUMNS, META_PRODUCER_FEATURE_COLUMNS);
+    private static final List<String> ENHANCED_MAIN_FEATURE_COLUMNS = concatFeatureColumns(BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS, REGIME_PROBABILITY_FEATURE_COLUMNS);
+    private static final List<String> LEGACY_REGIME_FEATURE_COLUMNS = filterRegimeColumns(LEGACY_FEATURE_COLUMNS);
+    private static final List<String> BASE_REGIME_FEATURE_COLUMNS = filterRegimeColumns(BASE_FEATURE_COLUMNS);
+    private static final List<String> EXTENDED_REGIME_FEATURE_COLUMNS = filterRegimeColumns(EXTENDED_FEATURE_COLUMNS);
+    private static final List<String> NEWS_AWARE_REGIME_FEATURE_COLUMNS = filterRegimeColumns(BASE_PLUS_NEWS_FEATURE_COLUMNS);
+    private static final List<String> ENHANCED_REGIME_FEATURE_COLUMNS = filterRegimeColumns(BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS);
+    private static final List<String> COMMON_30S_TRAINING_FEATURE_COLUMNS = List.of(
+        "f_30s_body_pct",
+        "f_30s_is_close_hour",
+        "f_30s_is_open_hour",
+        "f_30s_lower_wick_pct",
+        "f_30s_option_call_delta",
+        "f_30s_option_delta_put_call_ratio",
+        "f_30s_option_put_call_ratio",
+        "f_30s_option_put_delta",
+        "f_30s_option_volume_burst",
+        "f_30s_range_pct",
+        "f_30s_realized_vol_20",
+        "f_30s_rel_volume_20",
+        "f_30s_ret_1",
+        "f_30s_ret_3",
+        "f_30s_spread_bps",
+        "f_30s_time_of_day",
+        "f_30s_upper_wick_pct",
+        "f_30s_vwap_dist",
+        "f_regime_choppy",
+        "f_regime_trend",
+        "f_regime_volatile"
+    );
+    private static final List<String> COMMON_5S_TRAINING_FEATURE_COLUMNS = List.of(
+        "f_5s_body_pct",
+        "f_5s_is_close_hour",
+        "f_5s_is_open_hour",
+        "f_5s_lower_wick_pct",
+        "f_5s_option_call_delta",
+        "f_5s_option_delta_put_call_ratio",
+        "f_5s_option_put_call_ratio",
+        "f_5s_option_put_delta",
+        "f_5s_option_volume_burst",
+        "f_5s_range_pct",
+        "f_5s_realized_vol_20",
+        "f_5s_rel_volume_20",
+        "f_5s_ret_1",
+        "f_5s_ret_3",
+        "f_5s_spread_bps",
+        "f_5s_time_of_day",
+        "f_5s_upper_wick_pct",
+        "f_5s_vwap_dist"
+    );
+    private static final List<String> LIFECYCLE_FEATURE_COLUMNS = concatFeatureColumns(
+        COMMON_30S_TRAINING_FEATURE_COLUMNS,
+        List.of(
+            "f_entry_score_proxy",
+            "f_entry_side_long",
+            "f_entry_side_short",
+            "f_pos_side",
+            "f_bars_since_entry",
+            "f_unrealized_pnl_r",
+            "f_mfe_r",
+            "f_mae_r",
+            "f_target_remaining_r",
+            "f_stop_remaining_r"
+        )
+    );
+    private static final List<String> MICRO_ENTRY_FEATURE_COLUMNS = concatFeatureColumns(
+        COMMON_5S_TRAINING_FEATURE_COLUMNS,
+        COMMON_30S_TRAINING_FEATURE_COLUMNS,
+        List.of("f_setup_score_proxy", "f_seconds_since_arm")
+    );
+    private static final List<String> MICRO_EXIT_GUARD_FEATURE_COLUMNS = concatFeatureColumns(
+        COMMON_5S_TRAINING_FEATURE_COLUMNS,
+        COMMON_30S_TRAINING_FEATURE_COLUMNS,
+        List.of("f_pos_side", "f_bars_since_entry_5s", "f_unrealized_pnl_r", "f_mfe_r", "f_mae_r")
+    );
 
     public record StrategyState(double lastPrice, int tradeCount, boolean enabled, boolean isArmed, boolean isVolatile, double yesterdayClose) {}
+
+    private static List<String> concatFeatureColumns(List<String>... groups) {
+        List<String> merged = new ArrayList<>();
+        if (groups == null) {
+            return merged;
+        }
+        for (List<String> group : groups) {
+            if (group != null && !group.isEmpty()) {
+                merged.addAll(group);
+            }
+        }
+        return List.copyOf(merged);
+    }
+
+    private static List<String> filterRegimeColumns(List<String> sourceColumns) {
+        List<String> filtered = new ArrayList<>();
+        for (String column : sourceColumns) {
+            if (!REGIME_EXCLUDED_FEATURE_COLUMNS.contains(column)) {
+                filtered.add(column);
+            }
+        }
+        return List.copyOf(filtered);
+    }
 
     private final IBKRTrader parent;
     private final String symbol;
@@ -66,29 +520,38 @@ public class PingPongStrategy implements TradingStrategy {
     private final int rsiPeriod;
     private final double stopLossPercentage;
     private final double maxDailyDrawdown;
+    private final long postHardStopEntryCooldownMs;
+    private final int maxHardStopsPerDay;
 
     // The 4-Model AI Architecture
-    private AiPredictor longEntryAi;
-    private AiPredictor shortEntryAi;
-    private AiPredictor longExitAi;
-    private AiPredictor shortExitAi;
-    private AiPredictor regimeClassifierAi;
-    private AiPredictor choppyLongEntryAi;
-    private AiPredictor choppyShortEntryAi;
-    private AiPredictor choppyLongExitAi;
-    private AiPredictor choppyShortExitAi;
-    private AiPredictor trendLongEntryAi;
-    private AiPredictor trendShortEntryAi;
-    private AiPredictor trendLongExitAi;
-    private AiPredictor trendShortExitAi;
-    private AiPredictor volatileLongEntryAi;
-    private AiPredictor volatileShortEntryAi;
-    private AiPredictor volatileLongExitAi;
-    private AiPredictor volatileShortExitAi;
-    private AiPredictor open30LongEntryAi;
-    private AiPredictor open30ShortEntryAi;
-    private AiPredictor open30LongExitAi;
-    private AiPredictor open30ShortExitAi;
+    private LazyAiPredictor longEntryAi;
+    private LazyAiPredictor shortEntryAi;
+    private LazyAiPredictor longExitAi;
+    private LazyAiPredictor shortExitAi;
+    private LazyAiPredictor regimeClassifierAi;
+    private LazyAiPredictor choppyLongEntryAi;
+    private LazyAiPredictor choppyShortEntryAi;
+    private LazyAiPredictor choppyLongExitAi;
+    private LazyAiPredictor choppyShortExitAi;
+    private LazyAiPredictor trendLongEntryAi;
+    private LazyAiPredictor trendShortEntryAi;
+    private LazyAiPredictor trendLongExitAi;
+    private LazyAiPredictor trendShortExitAi;
+    private LazyAiPredictor volatileLongEntryAi;
+    private LazyAiPredictor volatileShortEntryAi;
+    private LazyAiPredictor volatileLongExitAi;
+    private LazyAiPredictor volatileShortExitAi;
+    private LazyAiPredictor open30LongEntryAi;
+    private LazyAiPredictor open30ShortEntryAi;
+    private LazyAiPredictor open30LongExitAi;
+    private LazyAiPredictor open30ShortExitAi;
+    private LazyAiPredictor longExitLifecycleAi;
+    private LazyAiPredictor shortExitLifecycleAi;
+    private LazyAiPredictor longMicroEntryAi;
+    private LazyAiPredictor shortMicroEntryAi;
+    private LazyAiPredictor longMicroExitGuardAi;
+    private LazyAiPredictor shortMicroExitGuardAi;
+    private volatile boolean upgradedModelRouteValid = true;
     private volatile MarketRegime lastDetectedRegime = MarketRegime.CHOPPY;
 
     // Actor Model Event Queue
@@ -105,6 +568,8 @@ public class PingPongStrategy implements TradingStrategy {
     private volatile boolean inFlightOrder = false;
     private volatile boolean allowNewEntries = true;
     private volatile boolean circuitBreakerTripped = false;
+    private int hardStopExitCount = 0;
+    private long lastHardStopExitTimeMs = 0L;
     private double avgEntryPrice = 0.0;
     private volatile double dailyNetPnL = 0.0;
     private volatile double totalNetPnL = 0.0;
@@ -112,6 +577,8 @@ public class PingPongStrategy implements TradingStrategy {
 
     private long lastOrderSubmitTime = 0;
     private int pendingOrderId = -1;
+    private boolean pendingOrderReconcileRequested = false;
+    private long lastPendingOrderReconcileLogTime = 0;
 
     // 5-Second Bar Data
     private double barOpen, barHigh, barLow, barClose;
@@ -163,27 +630,68 @@ public class PingPongStrategy implements TradingStrategy {
     private volatile double longExitProbabilityThreshold = DEFAULT_LONG_EXIT_THRESHOLD;
     private volatile double shortExitProbabilityThreshold = DEFAULT_SHORT_EXIT_THRESHOLD;
     private volatile double regimeProbabilityThreshold = DEFAULT_REGIME_THRESHOLD;
+    private volatile AiThresholdConfig aiThresholdConfig = AiThresholdConfig.defaults();
 
     // Extended features state (safe to keep even if model uses base 23 features).
     private final Map<Integer, Double> minuteVolumeBaseline = new HashMap<>();
     private final Deque<Double> returnWindow20 = new ArrayDeque<>();
     private final Deque<Double> realizedVolWindow100 = new ArrayDeque<>();
     private final Deque<Double> spreadWindow100 = new ArrayDeque<>();
+    private final Deque<Double> volumeWindow = new ArrayDeque<>();
     private LocalDate featureSessionDate = null;
     private int openingRangeBarsCount = 0;
     private double openingRangeHigh = 0.0;
     private double openingRangeLow = 0.0;
 
+    // Independent micro-cadence state. This mirrors the Python builder's combined 1s source frame
+    // without reading from or mutating the 30-second AI aggregation bucket.
+    private static final int SOURCE_BAR_WINDOW_SIZE = 180;
+    private static final int MICRO_5S_WINDOW_SIZE = 120;
+    private final Deque<MicroBar> sourceBarWindow = new ArrayDeque<>();
+    private final Deque<MicroBar> micro5sWindow = new ArrayDeque<>();
+    private final Deque<Double> micro5sReturnWindow20 = new ArrayDeque<>();
+    private final Deque<Double> micro5sVolumeWindow20 = new ArrayDeque<>();
+    private final Deque<Double> micro5sOptionFlowWindow20 = new ArrayDeque<>();
+    private long micro5sBucketStartEpoch = -1L;
+    private double micro5sOpen = 0.0;
+    private double micro5sHigh = 0.0;
+    private double micro5sLow = Double.MAX_VALUE;
+    private double micro5sClose = 0.0;
+    private long micro5sVolume = 0L;
+    private double micro5sWapSum = 0.0;
+    private long microPrevPutVolume = 0L;
+    private long microPrevCallVolume = 0L;
+    private long latestSourceBarEpoch = 0L;
+
     // --- 30-SECOND AGGREGATION BUCKET ---
-    private static final int BARS_PER_30S_BUCKET = 6;
-    private int bucketCount = 0;
-    private long bucketEpoch = 0L;
+    private long bucketStartEpoch = -1L;
+    private long lastFinalizedBucketStartEpoch = -1L;
     private double bucketOpen = 0.0;
     private double bucketHigh = 0.0;
     private double bucketLow = Double.MAX_VALUE;
     private double bucketClose = 0.0;
     private long bucketVolume = 0L;
     private double bucketWapSum = 0.0;
+    private final Deque<Double> training30sReturnWindow20 = new ArrayDeque<>();
+    private final Deque<Double> training30sVolumeWindow20 = new ArrayDeque<>();
+    private final Deque<Double> training30sOptionFlowWindow20 = new ArrayDeque<>();
+    private Map<String, Float> lastTraining30sFeatureValues = new HashMap<>();
+    private double lastTraining30sClose = 0.0;
+    private long lastTraining30sEpoch = 0L;
+    private long current30sAiDecisionEpoch = 0L;
+
+    private boolean microLongEntryArmed = false;
+    private boolean microShortEntryArmed = false;
+    private long microArmEpoch = 0L;
+    private Map<String, Float> armed30sFeatureValues = new HashMap<>();
+
+    private long positionEntryEpoch = 0L;
+    private double positionEntryPrice = 0.0;
+    private int positionEntrySide = 0;
+    private int barsSincePositionEntry30s = 0;
+    private int barsSincePositionEntry5s = 0;
+    private double positionMfeR = 0.0;
+    private double positionMaeR = 0.0;
 
 
     // Latency Tracking
@@ -270,7 +778,7 @@ public class PingPongStrategy implements TradingStrategy {
 
         java.io.File file = warmupPath.toFile();
         if (!file.exists()) {
-            flowInfo("WARMUP", "No warmup file found at: " + warmupPath + ". Waiting 5 minutes for live bars.");
+            flowInfo("WARMUP", "No warmup file found at: " + warmupPath + ". Waiting for live bars.");
             return;
         }
         flowData("WARMUP", "source=" + warmupPath);
@@ -281,7 +789,7 @@ public class PingPongStrategy implements TradingStrategy {
             while ((line = br.readLine()) != null) {
                 lines.add(line);
             }
-            int barsNeeded = 60;
+            int barsNeeded = OPEN30_MIN_BARS * 6;
             int startIdx = Math.max(0, lines.size() - barsNeeded);
             flowInfo("WARMUP", "Hot-loading " + (lines.size() - startIdx) + " warmup bars from Harvester...");
 
@@ -325,6 +833,16 @@ public class PingPongStrategy implements TradingStrategy {
                             boolean autoRegimeEnabled, int regimeWindowTicks, int rsiPeriod, double reversalPercentage,
                             double stopLossPercentage, double maxDailyDrawdown,
                             double minDirectionalMove, double trendStrengthThreshold, String modelDir) {
+        this(parent, symbol, gapPercentage, tradeQuantity, maxTrades, autoRegimeEnabled, regimeWindowTicks, rsiPeriod,
+            reversalPercentage, stopLossPercentage, maxDailyDrawdown, minDirectionalMove, trendStrengthThreshold, modelDir,
+            DEFAULT_POST_HARD_STOP_ENTRY_COOLDOWN_MS, DEFAULT_MAX_HARD_STOPS_PER_DAY);
+    }
+
+    public PingPongStrategy(IBKRTrader parent, String symbol, double gapPercentage, int tradeQuantity, int maxTrades,
+                            boolean autoRegimeEnabled, int regimeWindowTicks, int rsiPeriod, double reversalPercentage,
+                            double stopLossPercentage, double maxDailyDrawdown,
+                            double minDirectionalMove, double trendStrengthThreshold, String modelDir,
+                            long postHardStopEntryCooldownMs, int maxHardStopsPerDay) {
         this.parent = parent;
         this.symbol = symbol;
         this.tradeQuantity = tradeQuantity;
@@ -332,53 +850,85 @@ public class PingPongStrategy implements TradingStrategy {
         this.rsiPeriod = Math.max(2, rsiPeriod);
         this.stopLossPercentage = Math.max(0.0001, stopLossPercentage);
         this.maxDailyDrawdown = Math.max(1.0, maxDailyDrawdown);
+        this.postHardStopEntryCooldownMs = Math.max(0L, postHardStopEntryCooldownMs);
+        this.maxHardStopsPerDay = Math.max(1, maxHardStopsPerDay);
 
-        // Load the 4 Distinct ONNX Models
+        // Load entry/regime models. Legacy generic 30s exits are not part of the upgraded exit route.
         try {
-            this.longEntryAi = new AiPredictor("long_entry.onnx", modelDir);
+            this.longEntryAi = LazyAiPredictor.eager("long_entry.onnx", modelDir);
         } catch (Exception e) {
             flowError("AI.INIT", "Failed to load long_entry.onnx. Trading disabled. " + e.getMessage());
             this.enabled = false;
         }
 
         try {
-            this.shortEntryAi = new AiPredictor("short_entry.onnx", modelDir);
+            this.shortEntryAi = LazyAiPredictor.eager("short_entry.onnx", modelDir);
         } catch (Exception e) {
             flowError("AI.INIT", "Failed to load short_entry.onnx. Short entries disabled.");
             this.shortEntryAi = null;
         }
 
-        try {
-            this.longExitAi = new AiPredictor("long_exit.onnx", modelDir);
-        } catch (Exception e) {
-            flowError("AI.INIT", "Failed to load long_exit.onnx. Longs will rely on hard stop-loss.");
-            this.longExitAi = null;
-        }
+        boolean loadLegacy30sExitModels = LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED;
+        if (loadLegacy30sExitModels) {
+            try {
+                this.longExitAi = LazyAiPredictor.eager("long_exit.onnx", modelDir);
+            } catch (Exception e) {
+                flowError("AI.INIT", "Failed to load legacy long_exit.onnx. Longs will rely on hard stop-loss.");
+                this.longExitAi = null;
+            }
 
-        try {
-            this.shortExitAi = new AiPredictor("short_exit.onnx", modelDir);
-        } catch (Exception e) {
-            flowError("AI.INIT", "Failed to load short_exit.onnx. Shorts will rely on hard stop-loss.");
+            try {
+                this.shortExitAi = LazyAiPredictor.eager("short_exit.onnx", modelDir);
+            } catch (Exception e) {
+                flowError("AI.INIT", "Failed to load legacy short_exit.onnx. Shorts will rely on hard stop-loss.");
+                this.shortExitAi = null;
+            }
+        } else {
+            this.longExitAi = null;
             this.shortExitAi = null;
+            flowInfo(
+                "AI.INIT",
+                "Legacy 30s exit models disabled symbol=" + symbol
+                    + " lifecycleEnabled=" + LIFECYCLE_EXIT_ENABLED
+                    + " legacy30sExitEnabled=" + LEGACY_30S_EXIT_ENABLED
+            );
         }
 
         this.regimeClassifierAi = tryLoadOptionalModel("regime_classifier.onnx", modelDir, "Market regime classifier unavailable. Falling back to CHOPPY.");
-        this.choppyLongEntryAi = tryLoadOptionalModel("choppy_long_entry.onnx", modelDir, "Choppy long-entry model unavailable. Using base model.");
-        this.choppyShortEntryAi = tryLoadOptionalModel("choppy_short_entry.onnx", modelDir, "Choppy short-entry model unavailable. Using base model.");
-        this.choppyLongExitAi = tryLoadOptionalModel("choppy_long_exit.onnx", modelDir, "Choppy long-exit model unavailable. Using base model.");
-        this.choppyShortExitAi = tryLoadOptionalModel("choppy_short_exit.onnx", modelDir, "Choppy short-exit model unavailable. Using base model.");
-        this.trendLongEntryAi = tryLoadOptionalModel("trend_long_entry.onnx", modelDir, "Trend long-entry model unavailable. Using base model.");
-        this.trendShortEntryAi = tryLoadOptionalModel("trend_short_entry.onnx", modelDir, "Trend short-entry model unavailable. Using base model.");
-        this.trendLongExitAi = tryLoadOptionalModel("trend_long_exit.onnx", modelDir, "Trend long-exit model unavailable. Using base model.");
-        this.trendShortExitAi = tryLoadOptionalModel("trend_short_exit.onnx", modelDir, "Trend short-exit model unavailable. Using base model.");
-        this.volatileLongEntryAi = tryLoadOptionalModel("volatile_long_entry.onnx", modelDir, "Volatile long-entry model unavailable. Using base model.");
-        this.volatileShortEntryAi = tryLoadOptionalModel("volatile_short_entry.onnx", modelDir, "Volatile short-entry model unavailable. Using base model.");
-        this.volatileLongExitAi = tryLoadOptionalModel("volatile_long_exit.onnx", modelDir, "Volatile long-exit model unavailable. Using base model.");
-        this.volatileShortExitAi = tryLoadOptionalModel("volatile_short_exit.onnx", modelDir, "Volatile short-exit model unavailable. Using base model.");
+        this.choppyLongEntryAi = tryLoadOptionalModel("choppy_long_entry.onnx", modelDir, "Choppy long-entry model unavailable. Using base/default model.");
+        this.choppyShortEntryAi = tryLoadOptionalModel("choppy_short_entry.onnx", modelDir, "Choppy short-entry model unavailable. Using base/default model.");
+        this.choppyLongExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("choppy_long_exit.onnx", modelDir, "Choppy legacy long-exit model unavailable. Using base model.") : null;
+        this.choppyShortExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("choppy_short_exit.onnx", modelDir, "Choppy legacy short-exit model unavailable. Using base model.") : null;
+        this.trendLongEntryAi = tryLoadOptionalModel("trend_long_entry.onnx", modelDir, "Trend long-entry model unavailable. Falling back to CHOPPY/default model.");
+        this.trendShortEntryAi = tryLoadOptionalModel("trend_short_entry.onnx", modelDir, "Trend short-entry model unavailable. Falling back to CHOPPY/default model.");
+        this.trendLongExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("trend_long_exit.onnx", modelDir, "Trend legacy long-exit model unavailable. Using base model.") : null;
+        this.trendShortExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("trend_short_exit.onnx", modelDir, "Trend legacy short-exit model unavailable. Using base model.") : null;
+        this.volatileLongEntryAi = tryLoadOptionalModel("volatile_long_entry.onnx", modelDir, "Volatile long-entry model unavailable. Falling back to CHOPPY/default model.");
+        this.volatileShortEntryAi = tryLoadOptionalModel("volatile_short_entry.onnx", modelDir, "Volatile short-entry model unavailable. Falling back to CHOPPY/default model.");
+        this.volatileLongExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("volatile_long_exit.onnx", modelDir, "Volatile legacy long-exit model unavailable. Using base model.") : null;
+        this.volatileShortExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("volatile_short_exit.onnx", modelDir, "Volatile legacy short-exit model unavailable. Using base model.") : null;
         this.open30LongEntryAi = tryLoadOptionalModel("open30_long_entry.onnx", modelDir, "Open30 long-entry model unavailable. Using regime/base model.");
         this.open30ShortEntryAi = tryLoadOptionalModel("open30_short_entry.onnx", modelDir, "Open30 short-entry model unavailable. Using regime/base model.");
-        this.open30LongExitAi = tryLoadOptionalModel("open30_long_exit.onnx", modelDir, "Open30 long-exit model unavailable. Using regime/base model.");
-        this.open30ShortExitAi = tryLoadOptionalModel("open30_short_exit.onnx", modelDir, "Open30 short-exit model unavailable. Using regime/base model.");
+        this.open30LongExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("open30_long_exit.onnx", modelDir, "Open30 legacy long-exit model unavailable. Using regime/base model.") : null;
+        this.open30ShortExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("open30_short_exit.onnx", modelDir, "Open30 legacy short-exit model unavailable. Using regime/base model.") : null;
+
+        String lifecycleModelDir = LIFECYCLE_MODEL_DIR.isEmpty() ? modelDir : LIFECYCLE_MODEL_DIR;
+        String microModelDir = MICRO_MODEL_DIR.isEmpty() ? lifecycleModelDir : MICRO_MODEL_DIR;
+        this.longExitLifecycleAi = loadUpgradedRouteModel("long_exit_lifecycle.onnx", lifecycleModelDir, LIFECYCLE_EXIT_ENABLED, "lifecycle long exit");
+        this.shortExitLifecycleAi = loadUpgradedRouteModel("short_exit_lifecycle.onnx", lifecycleModelDir, LIFECYCLE_EXIT_ENABLED, "lifecycle short exit");
+        this.longMicroEntryAi = loadUpgradedRouteModel("long_micro_entry_5s.onnx", microModelDir, MICRO_ENTRY_ENABLED, "5s long micro entry");
+        this.shortMicroEntryAi = loadUpgradedRouteModel("short_micro_entry_5s.onnx", microModelDir, MICRO_ENTRY_ENABLED, "5s short micro entry");
+        this.longMicroExitGuardAi = loadUpgradedRouteModel("long_micro_exit_guard_5s.onnx", microModelDir, MICRO_EXIT_GUARD_ENABLED, "5s long micro exit guard");
+        this.shortMicroExitGuardAi = loadUpgradedRouteModel("short_micro_exit_guard_5s.onnx", microModelDir, MICRO_EXIT_GUARD_ENABLED, "5s short micro exit guard");
+
+        if (LIFECYCLE_EXIT_ENABLED && (this.longExitLifecycleAi == null || this.shortExitLifecycleAi == null)) {
+            flowError("AI.ROUTE", "Lifecycle exit enabled but lifecycle exit model is missing; forcing CHOPPY/default routing with hard risk exits symbol=" + symbol);
+        }
+
+        if (UPGRADED_MODEL_ROUTE_REQUIRED && !upgradedModelRouteValid) {
+            this.enabled = false;
+            flowError("AI.ROUTE", "Upgraded model route invalid; trading disabled for symbol=" + symbol);
+        }
 
         this.eventProcessorThread = new Thread(this::processEvents);
         this.eventProcessorThread.setName("Strategy-Actor-Thread-" + symbol);
@@ -397,36 +947,76 @@ public class PingPongStrategy implements TradingStrategy {
         hotloadWarmupData();
     }
 
-    private AiPredictor tryLoadOptionalModel(String modelName, String modelDir, String fallbackLog) {
-        try {
-            return new AiPredictor(modelName, modelDir);
-        } catch (Exception e) {
-            flowInfo("AI.INIT", fallbackLog + " model=" + modelName + " reason=" + e.getMessage());
-            return null;
-        }
+    private LazyAiPredictor tryLoadOptionalModel(String modelName, String modelDir, String fallbackLog) {
+        return LazyAiPredictor.lazy(modelName, modelDir, fallbackLog);
     }
 
-    private AiPredictor modelForRegime(MarketRegime regime, AiPredictor baseModel, AiPredictor choppyModel, AiPredictor trendModel, AiPredictor volatileModel) {
-        if (regime == MarketRegime.CHOPPY && choppyModel != null) {
-            return choppyModel;
+    private LazyAiPredictor loadUpgradedRouteModel(String modelName, String modelDir, boolean activeMode, String routeName) {
+        if (!activeMode && !UPGRADED_MODEL_ROUTE_REQUIRED) {
+            return null;
         }
-        if (regime == MarketRegime.TREND && trendModel != null) {
-            return trendModel;
+        if (UPGRADED_MODEL_ROUTE_REQUIRED || activeMode) {
+            try {
+                LazyAiPredictor predictor = LazyAiPredictor.eager(modelName, modelDir);
+                flowInfo("AI.ROUTE", "Loaded upgraded route model symbol=" + symbol + " route=" + routeName + " model=" + modelName);
+                return predictor;
+            } catch (Exception exception) {
+                if (!routeName.startsWith("lifecycle ")) {
+                    upgradedModelRouteValid = false;
+                }
+                flowError("AI.ROUTE", "Missing required upgraded route model symbol=" + symbol + " route=" + routeName + " model=" + modelName + " reason=" + exception.getMessage());
+                return null;
+            }
         }
-        if (regime == MarketRegime.VOLATILE && volatileModel != null) {
-            return volatileModel;
+        return LazyAiPredictor.lazy(modelName, modelDir, "Upgraded route model unavailable route=" + routeName + ".");
+    }
+
+    private LazyAiPredictor modelForRegime(MarketRegime regime, LazyAiPredictor baseModel, LazyAiPredictor choppyModel, LazyAiPredictor trendModel, LazyAiPredictor volatileModel) {
+        LazyAiPredictor selectedModel = switch (regime) {
+            case CHOPPY -> choppyModel;
+            case TREND -> trendModel;
+            case VOLATILE -> volatileModel;
+        };
+
+        LazyAiPredictor availableSelectedModel = availableModel(selectedModel);
+        if (availableSelectedModel != null) {
+            return availableSelectedModel;
         }
+
+        if (regime != MarketRegime.CHOPPY) {
+            LazyAiPredictor availableChoppyModel = availableModel(choppyModel);
+            if (availableChoppyModel != null) {
+                return availableChoppyModel;
+            }
+        }
+
         return baseModel;
     }
 
-    private MarketRegime detectMarketRegime(float[] regimeFeatures) {
+    private LazyAiPredictor availableModel(LazyAiPredictor predictor) {
+        return predictor != null && predictor.isAvailable() ? predictor : null;
+    }
+
+    private RegimeDecision detectMarketRegime(float[] regimeFeatures) {
         if (regimeClassifierAi == null) {
-            return MarketRegime.CHOPPY;
+            lastDetectedRegime = MarketRegime.CHOPPY;
+            return new RegimeDecision(MarketRegime.CHOPPY, defaultRegimeProbabilityFeatures(1.0, 0.0, 0.0));
         }
 
-        AiPredictor.ClassPredictionOutcome outcome = regimeClassifierAi.predictClassWithConfidence(regimeFeatures, 0);
+        AiPredictor.MultiClassPredictionOutcome outcome = regimeClassifierAi.predictMultiClassOutcome(regimeFeatures, 0);
         int predicted = outcome.classLabel();
         double confidence = outcome.confidence();
+        Map<Integer, Double> probabilities = outcome.classProbabilities() == null ? Map.of() : outcome.classProbabilities();
+        double choppyProb = clampProbability(probabilities.getOrDefault(0, predicted == 0 ? 1.0 : 0.0), 0.0);
+        double trendProb = clampProbability(probabilities.getOrDefault(1, predicted == 1 ? 1.0 : 0.0), 0.0);
+        double volatileProb = clampProbability(probabilities.getOrDefault(2, predicted == 2 ? 1.0 : 0.0), 0.0);
+        double probabilitySum = choppyProb + trendProb + volatileProb;
+        if (probabilitySum > 0.0) {
+            choppyProb /= probabilitySum;
+            trendProb /= probabilitySum;
+            volatileProb /= probabilitySum;
+        }
+        Map<String, Float> regimeProbabilityFeatures = defaultRegimeProbabilityFeatures(choppyProb, trendProb, volatileProb);
 
         if (confidence < regimeProbabilityThreshold) {
             flowCondition(
@@ -440,7 +1030,7 @@ public class PingPongStrategy implements TradingStrategy {
                     + " fallback=CHOPPY"
             );
             lastDetectedRegime = MarketRegime.CHOPPY;
-            return MarketRegime.CHOPPY;
+            return new RegimeDecision(MarketRegime.CHOPPY, regimeProbabilityFeatures);
         }
 
         flowCondition(
@@ -467,7 +1057,7 @@ public class PingPongStrategy implements TradingStrategy {
                 + " label=" + predicted
                 + " confidence=" + formatProb(confidence)
         );
-        return detected;
+        return new RegimeDecision(detected, regimeProbabilityFeatures);
     }
 
     private boolean isOpeningThirtyMinutes() {
@@ -484,21 +1074,43 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     public void setAiThresholds(double longEntry, double shortEntry, double longExit, double shortExit, double regimeThreshold) {
-        this.longEntryProbabilityThreshold = clampProbability(longEntry, DEFAULT_LONG_ENTRY_THRESHOLD);
-        this.shortEntryProbabilityThreshold = clampProbability(shortEntry, DEFAULT_SHORT_ENTRY_THRESHOLD);
-        this.longExitProbabilityThreshold = clampProbability(longExit, DEFAULT_LONG_EXIT_THRESHOLD);
-        this.shortExitProbabilityThreshold = clampProbability(shortExit, DEFAULT_SHORT_EXIT_THRESHOLD);
-        this.regimeProbabilityThreshold = clampProbability(regimeThreshold, DEFAULT_REGIME_THRESHOLD);
-
-        flowData(
-            "AI.CONFIG",
-            "symbol=" + symbol
-                + " thresholds longEntry=" + formatProb(longEntryProbabilityThreshold)
-                + " shortEntry=" + formatProb(shortEntryProbabilityThreshold)
-                + " longExit=" + formatProb(longExitProbabilityThreshold)
-                + " shortExit=" + formatProb(shortExitProbabilityThreshold)
-                + " regime=" + formatProb(regimeProbabilityThreshold)
+        setAiThresholds(
+            new AiThresholdConfig(
+                longEntry,
+                shortEntry,
+                longExit,
+                shortExit,
+                longEntry,
+                shortEntry,
+                longExit,
+                shortExit,
+                longEntry,
+                shortEntry,
+                longExit,
+                shortExit,
+                longEntry,
+                shortEntry,
+                longExit,
+                shortExit,
+                longEntry,
+                shortEntry,
+                longExit,
+                shortExit,
+                regimeThreshold
+            )
         );
+    }
+
+    public void setAiThresholds(AiThresholdConfig config) {
+        AiThresholdConfig normalized = (config == null ? AiThresholdConfig.defaults() : config.normalized());
+        this.aiThresholdConfig = normalized;
+        this.longEntryProbabilityThreshold = normalized.baseLongEntryThreshold();
+        this.shortEntryProbabilityThreshold = normalized.baseShortEntryThreshold();
+        this.longExitProbabilityThreshold = normalized.baseLongExitThreshold();
+        this.shortExitProbabilityThreshold = normalized.baseShortExitThreshold();
+        this.regimeProbabilityThreshold = normalized.regimeClassifierThreshold();
+
+        flowData("AI.CONFIG", "symbol=" + symbol + " thresholds " + normalized.summary());
     }
 
     private double clampProbability(double threshold, double fallback) {
@@ -513,6 +1125,9 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private void processEvents() {
+        // The actor loop is the serialization point for all strategy behavior.
+        // If you need to add new live inputs, prefer adding a StrategyEvent subtype and handling it here
+        // instead of mutating state from the producer thread.
         while (isRunning) {
             try {
                 StrategyEvent event = eventQueue.poll(100, TimeUnit.MILLISECONDS);
@@ -530,6 +1145,8 @@ public class PingPongStrategy implements TradingStrategy {
                     handleOptionVolumeUpdate(e.putVolume, e.callVolume);
                 } else if (event instanceof StrategyEvent.QuoteSnapshotEvent e) {
                     handleQuoteSnapshot(e.bidPrice, e.askPrice, e.bidSize, e.askSize, e.shortableShares);
+                } else if (event instanceof StrategyEvent.OrderFlowSnapshotEvent e) {
+                    handleOrderFlowSnapshot(e.atBidVolume, e.atAskVolume);
                 } else if (event instanceof StrategyEvent.OrderSubmittedEvent e) {
                     handleOrderSubmitted(e.orderId, e.action, e.quantity);
                 } else if (event instanceof StrategyEvent.OrderProgressEvent e) {
@@ -538,10 +1155,10 @@ public class PingPongStrategy implements TradingStrategy {
                     handleOrderClosed(e.orderId, e.status);
                 } else if (event instanceof StrategyEvent.PositionSyncEvent e) {
                     handlePositionSync(e.brokerPosition, e.avgCost);
-                } else if (event instanceof StrategyEvent.ResetForNewDayEvent) {
-                    handleResetForNewDay();
+                } else if (event instanceof StrategyEvent.ResetForNewDayEvent e) {
+                    handleResetForNewDay(e);
                 } else if (event instanceof StrategyEvent.RestoreStateEvent e) {
-                    handleRestoreState(e.rPrice, e.rTrades, e.rEnabled, e.rArmed, e.restoredYesterdayClose);
+                    handleRestoreState(e.rPrice, e.rTrades, e.rEnabled, e.rArmed, e.restoredYesterdayClose, e.restoredHardStopExitCount, e.restoredLastHardStopExitTimeMs);
                 } else if (event instanceof StrategyEvent.SetEnabledEvent e) {
                     handleSetEnabled(e.status);
                 } else if (event instanceof StrategyEvent.SetPositionSyncedEvent e) {
@@ -564,7 +1181,22 @@ public class PingPongStrategy implements TradingStrategy {
         }
     }
 
-    private int sharesForAmount(double price) {
+    private double priceForAction(String action, double fallbackPrice) {
+        // Quote selection is intentionally side-aware:
+        //  - SELL paths prefer bid because that is the executable side for immediate selling
+        //  - BUY paths prefer ask because that is the executable side for immediate buying
+        // The fallback exists so the strategy can still operate when quote snapshots temporarily lag bars.
+        if ("SELL".equalsIgnoreCase(action) && latestBidPrice > 0.0) {
+            return latestBidPrice;
+        }
+        if ("BUY".equalsIgnoreCase(action) && latestAskPrice > 0.0) {
+            return latestAskPrice;
+        }
+        return fallbackPrice;
+    }
+
+    private int sharesForAmount(String action, double fallbackPrice) {
+        double price = priceForAction(action, fallbackPrice);
         if (price <= 10.0) {
             flowCondition("STRATEGY.RISK", "PRICE_GT_10", false, "symbol=" + symbol + " price=" + price);
             return 0;
@@ -599,8 +1231,32 @@ public class PingPongStrategy implements TradingStrategy {
         this.currentPosition = newPosition;
         if (newPosition != 0 && avgCost > 0) {
             this.avgEntryPrice = avgCost; // Official IBKR entry price for stop-loss
+            if (positionEntryPrice <= 0.0 || positionEntrySide != Integer.signum(newPosition)) {
+                positionEntryPrice = avgCost;
+                positionEntrySide = Integer.signum(newPosition);
+                positionEntryEpoch = currentMarketTime == null ? 0L : currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
+                barsSincePositionEntry30s = 0;
+                barsSincePositionEntry5s = 0;
+                positionMfeR = 0.0;
+                positionMaeR = 0.0;
+            }
         } else if (newPosition == 0) {
             this.avgEntryPrice = 0.0;
+            positionEntryPrice = 0.0;
+            positionEntrySide = 0;
+            positionEntryEpoch = 0L;
+            barsSincePositionEntry30s = 0;
+            barsSincePositionEntry5s = 0;
+            positionMfeR = 0.0;
+            positionMaeR = 0.0;
+            clearMicroEntryArms("position-sync-flat");
+            if (this.inFlightOrder && this.pendingOrderReconcileRequested) {
+                this.inFlightOrder = false;
+                this.pendingOrderReconcileRequested = false;
+                this.pendingOrderId = -1;
+                this.lastPendingOrderReconcileLogTime = 0;
+                flowData("STRATEGY.ORDER", "unlocked after flat position sync symbol=" + symbol);
+            }
         }
         flowData("STRATEGY.SYNC", "symbol=" + symbol + " brokerPosition=" + currentPosition + " avgCost=" + avgCost);
     }
@@ -658,6 +1314,10 @@ public class PingPongStrategy implements TradingStrategy {
         eventQueue.offer(new StrategyEvent.QuoteSnapshotEvent(bidPrice, askPrice, bidSize, askSize, shortableShares));
     }
 
+    public void onOrderFlowSnapshot(long atBidVolume, long atAskVolume) {
+        eventQueue.offer(new StrategyEvent.OrderFlowSnapshotEvent(atBidVolume, atAskVolume));
+    }
+
     private void handleOptionVolumeUpdate(long putVolume, long callVolume) {
         latestPutVolume = Math.max(0L, putVolume);
         latestCallVolume = Math.max(0L, callVolume);
@@ -669,6 +1329,11 @@ public class PingPongStrategy implements TradingStrategy {
         latestBidSize = Math.max(0L, bidSize);
         latestAskSize = Math.max(0L, askSize);
         latestShortableShares = Math.max(0.0, shortableShares);
+    }
+
+    private void handleOrderFlowSnapshot(long atBidVolume, long atAskVolume) {
+        currentBarVolBid += Math.max(0L, atBidVolume);
+        currentBarVolAsk += Math.max(0L, atAskVolume);
     }
 
     private void handleTapeTrade(double tradePrice, long tradeSize, double bidPrice, double askPrice) {
@@ -697,105 +1362,441 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private void handleTickForExitsOnly(double price) {
-        // WATCHDOG: 3-Second Active Kill Switch for Connection Drops & Hung Partial Fills
+        // Tick path = "reflexes".
+        // We keep this narrow on purpose: it handles watchdog logic and hard stop-loss protection, not the full
+        // AI decision engine. That separation keeps urgent exit handling available on fast quote/tick updates while
+        // heavier feature generation remains tied to bar-close cadence.
+        // WATCHDOG: 3-Second Active Kill Switch for Connection Drops & Hung Partial Fills.
+        // Do not clear inFlightOrder on timeout alone. If broker/order-status callbacks lag, unlocking here can
+        // resubmit the same exit against a stale broker position. Keep the lock until terminal order status or an
+        // authoritative flat position sync arrives.
         if (this.inFlightOrder && (System.currentTimeMillis() - this.lastOrderSubmitTime > 3000)) {
-            flowError("WATCHDOG", "Order hung >3s. Forcing cancel and resync.");
-            if (this.parent != null && this.pendingOrderId != -1) {
-                this.parent.cancelStaleOrder(this.pendingOrderId);
-            }
-            this.inFlightOrder = false; // Force drop the lock
-            if (this.parent != null) {
-                this.parent.requestPositions(); // Find out exactly what filled
+            long now = System.currentTimeMillis();
+            if (!this.pendingOrderReconcileRequested) {
+                this.pendingOrderReconcileRequested = true;
+                this.lastPendingOrderReconcileLogTime = now;
+                flowError("WATCHDOG", "Order hung >3s. Requesting cancel/resync but keeping in-flight lock. symbol=" + symbol + " orderId=" + pendingOrderId + " position=" + currentPosition);
+                if (this.parent != null && this.pendingOrderId != -1) {
+                    this.parent.cancelStaleOrder(this.pendingOrderId);
+                }
+                if (this.parent != null) {
+                    this.parent.requestPositions(); // Find out exactly what filled
+                    this.parent.requestOpenOrdersSync(); // Reconcile gateway/broker open-order state
+                }
+            } else if (now - this.lastPendingOrderReconcileLogTime > 10_000) {
+                this.lastPendingOrderReconcileLogTime = now;
+                flowInfo("WATCHDOG", "Waiting for broker terminal status/reconcile before unlocking. symbol=" + symbol + " orderId=" + pendingOrderId + " position=" + currentPosition);
             }
         }
         this.lastPrice = price;
-        boolean tickGateOpen = !circuitBreakerTripped && currentPosition != 0 && !inFlightOrder;
-        flowCondition("STRATEGY.TICK", "EXIT_TICK_GATE", tickGateOpen, "symbol=" + symbol + " circuitBreaker=" + circuitBreakerTripped + " position=" + currentPosition + " inFlight=" + inFlightOrder + " price=" + price);
-        if (!tickGateOpen) return;
+        evaluateHardRiskExit("tick", priceForAction("SELL", price), priceForAction("BUY", price), price);
+    }
 
-        double currentAvgEntry = avgEntryPrice;
-        double currentDailyPnL = dailyNetPnL;
+    private void evaluateHardRiskExit(String source, double longStopProbePrice, double shortStopProbePrice, double executionFallbackPrice) {
+        boolean gateOpen = !circuitBreakerTripped && currentPosition != 0 && !inFlightOrder;
+        flowCondition("STRATEGY.RISK", "HARD_EXIT_GATE", gateOpen, "symbol=" + symbol + " source=" + source + " circuitBreaker=" + circuitBreakerTripped + " position=" + currentPosition + " inFlight=" + inFlightOrder + " longProbe=" + longStopProbePrice + " shortProbe=" + shortStopProbePrice);
+        if (!gateOpen) return;
 
         int position = currentPosition;
-
+        double currentDailyPnL = dailyNetPnL;
         if (currentDailyPnL <= -maxDailyDrawdown) {
             circuitBreakerTripped = true;
-            flowCondition("STRATEGY.RISK", "DAILY_DRAWDOWN_WITHIN_LIMIT", false, "symbol=" + symbol + " dailyNetPnL=" + currentDailyPnL + " limit=" + (-maxDailyDrawdown));
+            flowCondition("STRATEGY.RISK", "DAILY_DRAWDOWN_WITHIN_LIMIT", false, "symbol=" + symbol + " source=" + source + " dailyNetPnL=" + currentDailyPnL + " limit=" + (-maxDailyDrawdown));
             String action = (position > 0) ? "SELL" : "BUY";
+            double executionPrice = priceForAction(action, executionFallbackPrice);
             this.inFlightOrder = true;
-            parent.placeTrade(symbol, action, price, Math.abs(position), "MKT");
+            parent.placeTrade(symbol, action, executionPrice, Math.abs(position), "MKT");
             return;
         }
-        flowCondition("STRATEGY.RISK", "DAILY_DRAWDOWN_WITHIN_LIMIT", true, "symbol=" + symbol + " dailyNetPnL=" + currentDailyPnL + " limit=" + (-maxDailyDrawdown));
+        flowCondition("STRATEGY.RISK", "DAILY_DRAWDOWN_WITHIN_LIMIT", true, "symbol=" + symbol + " source=" + source + " dailyNetPnL=" + currentDailyPnL + " limit=" + (-maxDailyDrawdown));
 
-        // HARD STOP LOSS (Catastrophic Protection)
-        if (currentAvgEntry > 0.0) {
-            if (position > 0 && price <= currentAvgEntry * (1.0 - stopLossPercentage)) {
-                flowCondition("STRATEGY.STOP", "LONG_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " price=" + price + " threshold=" + (currentAvgEntry * (1.0 - stopLossPercentage)));
-                this.inFlightOrder = true;
-                parent.placeTrade(symbol, "SELL", price, Math.abs(position), "MKT");
-            } else if (position < 0 && price >= currentAvgEntry * (1.0 + stopLossPercentage)) {
-                flowCondition("STRATEGY.STOP", "SHORT_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " price=" + price + " threshold=" + (currentAvgEntry * (1.0 + stopLossPercentage)));
-                this.inFlightOrder = true;
-                parent.placeTrade(symbol, "BUY", price, Math.abs(position), "MKT");
-            } else {
-                flowCondition("STRATEGY.STOP", "HARD_STOP_TRIGGERED", false, "symbol=" + symbol + " price=" + price + " avgEntry=" + currentAvgEntry + " position=" + position);
-            }
-        } else {
-            flowCondition("STRATEGY.STOP", "AVG_ENTRY_AVAILABLE", false, "symbol=" + symbol + " avgEntry=" + currentAvgEntry);
+        double currentAvgEntry = avgEntryPrice;
+        if (currentAvgEntry <= 0.0) {
+            flowCondition("STRATEGY.STOP", "AVG_ENTRY_AVAILABLE", false, "symbol=" + symbol + " source=" + source + " avgEntry=" + currentAvgEntry);
+            return;
         }
+
+        double longStopThreshold = currentAvgEntry * (1.0 - stopLossPercentage);
+        double shortStopThreshold = currentAvgEntry * (1.0 + stopLossPercentage);
+        if (position > 0 && longStopProbePrice > 0.0 && longStopProbePrice <= longStopThreshold) {
+            flowCondition("STRATEGY.STOP", "LONG_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + longStopProbePrice + " threshold=" + longStopThreshold);
+            recordHardStopExit("LONG", source);
+            this.inFlightOrder = true;
+            parent.placeTrade(symbol, "SELL", priceForAction("SELL", executionFallbackPrice), Math.abs(position), "MKT");
+            return;
+        }
+        if (position < 0 && shortStopProbePrice > 0.0 && shortStopProbePrice >= shortStopThreshold) {
+            flowCondition("STRATEGY.STOP", "SHORT_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + shortStopProbePrice + " threshold=" + shortStopThreshold);
+            recordHardStopExit("SHORT", source);
+            this.inFlightOrder = true;
+            parent.placeTrade(symbol, "BUY", priceForAction("BUY", executionFallbackPrice), Math.abs(position), "MKT");
+            return;
+        }
+        flowCondition("STRATEGY.STOP", "HARD_STOP_TRIGGERED", false, "symbol=" + symbol + " source=" + source + " longProbe=" + longStopProbePrice + " shortProbe=" + shortStopProbePrice + " avgEntry=" + currentAvgEntry + " position=" + position);
+    }
+
+    private void recordHardStopExit(String side, String source) {
+        hardStopExitCount++;
+        lastHardStopExitTimeMs = System.currentTimeMillis();
+        if (hardStopExitCount >= maxHardStopsPerDay) {
+            allowNewEntries = false;
+        }
+        flowData(
+            "STRATEGY.STOP",
+            "hardStopExitRecorded symbol=" + symbol
+                + " side=" + side
+                + " source=" + source
+                + " hardStopExitCount=" + hardStopExitCount
+                + " maxHardStopsPerDay=" + maxHardStopsPerDay
+                + " postHardStopEntryCooldownMs=" + postHardStopEntryCooldownMs
+                + " allowNewEntries=" + allowNewEntries
+        );
     }
 
     // =========================================================================
     // STREAM 2: THE BRAIN (5-second feed aggregated into 30-second AI bars)
     // =========================================================================
-    public void on5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
+    public void onSourceBar(long time, double open, double high, double low, double close, long volume, double wap) {
         eventQueue.offer(new StrategyEvent.BarEvent(time, open, high, low, close, volume, wap));
     }
 
+    public void on5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
+        onSourceBar(time, open, high, low, close, volume, wap);
+    }
+
     private void handle5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
+        // Method name is legacy, but the input stream may now be 1-second bars from Databento.
+        // The only thing that matters here is the event timestamp; we rebucket incoming source bars into fixed
+        // 30-second AI bars regardless of the source cadence.
+        this.latestSourceBarEpoch = time;
         this.currentTickArrivalTime = System.currentTimeMillis();
         this.lastPrice = close;
         flowData("STRATEGY.BAR", "symbol=" + symbol + " epoch=" + time + " ohlc=" + open + "/" + high + "/" + low + "/" + close + " vol=" + volume + " wap=" + wap);
 
-        if (bucketCount == 0) {
-            bucketEpoch = time;
-            bucketOpen = open;
-            bucketHigh = high;
-            bucketLow = low;
-            bucketClose = close;
-            bucketVolume = volume;
-            bucketWapSum = wap * volume;
-        } else {
-            bucketHigh = Math.max(bucketHigh, high);
-            bucketLow = Math.min(bucketLow, low);
-            bucketClose = close;
-            bucketVolume += volume;
-            bucketWapSum += (wap * volume);
+        updateIndependentMicroBarState(time, open, high, low, close, volume, wap);
+
+        // Bar path = guaranteed safety backstop. Databento deployments may not always deliver a separate tick stream,
+        // so hard exits must also inspect every source bar. For stops, use bar low/high as the adverse excursion probe;
+        // order routing still uses close/quotes as the execution reference for the market order.
+        evaluateHardRiskExit("bar", low, high, close);
+
+        long nextBucketStart = time - Math.floorMod(time, 30L);
+        if (bucketStartEpoch < 0L && nextBucketStart <= lastFinalizedBucketStartEpoch) {
+            flowCondition("STRATEGY.BAR", "LATE_FINALIZED_BUCKET_BAR_DROPPED", false,
+                "symbol=" + symbol + " epoch=" + time + " bucketStart=" + nextBucketStart + " lastFinalizedBucketStart=" + lastFinalizedBucketStartEpoch);
+            return;
+        }
+        if (bucketStartEpoch < 0L) {
+            startNew30SecondBucket(nextBucketStart, open, high, low, close, volume, wap);
+            if (time >= bucketStartEpoch + 29L) {
+                finalizeCurrent30SecondBucket();
+            }
+            return;
         }
 
-        bucketCount++;
+        if (nextBucketStart < bucketStartEpoch) {
+            flowCondition("STRATEGY.BAR", "OUT_OF_ORDER_BUCKET_BAR_DROPPED", false,
+                "symbol=" + symbol + " epoch=" + time + " bucketStart=" + nextBucketStart + " activeBucketStart=" + bucketStartEpoch);
+            return;
+        }
 
-        if (bucketCount == BARS_PER_30S_BUCKET) {
-            double finalWap = bucketVolume > 0 ? (bucketWapSum / bucketVolume) : bucketClose;
-            System.out.printf(
-                ">>> [30s BUCKET] epoch=%d ohlc=%.2f/%.2f/%.2f/%.2f vol=%d vwap=%.4f%n",
-                bucketEpoch, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap
-            );
-            process30SecondBar(bucketEpoch, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap);
+        if (nextBucketStart != bucketStartEpoch) {
+            finalizeCurrent30SecondBucket();
+            startNew30SecondBucket(nextBucketStart, open, high, low, close, volume, wap);
+            if (time >= bucketStartEpoch + 29L) {
+                finalizeCurrent30SecondBucket();
+            }
+            return;
+        }
 
-            bucketCount = 0;
-            bucketEpoch = 0L;
-            bucketOpen = 0.0;
-            bucketHigh = 0.0;
-            bucketLow = Double.MAX_VALUE;
-            bucketClose = 0.0;
-            bucketVolume = 0L;
-            bucketWapSum = 0.0;
+        accumulateIntoCurrent30SecondBucket(high, low, close, volume, wap);
+        if (time >= bucketStartEpoch + 29L) {
+            finalizeCurrent30SecondBucket();
         }
     }
 
+    private void updateIndependentMicroBarState(long time, double open, double high, double low, double close, long volume, double wap) {
+        MicroBar sourceBar = new MicroBar(time, open, high, low, close, Math.max(0L, volume), wap > 0.0 ? wap : close);
+        sourceBarWindow.addLast(sourceBar);
+        while (sourceBarWindow.size() > SOURCE_BAR_WINDOW_SIZE) {
+            sourceBarWindow.removeFirst();
+        }
+        accumulateIndependent5SecondMicroBucket(sourceBar);
+    }
+
+    private void accumulateIndependent5SecondMicroBucket(MicroBar sourceBar) {
+        long nextBucketStart = sourceBar.epoch() - Math.floorMod(sourceBar.epoch(), 5L);
+        if (micro5sBucketStartEpoch < 0L) {
+            startIndependent5SecondMicroBucket(nextBucketStart, sourceBar);
+            return;
+        }
+        if (nextBucketStart < micro5sBucketStartEpoch) {
+            flowCondition("STRATEGY.MICRO", "OUT_OF_ORDER_MICRO_BAR_DROPPED", false,
+                "symbol=" + symbol + " epoch=" + sourceBar.epoch() + " microBucket=" + nextBucketStart + " activeMicroBucket=" + micro5sBucketStartEpoch);
+            return;
+        }
+        if (nextBucketStart != micro5sBucketStartEpoch) {
+            finalizeIndependent5SecondMicroBucket();
+            startIndependent5SecondMicroBucket(nextBucketStart, sourceBar);
+            return;
+        }
+        micro5sHigh = Math.max(micro5sHigh, sourceBar.high());
+        micro5sLow = Math.min(micro5sLow, sourceBar.low());
+        micro5sClose = sourceBar.close();
+        micro5sVolume += Math.max(0L, sourceBar.volume());
+        micro5sWapSum += sourceBar.wap() * Math.max(0L, sourceBar.volume());
+    }
+
+    private void startIndependent5SecondMicroBucket(long bucketStart, MicroBar sourceBar) {
+        micro5sBucketStartEpoch = bucketStart;
+        micro5sOpen = sourceBar.open();
+        micro5sHigh = sourceBar.high();
+        micro5sLow = sourceBar.low();
+        micro5sClose = sourceBar.close();
+        micro5sVolume = Math.max(0L, sourceBar.volume());
+        micro5sWapSum = sourceBar.wap() * Math.max(0L, sourceBar.volume());
+    }
+
+    private void finalizeIndependent5SecondMicroBucket() {
+        if (micro5sBucketStartEpoch < 0L) {
+            return;
+        }
+        double finalWap = micro5sVolume > 0L ? micro5sWapSum / micro5sVolume : micro5sClose;
+        micro5sWindow.addLast(new MicroBar(
+            micro5sBucketStartEpoch,
+            micro5sOpen,
+            micro5sHigh,
+            micro5sLow,
+            micro5sClose,
+            micro5sVolume,
+            finalWap
+        ));
+        while (micro5sWindow.size() > MICRO_5S_WINDOW_SIZE) {
+            micro5sWindow.removeFirst();
+        }
+        evaluateMicroRoutes(micro5sWindow.peekLast());
+    }
+
+    private void clearIndependentMicroBarState() {
+        sourceBarWindow.clear();
+        micro5sWindow.clear();
+        micro5sReturnWindow20.clear();
+        micro5sVolumeWindow20.clear();
+        micro5sOptionFlowWindow20.clear();
+        micro5sBucketStartEpoch = -1L;
+        micro5sOpen = 0.0;
+        micro5sHigh = 0.0;
+        micro5sLow = Double.MAX_VALUE;
+        micro5sClose = 0.0;
+        micro5sVolume = 0L;
+        micro5sWapSum = 0.0;
+        microPrevPutVolume = latestPutVolume;
+        microPrevCallVolume = latestCallVolume;
+        latestSourceBarEpoch = 0L;
+        current30sAiDecisionEpoch = 0L;
+    }
+
+    private void evaluateMicroRoutes(MicroBar microBar) {
+        if (microBar == null || microBar.close() <= 0.0 || inFlightOrder || !enabled || circuitBreakerTripped) {
+            return;
+        }
+        Map<String, Float> microFeatures = constructTraining5sFeatureValueMap(microBar);
+
+        if (MICRO_EXIT_GUARD_ENABLED && currentPosition != 0) {
+            evaluateMicroExitGuard(microBar, microFeatures);
+        }
+
+        if (!MICRO_ENTRY_ENABLED || currentPosition != 0 || !positionSynced || !allowNewEntries || tradeCount >= maxTrades) {
+            return;
+        }
+        if (!microLongEntryArmed && !microShortEntryArmed) {
+            return;
+        }
+        long secondsSinceArm = Math.max(0L, microBar.epoch() - microArmEpoch);
+        if (secondsSinceArm > MICRO_ARM_TTL_SECONDS) {
+            clearMicroEntryArms("expired secondsSinceArm=" + secondsSinceArm);
+            return;
+        }
+        Map<String, Float> features = new LinkedHashMap<>(microFeatures);
+        features.putAll(armed30sFeatureValues);
+        features.put("f_setup_score_proxy", 1.0f);
+        features.put("f_seconds_since_arm", (float) secondsSinceArm);
+
+        if (microLongEntryArmed && longMicroEntryAi != null && longMicroEntryAi.isAvailable()) {
+            double prob = longMicroEntryAi.predictProbability(buildFeatureVector(MICRO_ENTRY_FEATURE_COLUMNS, features));
+            boolean pass = prob >= MICRO_LONG_ENTRY_THRESHOLD;
+            flowCondition("AI.MICRO.LONG.ENTRY", "MICRO_ENTRY_CONFIRMS", pass, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_LONG_ENTRY_THRESHOLD) + " secondsSinceArm=" + secondsSinceArm);
+            if (pass) {
+                int qty = sharesForAmount("BUY", microBar.close());
+                if (qty > 0) {
+                    clearMicroEntryArms("long-confirmed");
+                    this.inFlightOrder = true;
+                    parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), qty, "FAST_LMT");
+                    return;
+                }
+            }
+        }
+
+        if (microShortEntryArmed && shortMicroEntryAi != null && shortMicroEntryAi.isAvailable()) {
+            double prob = shortMicroEntryAi.predictProbability(buildFeatureVector(MICRO_ENTRY_FEATURE_COLUMNS, features));
+            boolean pass = prob >= MICRO_SHORT_ENTRY_THRESHOLD;
+            flowCondition("AI.MICRO.SHORT.ENTRY", "MICRO_ENTRY_CONFIRMS", pass, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_SHORT_ENTRY_THRESHOLD) + " secondsSinceArm=" + secondsSinceArm);
+            if (pass) {
+                int qty = sharesForAmount("SELL", microBar.close());
+                if (qty > 0) {
+                    clearMicroEntryArms("short-confirmed");
+                    this.inFlightOrder = true;
+                    parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), qty, "FAST_LMT");
+                }
+            }
+        }
+    }
+
+    private void evaluateMicroExitGuard(MicroBar microBar, Map<String, Float> microFeatures) {
+        if (positionEntryPrice <= 0.0) {
+            return;
+        }
+        updatePositionPathStats(microBar.high(), microBar.low(), microBar.close(), false);
+        Map<String, Float> features = new LinkedHashMap<>(microFeatures);
+        features.putAll(lastTraining30sFeatureValues);
+        features.putAll(positionFeatureValues(microBar.close(), false));
+
+        if (currentPosition > 0 && longMicroExitGuardAi != null && longMicroExitGuardAi.isAvailable()) {
+            double prob = longMicroExitGuardAi.predictProbability(buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
+            boolean shouldExit = prob >= MICRO_LONG_EXIT_GUARD_THRESHOLD;
+            flowCondition("AI.MICRO.LONG.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_LONG_EXIT_GUARD_THRESHOLD));
+            if (shouldExit) {
+                this.inFlightOrder = true;
+                parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), Math.abs(currentPosition), "MKT");
+            }
+        } else if (currentPosition < 0 && shortMicroExitGuardAi != null && shortMicroExitGuardAi.isAvailable()) {
+            double prob = shortMicroExitGuardAi.predictProbability(buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
+            boolean shouldExit = prob >= MICRO_SHORT_EXIT_GUARD_THRESHOLD;
+            flowCondition("AI.MICRO.SHORT.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_SHORT_EXIT_GUARD_THRESHOLD));
+            if (shouldExit) {
+                this.inFlightOrder = true;
+                parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), Math.abs(currentPosition), "MKT");
+            }
+        }
+    }
+
+    private Map<String, Float> constructTraining5sFeatureValueMap(MicroBar microBar) {
+        double prevClose = previousMicroClose(microBar.close());
+        double ret1 = prevClose > 0.0 ? (microBar.close() / prevClose) - 1.0 : 0.0;
+        micro5sReturnWindow20.addLast(ret1);
+        if (micro5sReturnWindow20.size() > 20) micro5sReturnWindow20.removeFirst();
+        micro5sVolumeWindow20.addLast((double) microBar.volume());
+        if (micro5sVolumeWindow20.size() > 20) micro5sVolumeWindow20.removeFirst();
+
+        long putDelta = Math.max(0L, latestPutVolume - microPrevPutVolume);
+        long callDelta = Math.max(0L, latestCallVolume - microPrevCallVolume);
+        microPrevPutVolume = latestPutVolume;
+        microPrevCallVolume = latestCallVolume;
+        double optionFlow = putDelta + callDelta;
+        micro5sOptionFlowWindow20.addLast(optionFlow);
+        if (micro5sOptionFlowWindow20.size() > 20) micro5sOptionFlowWindow20.removeFirst();
+
+        return commonTrainingFeatureValues("f_5s_", microBar.epoch(), microBar.open(), microBar.high(), microBar.low(), microBar.close(), microBar.volume(), microBar.wap(), ret1, pctReturnFromMicroWindow(3), stdDev(micro5sReturnWindow20), average(micro5sVolumeWindow20), putDelta, callDelta, average(micro5sOptionFlowWindow20), false);
+    }
+
+    private double previousMicroClose(double fallback) {
+        if (micro5sWindow.size() < 2) {
+            return fallback;
+        }
+        MicroBar last = micro5sWindow.removeLast();
+        MicroBar prev = micro5sWindow.peekLast();
+        micro5sWindow.addLast(last);
+        return prev == null ? fallback : prev.close();
+    }
+
+    private double pctReturnFromMicroWindow(int barsBack) {
+        if (micro5sWindow.size() <= barsBack) {
+            return 0.0;
+        }
+        MicroBar[] bars = micro5sWindow.toArray(new MicroBar[0]);
+        double previous = bars[bars.length - barsBack - 1].close();
+        double current = bars[bars.length - 1].close();
+        return previous > 0.0 ? (current / previous) - 1.0 : 0.0;
+    }
+
+    private void armMicroEntry(String side, Map<String, Float> contextFeatures, long armEpoch) {
+        armed30sFeatureValues = new HashMap<>(contextFeatures);
+        microArmEpoch = armEpoch;
+        microLongEntryArmed = "long".equalsIgnoreCase(side);
+        microShortEntryArmed = "short".equalsIgnoreCase(side);
+        flowInfo("AI.MICRO.ENTRY", "Armed " + side + " micro-entry symbol=" + symbol + " epoch=" + armEpoch + " ttlSeconds=" + MICRO_ARM_TTL_SECONDS);
+    }
+
+    private long currentMicroArmEpoch() {
+        if (current30sAiDecisionEpoch > 0L) {
+            return current30sAiDecisionEpoch;
+        }
+        if (lastTraining30sEpoch > 0L) {
+            return lastTraining30sEpoch + 30L;
+        }
+        if (currentMarketTime != null) {
+            return currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
+        }
+        return 0L;
+    }
+
+    private void clearMicroEntryArms(String reason) {
+        if (microLongEntryArmed || microShortEntryArmed) {
+            flowInfo("AI.MICRO.ENTRY", "Cleared micro-entry arms symbol=" + symbol + " reason=" + reason);
+        }
+        microLongEntryArmed = false;
+        microShortEntryArmed = false;
+        microArmEpoch = 0L;
+        armed30sFeatureValues = new HashMap<>();
+    }
+
+    private void startNew30SecondBucket(long bucketEpoch, double open, double high, double low, double close, long volume, double wap) {
+        bucketStartEpoch = bucketEpoch;
+        bucketOpen = open;
+        bucketHigh = high;
+        bucketLow = low;
+        bucketClose = close;
+        bucketVolume = Math.max(0L, volume);
+        double effectiveWap = wap > 0.0 ? wap : close;
+        bucketWapSum = effectiveWap * Math.max(0L, volume);
+    }
+
+    private void accumulateIntoCurrent30SecondBucket(double high, double low, double close, long volume, double wap) {
+        bucketHigh = Math.max(bucketHigh, high);
+        bucketLow = Math.min(bucketLow, low);
+        bucketClose = close;
+        bucketVolume += Math.max(0L, volume);
+        double effectiveWap = wap > 0.0 ? wap : close;
+        bucketWapSum += (effectiveWap * Math.max(0L, volume));
+    }
+
+    private void finalizeCurrent30SecondBucket() {
+        if (bucketStartEpoch < 0L) {
+            return;
+        }
+        long finalizedBucketStart = bucketStartEpoch;
+        double finalWap = bucketVolume > 0 ? (bucketWapSum / bucketVolume) : bucketClose;
+        System.out.printf(
+            ">>> [30s BUCKET] epoch=%d ohlc=%.2f/%.2f/%.2f/%.2f vol=%d vwap=%.4f%n",
+            finalizedBucketStart, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap
+        );
+        current30sAiDecisionEpoch = latestSourceBarEpoch > 0L ? latestSourceBarEpoch : finalizedBucketStart + 30L;
+        process30SecondBar(finalizedBucketStart, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap);
+        lastFinalizedBucketStartEpoch = finalizedBucketStart;
+
+        bucketStartEpoch = -1L;
+        bucketOpen = 0.0;
+        bucketHigh = 0.0;
+        bucketLow = Double.MAX_VALUE;
+        bucketClose = 0.0;
+        bucketVolume = 0L;
+        bucketWapSum = 0.0;
+    }
+
     private void process30SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
+        // This is the main "brain" pass.
+        // By the time execution gets here, the 30-second bucket is final and we can safely compute features that
+        // assume a closed bar, such as momentum, realized volatility, opening-range distance, and order-flow ratios.
         
         this.currentMarketTime = LocalDateTime.ofEpochSecond(time, 0, ZoneOffset.UTC)
                               .atZone(ZoneId.of("UTC"))
@@ -811,6 +1812,7 @@ public class PingPongStrategy implements TradingStrategy {
             returnWindow20.clear();
             realizedVolWindow100.clear();
             spreadWindow100.clear();
+            clearIndependentMicroBarState();
             greenStreak = 0;
             redStreak = 0;
         }
@@ -859,6 +1861,9 @@ public class PingPongStrategy implements TradingStrategy {
 
         smaWindow.addLast(barClose);
         if (smaWindow.size() > 60) smaWindow.removeFirst();
+
+        volumeWindow.addLast((double) barVolume);
+        if (volumeWindow.size() > 60) volumeWindow.removeFirst();
 
         // NEW: Track the 60-bar (5-minute) local highs and lows
         highWindow.addLast(barHigh);
@@ -910,6 +1915,13 @@ public class PingPongStrategy implements TradingStrategy {
         prevPutVolume = latestPutVolume;
         prevCallVolume = latestCallVolume;
         currentPutCallRatio = deltaCall > 0L ? (float) deltaPut / (float) deltaCall : 1.0f;
+        lastTraining30sFeatureValues = constructTraining30sFeatureValueMap(time, wap, deltaPut, deltaCall, activeRegimeForFeatures());
+        lastTraining30sClose = barClose;
+        lastTraining30sEpoch = time;
+        if (currentPosition != 0 && positionEntryPrice > 0.0) {
+            barsSincePositionEntry30s++;
+            updatePositionPathStats(barHigh, barLow, barClose, true);
+        }
 
         if (!optionVolumeWarningLogged) {
             int hour = currentMarketTime.getHour();
@@ -923,7 +1935,7 @@ public class PingPongStrategy implements TradingStrategy {
 
         boolean openingThirty = isOpeningThirtyMinutes();
         int requiredBars = openingThirty ? OPEN30_MIN_BARS : REGULAR_MIN_BARS;
-        boolean barsReadyForProfile = barsCount > requiredBars;
+        boolean barsReadyForProfile = barsCount >= requiredBars;
 
         flowCondition(
             "STRATEGY.WARMUP",
@@ -956,7 +1968,242 @@ public class PingPongStrategy implements TradingStrategy {
         return Math.sqrt(Math.max(0.0, var));
     }
 
+    private double average(Deque<Double> values) {
+        return values == null || values.isEmpty() ? 0.0 : values.stream().mapToDouble(Double::doubleValue).average().orElse(0.0);
+    }
+
+    private MarketRegime activeRegimeForFeatures() {
+        return currentMarketTime != null && isOpeningThirtyMinutes() ? MarketRegime.CHOPPY : lastDetectedRegime;
+    }
+
+    private Map<String, Float> constructTraining30sFeatureValueMap(long epoch, double wap, long putDelta, long callDelta, MarketRegime regime) {
+        double ret1 = lastTraining30sClose > 0.0 ? (barClose / lastTraining30sClose) - 1.0 : 0.0;
+        training30sReturnWindow20.addLast(ret1);
+        if (training30sReturnWindow20.size() > 20) training30sReturnWindow20.removeFirst();
+        training30sVolumeWindow20.addLast((double) barVolume);
+        if (training30sVolumeWindow20.size() > 20) training30sVolumeWindow20.removeFirst();
+        double optionFlow = putDelta + callDelta;
+        training30sOptionFlowWindow20.addLast(optionFlow);
+        if (training30sOptionFlowWindow20.size() > 20) training30sOptionFlowWindow20.removeFirst();
+
+        Map<String, Float> values = commonTrainingFeatureValues(
+            "f_30s_",
+            epoch,
+            barOpen,
+            barHigh,
+            barLow,
+            barClose,
+            barVolume,
+            wap,
+            ret1,
+            pctReturnFrom30sWindow(3),
+            stdDev(training30sReturnWindow20),
+            average(training30sVolumeWindow20),
+            putDelta,
+            callDelta,
+            average(training30sOptionFlowWindow20),
+            true
+        );
+        values.put("f_regime_choppy", regime == MarketRegime.CHOPPY ? 1.0f : 0.0f);
+        values.put("f_regime_trend", regime == MarketRegime.TREND ? 1.0f : 0.0f);
+        values.put("f_regime_volatile", regime == MarketRegime.VOLATILE ? 1.0f : 0.0f);
+        return values;
+    }
+
+    private Map<String, Float> commonTrainingFeatureValues(String prefix, long epoch, double open, double high, double low, double close,
+                                                           long volume, double wap, double ret1, double ret3, double realizedVol20,
+                                                           double avgVolume20, long putDelta, long callDelta, double avgOptionFlow20,
+                                                           boolean thirtySecondCadence) {
+        Map<String, Float> values = new HashMap<>();
+        double safeClose = close > 0.0 ? close : 1.0;
+        double effectiveWap = wap > 0.0 ? wap : close;
+        double bid = latestBidPrice;
+        double ask = latestAskPrice;
+        double mid = bid > 0.0 && ask > 0.0 ? (bid + ask) / 2.0 : close;
+        double spreadBps = mid > 0.0 && ask >= bid && bid > 0.0 ? ((ask - bid) / mid) * 10_000.0 : 0.0;
+        long putTotal = latestPutVolume;
+        long callTotal = latestCallVolume;
+        long optionFlow = Math.max(0L, putDelta) + Math.max(0L, callDelta);
+        LocalDateTime ts = LocalDateTime.ofEpochSecond(epoch, 0, ZoneOffset.UTC).atZone(ZoneId.of("UTC")).withZoneSameInstant(MARKET_ZONE).toLocalDateTime();
+        int minuteOfDay = ts.getHour() * 60 + ts.getMinute();
+        double normalizedTod = Math.max(0.0, Math.min(1.0, (minuteOfDay - (9 * 60 + 30)) / (6.5 * 60.0)));
+
+        values.put(prefix + "ret_1", (float) ret1);
+        values.put(prefix + "ret_3", (float) ret3);
+        values.put(prefix + "range_pct", (float) ((high - low) / safeClose));
+        values.put(prefix + "body_pct", (float) ((close - open) / safeClose));
+        values.put(prefix + "upper_wick_pct", (float) ((high - Math.max(open, close)) / safeClose));
+        values.put(prefix + "lower_wick_pct", (float) ((Math.min(open, close) - low) / safeClose));
+        values.put(prefix + "vwap_dist", (float) ((close - effectiveWap) / safeClose));
+        values.put(prefix + "rel_volume_20", (float) (volume / (avgVolume20 + 1.0)));
+        values.put(prefix + "realized_vol_20", (float) realizedVol20);
+        values.put(prefix + "spread_bps", (float) spreadBps);
+        values.put(prefix + "option_put_delta", (float) putDelta);
+        values.put(prefix + "option_call_delta", (float) callDelta);
+        values.put(prefix + "option_put_call_ratio", (float) (putTotal / (callTotal + 1.0)));
+        values.put(prefix + "option_delta_put_call_ratio", (float) (putDelta / (callDelta + 1.0)));
+        values.put(prefix + "option_volume_burst", (float) (optionFlow / (avgOptionFlow20 + 1.0)));
+        values.put(prefix + "time_of_day", (float) normalizedTod);
+        values.put(prefix + "is_open_hour", minuteOfDay < 10 * 60 + 30 ? 1.0f : 0.0f);
+        values.put(prefix + "is_close_hour", minuteOfDay >= 15 * 60 ? 1.0f : 0.0f);
+        return values;
+    }
+
+    private double pctReturnFrom30sWindow(int barsBack) {
+        if (barsBack <= 1 || training30sReturnWindow20.isEmpty()) {
+            return training30sReturnWindow20.stream().reduce(0.0, (acc, r) -> acc + r);
+        }
+        double compounded = 1.0;
+        Double[] returns = training30sReturnWindow20.toArray(new Double[0]);
+        int start = Math.max(0, returns.length - barsBack);
+        for (int i = start; i < returns.length; i++) {
+            compounded *= (1.0 + returns[i]);
+        }
+        return compounded - 1.0;
+    }
+
+    private boolean evaluateExitSignal(String flowTag, String exitAction, boolean rsiGate, double rsiThreshold, LazyAiPredictor predictor,
+                                       float[] features, double threshold, double currentRsi, double referencePrice,
+                                       MarketRegime activeRegime) {
+        boolean modelReady = predictor != null && predictor.isAvailable();
+        double executablePrice = priceForAction(exitAction, referencePrice);
+        String positionState = currentPosition > 0 ? "LONG" : (currentPosition < 0 ? "SHORT" : "FLAT");
+        flowCondition(flowTag, "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + rsiThreshold);
+        flowCondition(flowTag, "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " regime=" + activeRegime);
+        flowData(
+            flowTag,
+            "EVAL_CONTEXT symbol=" + symbol
+                + " position=" + currentPosition
+                + " positionState=" + positionState
+                + " action=" + exitAction
+                + " regime=" + activeRegime
+                + " close=" + referencePrice
+                + " bid=" + latestBidPrice
+                + " ask=" + latestAskPrice
+                + " execPx=" + executablePrice
+                + " expectedThreshold=" + formatProb(threshold)
+                + " rsi=" + String.format("%.2f", currentRsi)
+                + " rsiGate=" + rsiGate
+                + " modelReady=" + modelReady
+        );
+        if (!rsiGate || !modelReady) {
+            flowData(
+                flowTag,
+                "EVAL_RESULT symbol=" + symbol
+                    + " action=" + exitAction
+                    + " prob=NA"
+                    + " expectedThreshold=" + formatProb(threshold)
+                    + " close=" + referencePrice
+                    + " execPx=" + executablePrice
+                    + " decision=false"
+                    + " skippedBy=" + (!rsiGate ? "RSI_GATE" : "MODEL_UNAVAILABLE")
+            );
+            return false;
+        }
+
+        double prob = predictor.predictProbability(features);
+        boolean shouldExit = prob >= threshold;
+        flowData(
+            flowTag,
+            "EVAL_RESULT symbol=" + symbol
+                + " action=" + exitAction
+                + " prob=" + formatProb(prob)
+                + " expectedThreshold=" + formatProb(threshold)
+                + " close=" + referencePrice
+                + " bid=" + latestBidPrice
+                + " ask=" + latestAskPrice
+                + " execPx=" + executablePrice
+                + " decision=" + shouldExit
+        );
+        flowCondition(
+            flowTag,
+            "AI_PREDICTS_EXIT",
+            shouldExit,
+            "symbol=" + symbol
+                + " rsi=" + currentRsi
+                + " close=" + referencePrice
+                + " prob=" + formatProb(prob)
+                + " threshold=" + formatProb(threshold)
+        );
+        return shouldExit;
+    }
+
+    private boolean evaluateLifecycleExitSignal(String side, LazyAiPredictor predictor, double threshold, double referencePrice) {
+        boolean modelReady = predictor != null && predictor.isAvailable();
+        boolean positionReady = positionEntryPrice > 0.0 && currentPosition != 0;
+        flowCondition("AI.LIFECYCLE.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " side=" + side);
+        flowCondition("AI.LIFECYCLE.EXIT", "POSITION_CONTEXT_AVAILABLE", positionReady, "symbol=" + symbol + " side=" + side + " entryPrice=" + positionEntryPrice + " position=" + currentPosition);
+        if (!modelReady || !positionReady) {
+            return false;
+        }
+        Map<String, Float> features = new LinkedHashMap<>(lastTraining30sFeatureValues);
+        features.putAll(positionFeatureValues(referencePrice, true));
+        double prob = predictor.predictProbability(buildFeatureVector(LIFECYCLE_FEATURE_COLUMNS, features));
+        boolean shouldExit = prob >= threshold;
+        flowCondition(
+            "AI.LIFECYCLE.EXIT",
+            "LIFECYCLE_EXIT_TRIGGERS",
+            shouldExit,
+            "symbol=" + symbol + " side=" + side + " prob=" + formatProb(prob) + " threshold=" + formatProb(threshold) + " unrealizedR=" + features.getOrDefault("f_unrealized_pnl_r", 0.0f)
+        );
+        return shouldExit;
+    }
+
+    private Map<String, Float> positionFeatureValues(double referencePrice, boolean lifecycleCadence) {
+        Map<String, Float> values = new HashMap<>();
+        double unrealizedR = unrealizedR(referencePrice);
+        values.put("f_entry_score_proxy", 1.0f);
+        values.put("f_entry_side_long", positionEntrySide > 0 ? 1.0f : 0.0f);
+        values.put("f_entry_side_short", positionEntrySide < 0 ? 1.0f : 0.0f);
+        values.put("f_pos_side", positionEntrySide > 0 ? 1.0f : -1.0f);
+        values.put("f_bars_since_entry", (float) (barsSincePositionEntry30s / Math.max(1.0, LIFECYCLE_HORIZON_30S)));
+        values.put("f_bars_since_entry_5s", (float) barsSincePositionEntry5s);
+        values.put("f_unrealized_pnl_r", (float) unrealizedR);
+        values.put("f_mfe_r", (float) positionMfeR);
+        values.put("f_mae_r", (float) positionMaeR);
+        values.put("f_target_remaining_r", (float) ((LIFECYCLE_ENTRY_PROFIT_PCT / LIFECYCLE_ENTRY_RISK_PCT) - unrealizedR));
+        values.put("f_stop_remaining_r", (float) (unrealizedR + 1.0));
+        return values;
+    }
+
+    private void updatePositionPathStats(double high, double low, double close, boolean thirtySecondCadence) {
+        if (positionEntryPrice <= 0.0 || positionEntrySide == 0) {
+            return;
+        }
+        if (!thirtySecondCadence) {
+            barsSincePositionEntry5s++;
+        }
+        double favR;
+        double advR;
+        if (positionEntrySide > 0) {
+            favR = ((Math.max(high, close) - positionEntryPrice) / positionEntryPrice) / LIFECYCLE_ENTRY_RISK_PCT;
+            advR = ((Math.min(low, close) - positionEntryPrice) / positionEntryPrice) / LIFECYCLE_ENTRY_RISK_PCT;
+        } else {
+            favR = ((positionEntryPrice - Math.min(low, close)) / positionEntryPrice) / LIFECYCLE_ENTRY_RISK_PCT;
+            advR = ((positionEntryPrice - Math.max(high, close)) / positionEntryPrice) / LIFECYCLE_ENTRY_RISK_PCT;
+        }
+        positionMfeR = Math.max(positionMfeR, favR);
+        positionMaeR = Math.min(positionMaeR, advR);
+    }
+
+    private double unrealizedR(double referencePrice) {
+        if (positionEntryPrice <= 0.0 || referencePrice <= 0.0 || positionEntrySide == 0) {
+            return 0.0;
+        }
+        double pnlPct = positionEntrySide > 0
+            ? (referencePrice - positionEntryPrice) / positionEntryPrice
+            : (positionEntryPrice - referencePrice) / positionEntryPrice;
+        return pnlPct / LIFECYCLE_ENTRY_RISK_PCT;
+    }
+
     private void askArtificialIntelligence() {
+        // AI routing is structured around position-aware execution:
+        //  1) long position  -> evaluate long-exit models and only SELL if there is inventory to close
+        //  2) short position -> evaluate short-exit models and only BUY if there is inventory to cover
+        //  3) flat           -> still evaluate both exit models for research/telemetry, then evaluate entries
+        //
+        // This keeps exit-model telemetry flowing even while flat without allowing flat-state exit signals to submit
+        // contradictory closing orders.
         boolean timeReady = currentMarketTime != null;
         flowCondition("AI.GATE", "CURRENT_MARKET_TIME_PRESENT", timeReady, "symbol=" + symbol + " currentMarketTime=" + currentMarketTime);
         if (!timeReady) return;
@@ -979,58 +2226,129 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.GATE", "YESTERDAY_CLOSE_AVAILABLE", false, "symbol=" + symbol + " yesterdayClose=" + yesterdayClose);
         }
 
-        float[] features = constructModelFeatures(currentRsi);
-        float[] regimeFeatures = constructRegimeClassifierFeatures(features);
-        flowData("AI.INPUT", "symbol=" + symbol + " features=" + Arrays.toString(features));
-
         boolean openingThirty = isOpeningThirtyMinutes();
-        MarketRegime activeRegime = openingThirty ? MarketRegime.CHOPPY : detectMarketRegime(regimeFeatures);
-        AiPredictor activeLongEntryAi;
-        AiPredictor activeShortEntryAi;
-        AiPredictor activeLongExitAi;
-        AiPredictor activeShortExitAi;
+        Map<String, Float> liveFeatureValues = constructFeatureValueMap(currentRsi);
+        float[] loggedBaseFeatures = buildFeatureVector(BASE_FEATURE_COLUMNS, liveFeatureValues);
+        flowData("AI.INPUT", "symbol=" + symbol + " features=" + Arrays.toString(loggedBaseFeatures));
+
+        int regimeExpectedFeatureCount = expectedFeatureCountForModel(regimeClassifierAi, BASE_PLUS_NEWS_FEATURE_COLUMNS.size());
+        float[] regimeFeatures = buildRegimeClassifierFeaturesForExpectedCount(regimeExpectedFeatureCount, liveFeatureValues);
+        RegimeDecision regimeDecision = openingThirty
+            ? new RegimeDecision(MarketRegime.CHOPPY, defaultRegimeProbabilityFeatures(1.0, 0.0, 0.0))
+            : detectMarketRegime(regimeFeatures);
+        liveFeatureValues.putAll(regimeDecision.probabilityFeatures());
+        MarketRegime activeRegime = regimeDecision.regime();
+        boolean lifecycleExitRouteAvailable = !LIFECYCLE_EXIT_ENABLED || (longExitLifecycleAi != null && shortExitLifecycleAi != null);
+        if (!lifecycleExitRouteAvailable) {
+            activeRegime = MarketRegime.CHOPPY;
+            liveFeatureValues.putAll(defaultRegimeProbabilityFeatures(1.0, 0.0, 0.0));
+            flowError("AI.ROUTE", "Lifecycle exit route unavailable; forcing CHOPPY/default routing symbol=" + symbol);
+        }
+        LazyAiPredictor activeLongEntryAi;
+        LazyAiPredictor activeShortEntryAi;
+        LazyAiPredictor activeLongExitAi = null;
+        LazyAiPredictor activeShortExitAi = null;
 
         if (openingThirty) {
             activeLongEntryAi = open30LongEntryAi != null ? open30LongEntryAi : longEntryAi;
             activeShortEntryAi = open30ShortEntryAi != null ? open30ShortEntryAi : shortEntryAi;
-            activeLongExitAi = open30LongExitAi != null ? open30LongExitAi : longExitAi;
-            activeShortExitAi = open30ShortExitAi != null ? open30ShortExitAi : shortExitAi;
+            if (LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
+                activeLongExitAi = open30LongExitAi != null ? open30LongExitAi : longExitAi;
+                activeShortExitAi = open30ShortExitAi != null ? open30ShortExitAi : shortExitAi;
+            }
             flowData("AI.ROUTER", "symbol=" + symbol + " profile=OPEN30");
         } else {
             activeLongEntryAi = modelForRegime(activeRegime, longEntryAi, choppyLongEntryAi, trendLongEntryAi, volatileLongEntryAi);
             activeShortEntryAi = modelForRegime(activeRegime, shortEntryAi, choppyShortEntryAi, trendShortEntryAi, volatileShortEntryAi);
-            activeLongExitAi = modelForRegime(activeRegime, longExitAi, choppyLongExitAi, trendLongExitAi, volatileLongExitAi);
-            activeShortExitAi = modelForRegime(activeRegime, shortExitAi, choppyShortExitAi, trendShortExitAi, volatileShortExitAi);
+            if (LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
+                activeLongExitAi = modelForRegime(activeRegime, longExitAi, choppyLongExitAi, trendLongExitAi, volatileLongExitAi);
+                activeShortExitAi = modelForRegime(activeRegime, shortExitAi, choppyShortExitAi, trendShortExitAi, volatileShortExitAi);
+            }
             flowData("AI.ROUTER", "symbol=" + symbol + " profile=REGIME activeRegime=" + activeRegime);
+        }
+
+        double activeLongEntryThreshold = aiThresholdConfig.thresholdFor(openingThirty, activeRegime, ThresholdAction.LONG_ENTRY);
+        double activeShortEntryThreshold = aiThresholdConfig.thresholdFor(openingThirty, activeRegime, ThresholdAction.SHORT_ENTRY);
+        double activeLongExitThreshold = aiThresholdConfig.thresholdFor(openingThirty, activeRegime, ThresholdAction.LONG_EXIT);
+        double activeShortExitThreshold = aiThresholdConfig.thresholdFor(openingThirty, activeRegime, ThresholdAction.SHORT_EXIT);
+        flowData(
+            "AI.ROUTER",
+            "symbol=" + symbol
+                + " thresholdProfile=" + (openingThirty ? "OPEN30" : activeRegime)
+                + " longEntry=" + formatProb(activeLongEntryThreshold)
+                + " shortEntry=" + formatProb(activeShortEntryThreshold)
+                + " longExit=" + formatProb(activeLongExitThreshold)
+                + " shortExit=" + formatProb(activeShortExitThreshold)
+        );
+
+        int longEntryFeatureCount = expectedFeatureCountForModel(activeLongEntryAi, BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size());
+        int shortEntryFeatureCount = expectedFeatureCountForModel(activeShortEntryAi, BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size());
+        float[] longEntryFeatures = buildFeatureVectorForExpectedCount(longEntryFeatureCount, liveFeatureValues);
+        float[] shortEntryFeatures = buildFeatureVectorForExpectedCount(shortEntryFeatureCount, liveFeatureValues);
+        float[] longExitFeatures = new float[0];
+        float[] shortExitFeatures = new float[0];
+        if (LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
+            int longExitFeatureCount = expectedFeatureCountForModel(activeLongExitAi, BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size());
+            int shortExitFeatureCount = expectedFeatureCountForModel(activeShortExitAi, BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size());
+            longExitFeatures = buildFeatureVectorForExpectedCount(longExitFeatureCount, liveFeatureValues);
+            shortExitFeatures = buildFeatureVectorForExpectedCount(shortExitFeatureCount, liveFeatureValues);
+        }
+        flowData(
+            "AI.ROUTER",
+            "symbol=" + symbol
+                + " featureCounts longEntry=" + longEntryFeatures.length
+                + " shortEntry=" + shortEntryFeatures.length
+                + " longExit=" + longExitFeatures.length
+                + " shortExit=" + shortExitFeatures.length
+                + " regime=" + regimeFeatures.length
+        );
+
+        boolean shouldExitLong = false;
+        if (currentPosition > 0 && LIFECYCLE_EXIT_ENABLED) {
+            shouldExitLong = evaluateLifecycleExitSignal("long", longExitLifecycleAi, LIFECYCLE_LONG_EXIT_THRESHOLD, barClose);
+        } else if (currentPosition >= 0 && LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
+            boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi > RSI_LONG_EXIT_THRESHOLD;
+            shouldExitLong = evaluateExitSignal(
+                "AI.LONG.EXIT",
+                "SELL",
+                rsiGate,
+                RSI_LONG_EXIT_THRESHOLD,
+                activeLongExitAi,
+                longExitFeatures,
+                activeLongExitThreshold,
+                currentRsi,
+                barClose,
+                activeRegime
+            );
+        }
+
+        boolean shouldExitShort = false;
+        if (currentPosition < 0 && LIFECYCLE_EXIT_ENABLED) {
+            shouldExitShort = evaluateLifecycleExitSignal("short", shortExitLifecycleAi, LIFECYCLE_SHORT_EXIT_THRESHOLD, barClose);
+        } else if (currentPosition <= 0 && LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
+            boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi < RSI_SHORT_EXIT_THRESHOLD;
+            shouldExitShort = evaluateExitSignal(
+                "AI.SHORT.EXIT",
+                "BUY",
+                rsiGate,
+                RSI_SHORT_EXIT_THRESHOLD,
+                activeShortExitAi,
+                shortExitFeatures,
+                activeShortExitThreshold,
+                currentRsi,
+                barClose,
+                activeRegime
+            );
         }
 
         // ==========================================
         // SCENARIO 1: WE ARE ALREADY LONG
         // ==========================================
         if (currentPosition > 0) {
-            boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi > RSI_LONG_EXIT_THRESHOLD;
-            boolean modelReady = activeLongExitAi != null;
-            flowCondition("AI.LONG.EXIT", "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + RSI_LONG_EXIT_THRESHOLD);
-            flowCondition("AI.LONG.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " regime=" + activeRegime);
-            boolean shouldExitLong = false;
-            if (rsiGate && modelReady) {
-                double prob = activeLongExitAi.predictProbability(features);
-                shouldExitLong = prob >= longExitProbabilityThreshold;
-                flowCondition(
-                    "AI.LONG.EXIT",
-                    "AI_PREDICTS_EXIT",
-                    shouldExitLong,
-                    "symbol=" + symbol
-                        + " rsi=" + currentRsi
-                        + " close=" + barClose
-                        + " prob=" + formatProb(prob)
-                        + " threshold=" + formatProb(longExitProbabilityThreshold)
-                );
-            }
             if (shouldExitLong) {
                 flowInfo("AI.LONG.EXIT", "Top detector signaled exit. Taking LONG profits symbol=" + symbol);
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "SELL", barClose, Math.abs(currentPosition), "MKT");
+                parent.placeTrade(symbol, "SELL", priceForAction("SELL", barClose), Math.abs(currentPosition), "MKT");
             }
             return; 
         }
@@ -1039,99 +2357,116 @@ public class PingPongStrategy implements TradingStrategy {
         // SCENARIO 2: WE ARE ALREADY SHORT
         // ==========================================
         if (currentPosition < 0) {
-            boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi < RSI_SHORT_EXIT_THRESHOLD;
-            boolean modelReady = activeShortExitAi != null;
-            flowCondition("AI.SHORT.EXIT", "RSI_PRE_GATE", rsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + RSI_SHORT_EXIT_THRESHOLD);
-            flowCondition("AI.SHORT.EXIT", "MODEL_AVAILABLE", modelReady, "symbol=" + symbol + " regime=" + activeRegime);
-            boolean shouldExitShort = false;
-            if (rsiGate && modelReady) {
-                double prob = activeShortExitAi.predictProbability(features);
-                shouldExitShort = prob >= shortExitProbabilityThreshold;
-                flowCondition(
-                    "AI.SHORT.EXIT",
-                    "AI_PREDICTS_EXIT",
-                    shouldExitShort,
-                    "symbol=" + symbol
-                        + " rsi=" + currentRsi
-                        + " close=" + barClose
-                        + " prob=" + formatProb(prob)
-                        + " threshold=" + formatProb(shortExitProbabilityThreshold)
-                );
-            }
             if (shouldExitShort) {
                 flowInfo("AI.SHORT.EXIT", "Bottom detector signaled cover. Covering SHORT symbol=" + symbol);
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "BUY", barClose, Math.abs(currentPosition), "MKT");
+                parent.placeTrade(symbol, "BUY", priceForAction("BUY", barClose), Math.abs(currentPosition), "MKT");
             }
             return; 
+        }
+
+        if (shouldExitLong) {
+            flowCondition("AI.LONG.EXIT", "POSITION_GATE", false, "symbol=" + symbol + " position=" + currentPosition + " note=flat_signal_logged_only");
+        }
+        if (shouldExitShort) {
+            flowCondition("AI.SHORT.EXIT", "POSITION_GATE", false, "symbol=" + symbol + " position=" + currentPosition + " note=flat_signal_logged_only");
         }
 
         // ==========================================
         // SCENARIO 3: WE ARE FLAT (LOOKING FOR ENTRIES)
         // ==========================================
-        if (allowNewEntries && tradeCount < maxTrades) {
-            int qty = sharesForAmount(barClose);
-            flowCondition("AI.ENTRY", "QTY_POSITIVE", qty > 0, "symbol=" + symbol + " qty=" + qty + " close=" + barClose);
-            if (qty <= 0) return;
+        flowCondition("AI.ENTRY", "POSITION_SYNCED", positionSynced, "symbol=" + symbol + " positionSynced=" + positionSynced);
+        long nowMs = System.currentTimeMillis();
+        long hardStopCooldownRemainingMs = Math.max(0L, postHardStopEntryCooldownMs - (nowMs - lastHardStopExitTimeMs));
+        boolean hardStopCooldownElapsed = lastHardStopExitTimeMs <= 0L || hardStopCooldownRemainingMs == 0L;
+        boolean hardStopBudgetAvailable = hardStopExitCount < maxHardStopsPerDay;
+        boolean entryGateOpen = allowNewEntries && tradeCount < maxTrades && positionSynced && hardStopCooldownElapsed && hardStopBudgetAvailable;
+        flowCondition(
+            "AI.ENTRY",
+            "ENTRY_GATE_OPEN",
+            entryGateOpen,
+            "symbol=" + symbol
+                + " allowNewEntries=" + allowNewEntries
+                + " tradeCount=" + tradeCount
+                + " maxTrades=" + maxTrades
+                + " positionSynced=" + positionSynced
+                + " hardStopExitCount=" + hardStopExitCount
+                + " maxHardStopsPerDay=" + maxHardStopsPerDay
+                + " hardStopCooldownElapsed=" + hardStopCooldownElapsed
+                + " hardStopCooldownRemainingMs=" + hardStopCooldownRemainingMs
+        );
+        if (entryGateOpen) {
+            double buyReferencePrice = priceForAction("BUY", barClose);
+            double sellReferencePrice = priceForAction("SELL", barClose);
+            int buyQty = sharesForAmount("BUY", barClose);
+            int sellQty = sharesForAmount("SELL", barClose);
+            flowCondition("AI.ENTRY", "BUY_QTY_POSITIVE", buyQty > 0, "symbol=" + symbol + " qty=" + buyQty + " askOrFallback=" + buyReferencePrice);
+            flowCondition("AI.ENTRY", "SELL_QTY_POSITIVE", sellQty > 0, "symbol=" + symbol + " qty=" + sellQty + " bidOrFallback=" + sellReferencePrice);
 
             // --- DIP BUYING (LONG ENTRY) ---
             double longThreshold = (currentHour == 9) ? RSI_LONG_ENTRY_OPEN_THRESHOLD : RSI_LONG_ENTRY_REGULAR_THRESHOLD;
             boolean longRsiGate = !USE_RSI_PRE_GATES || currentRsi < longThreshold;
-            boolean longModelReady = activeLongEntryAi != null;
+            boolean longModelReady = activeLongEntryAi != null && activeLongEntryAi.isAvailable();
             flowCondition("AI.LONG.ENTRY", "RSI_PRE_GATE", longRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + longThreshold);
             flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldEnterLong = false;
             if (longRsiGate && longModelReady) {
-                double prob = activeLongEntryAi.predictProbability(features);
-                shouldEnterLong = prob >= longEntryProbabilityThreshold;
+                double prob = activeLongEntryAi.predictProbability(longEntryFeatures);
+                shouldEnterLong = prob >= activeLongEntryThreshold;
                 flowCondition(
                     "AI.LONG.ENTRY",
                     "AI_PREDICTS_ENTRY",
                     shouldEnterLong,
                     "symbol=" + symbol
                         + " rsi=" + currentRsi
-                        + " close=" + barClose
-                        + " qty=" + qty
+                            + " askOrFallback=" + buyReferencePrice
+                            + " qty=" + buyQty
                         + " prob=" + formatProb(prob)
-                        + " threshold=" + formatProb(longEntryProbabilityThreshold)
+                        + " threshold=" + formatProb(activeLongEntryThreshold)
                 );
             }
-            if (shouldEnterLong) {
+            if (shouldEnterLong && buyQty > 0) {
+                if (MICRO_ENTRY_ENABLED) {
+                    armMicroEntry("long", lastTraining30sFeatureValues, currentMicroArmEpoch());
+                    return;
+                }
                 flowInfo("AI.LONG.ENTRY", "Dip buyer firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "BUY", barClose, qty, "FAST_LMT");
+                parent.placeTrade(symbol, "BUY", buyReferencePrice, buyQty, "FAST_LMT");
                 return;
             }
 
             // --- RIP SELLING (SHORT ENTRY) ---
             double shortThreshold = (currentHour == 9) ? RSI_SHORT_ENTRY_OPEN_THRESHOLD : RSI_SHORT_ENTRY_REGULAR_THRESHOLD;
             boolean shortRsiGate = !USE_RSI_PRE_GATES || currentRsi > shortThreshold;
-            boolean shortModelReady = activeShortEntryAi != null;
+            boolean shortModelReady = activeShortEntryAi != null && activeShortEntryAi.isAvailable();
             flowCondition("AI.SHORT.ENTRY", "RSI_PRE_GATE", shortRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + shortThreshold);
             flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldEnterShort = false;
             if (shortRsiGate && shortModelReady) {
-                double prob = activeShortEntryAi.predictProbability(features);
-                shouldEnterShort = prob >= shortEntryProbabilityThreshold;
+                double prob = activeShortEntryAi.predictProbability(shortEntryFeatures);
+                shouldEnterShort = prob >= activeShortEntryThreshold;
                 flowCondition(
                     "AI.SHORT.ENTRY",
                     "AI_PREDICTS_ENTRY",
                     shouldEnterShort,
                     "symbol=" + symbol
                         + " rsi=" + currentRsi
-                        + " close=" + barClose
-                        + " qty=" + qty
+                            + " bidOrFallback=" + sellReferencePrice
+                            + " qty=" + sellQty
                         + " prob=" + formatProb(prob)
-                        + " threshold=" + formatProb(shortEntryProbabilityThreshold)
+                        + " threshold=" + formatProb(activeShortEntryThreshold)
                 );
             }
-            if (shouldEnterShort) {
+            if (shouldEnterShort && sellQty > 0) {
+                if (MICRO_ENTRY_ENABLED) {
+                    armMicroEntry("short", lastTraining30sFeatureValues, currentMicroArmEpoch());
+                    return;
+                }
                 flowInfo("AI.SHORT.ENTRY", "Rip seller firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "SELL", barClose, qty, "FAST_LMT");
+                parent.placeTrade(symbol, "SELL", sellReferencePrice, sellQty, "FAST_LMT");
             }
-        } else {
-            flowCondition("AI.ENTRY", "ENTRY_GATE_OPEN", false, "symbol=" + symbol + " allowNewEntries=" + allowNewEntries + " tradeCount=" + tradeCount + " maxTrades=" + maxTrades);
         }
     }
 
@@ -1145,43 +2480,91 @@ public class PingPongStrategy implements TradingStrategy {
         return currentRsi;
     }
 
-    private float[] constructRegimeClassifierFeatures(float[] baseFeatures) {
-        if (baseFeatures == null || baseFeatures.length == 0) {
-            return new float[0];
-        }
-
-        // Must match train_30s_models.py build_regime_feature_subset() exclusions.
-        // Excluded in trainer: f_macd_diff, f_atr_norm, f_dist_sma, f_rsi,
-        // f_realized_vol_20, f_realized_vol_z (f_spread_z is not in base-30 schema).
-        if (baseFeatures.length < 30) {
-            flowCondition(
-                "AI.REGIME",
-                "BASE_FEATURE_VECTOR_LEN_GE_30",
-                false,
-                "symbol=" + symbol + " actualLen=" + baseFeatures.length + " expectedLen=30"
-            );
-            return baseFeatures;
-        }
-
-        int[] includeIdx = new int[] {
-            0, 1, 2,
-            4, 5, 6,
-            9, 10,
-            12, 13,
-            14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-            28, 29
-        };
-
-        float[] regimeFeatures = new float[includeIdx.length];
-        for (int i = 0; i < includeIdx.length; i++) {
-            regimeFeatures[i] = baseFeatures[includeIdx[i]];
-        }
-
-        flowData("AI.REGIME", "symbol=" + symbol + " regimeFeatureCount=" + regimeFeatures.length + " baseFeatureCount=" + baseFeatures.length);
+    private float[] buildRegimeClassifierFeaturesForExpectedCount(int expectedFeatureCount, Map<String, Float> liveFeatureValues) {
+        List<String> regimeColumns = regimeFeatureColumnsForExpectedCount(expectedFeatureCount);
+        float[] regimeFeatures = buildFeatureVector(regimeColumns, liveFeatureValues);
+        flowData(
+            "AI.REGIME",
+            "symbol=" + symbol
+                + " regimeFeatureCount=" + regimeFeatures.length
+                + " baseFeatureCount=" + liveFeatureColumnsForExpectedCount(expectedFeatureCount).size()
+                + " expectedFeatureCount=" + expectedFeatureCount
+        );
         return regimeFeatures;
     }
 
     private float[] constructModelFeatures(double currentRsi) {
+        return buildFeatureVectorForExpectedCount(BASE_LIVE_FEATURE_COUNT, constructFeatureValueMap(currentRsi));
+    }
+
+    private float[] buildFeatureVectorForExpectedCount(int expectedFeatureCount, Map<String, Float> liveFeatureValues) {
+        return buildFeatureVector(liveFeatureColumnsForExpectedCount(expectedFeatureCount), liveFeatureValues);
+    }
+
+    private List<String> liveFeatureColumnsForExpectedCount(int expectedFeatureCount) {
+        if (expectedFeatureCount <= LEGACY_LIVE_FEATURE_COUNT) {
+            return LEGACY_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount <= BASE_LIVE_FEATURE_COUNT) {
+            return BASE_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount <= EXTENDED_LIVE_FEATURE_COUNT) {
+            return EXTENDED_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount <= BASE_PLUS_NEWS_FEATURE_COLUMNS.size()) {
+            return BASE_PLUS_NEWS_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount <= BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size()) {
+            return BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS;
+        }
+        if (expectedFeatureCount <= EXTENDED_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size()) {
+            return EXTENDED_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS;
+        }
+        if (expectedFeatureCount <= BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS.size()) {
+            return BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS;
+        }
+        return ENHANCED_MAIN_FEATURE_COLUMNS;
+    }
+
+    private List<String> regimeFeatureColumnsForExpectedCount(int expectedFeatureCount) {
+        if (expectedFeatureCount <= LEGACY_LIVE_FEATURE_COUNT) {
+            return LEGACY_REGIME_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount <= BASE_LIVE_FEATURE_COUNT) {
+            return BASE_REGIME_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount <= EXTENDED_LIVE_FEATURE_COUNT) {
+            return EXTENDED_REGIME_FEATURE_COLUMNS;
+        }
+        if (expectedFeatureCount < ENHANCED_REGIME_FEATURE_COLUMNS.size()) {
+            return NEWS_AWARE_REGIME_FEATURE_COLUMNS;
+        }
+        return ENHANCED_REGIME_FEATURE_COLUMNS;
+    }
+
+    private int expectedFeatureCountForModel(LazyAiPredictor predictor, int fallbackFeatureCount) {
+        if (predictor == null) {
+            return fallbackFeatureCount;
+        }
+        int expected = predictor.expectedFeatureCountOr(fallbackFeatureCount);
+        if (expected <= 0) {
+            return fallbackFeatureCount;
+        }
+        return expected;
+    }
+
+    private float[] buildFeatureVector(List<String> featureColumns, Map<String, Float> liveFeatureValues) {
+        if (featureColumns == null || featureColumns.isEmpty()) {
+            return new float[0];
+        }
+        float[] features = new float[featureColumns.size()];
+        for (int i = 0; i < featureColumns.size(); i++) {
+            features[i] = liveFeatureValues.getOrDefault(featureColumns.get(i), 0.0f);
+        }
+        return features;
+    }
+
+    private Map<String, Float> constructFeatureValueMap(double currentRsi) {
         float f_dist_vwap = (float) ((barClose - vwap) / vwap);
 
         double bbMean = bbWindow.stream().mapToDouble(d -> d).average().orElse(barClose);
@@ -1279,19 +2662,80 @@ public class PingPongStrategy implements TradingStrategy {
             ? (float) ((currentBarVolAsk - currentBarVolBid) / (double) (currentBarVolAsk + currentBarVolBid))
             : 0.0f;
 
-        // Base schema: 30 features (legacy 25 + first 5 extended core features).
-        // Remaining microstructure tail features stay computed for optional 34-feature models.
-        return new float[] {
-            f_dist_vwap, f_bb_lower_dist, f_bb_upper_dist, f_macd_diff,
-            f_body_size, f_lower_wick, f_upper_wick, f_atr_norm,
-            f_dist_sma, f_dist_high, f_dist_low, f_rsi, f_gap_from_prev_close,
-            f_time_of_day, 
-            f_dist_swing_high, f_dist_swing_low, f_is_new_high, f_is_new_low,
-            f_dist_whole_num, f_is_green, f_green_streak, f_red_streak, f_put_call_ratio,
-            f_vol_ask_ratio, f_vol_bid_ratio,
-            f_rel_volume_30s, f_realized_vol_20, f_realized_vol_z,
-            f_dist_or_high_atr, f_dist_or_low_atr
-        };
+        Map<String, Float> featureValues = new LinkedHashMap<>();
+        featureValues.put("f_dist_vwap", f_dist_vwap);
+        featureValues.put("f_bb_lower_dist", f_bb_lower_dist);
+        featureValues.put("f_bb_upper_dist", f_bb_upper_dist);
+        featureValues.put("f_macd_diff", f_macd_diff);
+        featureValues.put("f_body_size", f_body_size);
+        featureValues.put("f_lower_wick", f_lower_wick);
+        featureValues.put("f_upper_wick", f_upper_wick);
+        featureValues.put("f_atr_norm", f_atr_norm);
+        featureValues.put("f_dist_sma", f_dist_sma);
+        featureValues.put("f_dist_high", f_dist_high);
+        featureValues.put("f_dist_low", f_dist_low);
+        featureValues.put("f_rsi", f_rsi);
+        featureValues.put("f_gap_from_prev_close", f_gap_from_prev_close);
+        featureValues.put("f_time_of_day", f_time_of_day);
+        featureValues.put("f_dist_swing_high", f_dist_swing_high);
+        featureValues.put("f_dist_swing_low", f_dist_swing_low);
+        featureValues.put("f_is_new_high", f_is_new_high);
+        featureValues.put("f_is_new_low", f_is_new_low);
+        featureValues.put("f_dist_whole_num", f_dist_whole_num);
+        featureValues.put("f_is_green", f_is_green);
+        featureValues.put("f_green_streak", f_green_streak);
+        featureValues.put("f_red_streak", f_red_streak);
+        featureValues.put("f_put_call_ratio", f_put_call_ratio);
+        featureValues.put("f_vol_ask_ratio", f_vol_ask_ratio);
+        featureValues.put("f_vol_bid_ratio", f_vol_bid_ratio);
+        featureValues.put("f_rel_volume_30s", f_rel_volume_30s);
+        featureValues.put("f_realized_vol_20", f_realized_vol_20);
+        featureValues.put("f_realized_vol_z", f_realized_vol_z);
+        featureValues.put("f_dist_or_high_atr", f_dist_or_high_atr);
+        featureValues.put("f_dist_or_low_atr", f_dist_or_low_atr);
+        featureValues.put("f_spread_pct", f_spread_pct);
+        featureValues.put("f_spread_z", f_spread_z);
+        featureValues.put("f_l1_imbalance", f_l1_imbalance);
+        featureValues.put("f_signed_flow_30s", f_signed_flow_30s);
+        for (String newsColumn : NEWS_BAR_FEATURE_COLUMNS) {
+            featureValues.put(newsColumn, 0.0f);
+        }
+        featureValues.putAll(
+            EnhancedLiveFeatureProducer.produce(
+                new EnhancedLiveFeatureProducer.Snapshot(
+                    barOpen,
+                    barHigh,
+                    barLow,
+                    barClose,
+                    barVolume,
+                    new ArrayList<>(smaWindow),
+                    new ArrayList<>(highWindow),
+                    new ArrayList<>(lowWindow),
+                    new ArrayList<>(volumeWindow)
+                )
+            )
+        );
+        for (String regimeProbabilityColumn : REGIME_PROBABILITY_FEATURE_COLUMNS) {
+            featureValues.put(regimeProbabilityColumn, 0.0f);
+        }
+        return featureValues;
+    }
+
+    private Map<String, Float> defaultRegimeProbabilityFeatures(double choppyProb, double trendProb, double volatileProb) {
+        double entropy = 0.0;
+        double[] probs = new double[] {choppyProb, trendProb, volatileProb};
+        for (double prob : probs) {
+            double safeProb = Math.max(1.0e-9, prob);
+            entropy += -(prob * Math.log(safeProb));
+        }
+        double normalizedEntropy = entropy / Math.log(3.0);
+
+        Map<String, Float> features = new HashMap<>();
+        features.put("f_regime_prob_choppy", (float) choppyProb);
+        features.put("f_regime_prob_trend", (float) trendProb);
+        features.put("f_regime_prob_volatile", (float) volatileProb);
+        features.put("f_regime_prob_entropy", (float) normalizedEntropy);
+        return features;
     }
 
     @Override
@@ -1310,6 +2754,8 @@ public class PingPongStrategy implements TradingStrategy {
         this.inFlightOrder = true;
         this.pendingOrderId = orderId;
         this.lastOrderSubmitTime = System.currentTimeMillis(); 
+        this.pendingOrderReconcileRequested = false;
+        this.lastPendingOrderReconcileLogTime = 0;
         flowData("STRATEGY.ORDER", "submitted orderId=" + orderId + " action=" + action + " qty=" + quantity + " symbol=" + symbol);
     }
 
@@ -1335,6 +2781,18 @@ public class PingPongStrategy implements TradingStrategy {
         if (currAbsPos > prevAbsPos) {
             double penalty = "BUY".equalsIgnoreCase(action) ? slippagePerShare : -slippagePerShare;
             avgEntryPrice = avgFillPrice + penalty;
+            if (prevAbsPos == 0 || Integer.signum(prevPosition) != Integer.signum(newPos)) {
+                positionEntryPrice = avgEntryPrice;
+                positionEntrySide = Integer.signum(newPos);
+                positionEntryEpoch = currentMarketTime == null ? 0L : currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
+                barsSincePositionEntry30s = 0;
+                barsSincePositionEntry5s = 0;
+                positionMfeR = 0.0;
+                positionMaeR = 0.0;
+                clearMicroEntryArms("position-opened");
+            } else {
+                positionEntryPrice = avgEntryPrice;
+            }
         } else if (currAbsPos < prevAbsPos) {
             double exitPenalty = "SELL".equalsIgnoreCase(action) ? -slippagePerShare : slippagePerShare;
             double adjustedExitPrice = avgFillPrice + exitPenalty;
@@ -1351,6 +2809,13 @@ public class PingPongStrategy implements TradingStrategy {
 
         if (newPos == 0) {
             avgEntryPrice = 0.0;
+            positionEntryPrice = 0.0;
+            positionEntrySide = 0;
+            positionEntryEpoch = 0L;
+            barsSincePositionEntry30s = 0;
+            barsSincePositionEntry5s = 0;
+            positionMfeR = 0.0;
+            positionMaeR = 0.0;
         }
 
         double pnlSnapshot = totalNetPnL;
@@ -1363,46 +2828,74 @@ public class PingPongStrategy implements TradingStrategy {
         eventQueue.offer(new StrategyEvent.ResetForNewDayEvent());
     }
 
-    private void handleResetForNewDay() {
-        dailyNetPnL = 0.0;
-        circuitBreakerTripped = false;
-        tradeCount = 0;
-        allowNewEntries = true;
-        dayHigh = 0.0;
-        dayLow = 0.0;
-        cumPv = 0.0;
-        cumVol = 0;
-        greenStreak = 0;
-        redStreak = 0;
+    public boolean resetForNewDayAndWait(long timeoutMillis) {
+        CountDownLatch resetAck = new CountDownLatch(1);
+        eventQueue.offer(new StrategyEvent.ResetForNewDayEvent(resetAck));
+        try {
+            return resetAck.await(Math.max(1L, timeoutMillis), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
 
-        // FIX: Do NOT clear bbWindow, smaWindow, highWindow, lowWindow, avgGain, ema12, etc.
-        // Python trains on continuous data across days. Java must maintain indicator memory across the night gap!
+    private void handleResetForNewDay(StrategyEvent.ResetForNewDayEvent resetEvent) {
+        try {
+            dailyNetPnL = 0.0;
+            circuitBreakerTripped = false;
+            tradeCount = 0;
+            allowNewEntries = true;
+            hardStopExitCount = 0;
+            lastHardStopExitTimeMs = 0L;
+            dayHigh = 0.0;
+            dayLow = 0.0;
+            cumPv = 0.0;
+            cumVol = 0;
+            greenStreak = 0;
+            redStreak = 0;
 
-        currentBarVolAsk = 0L;
-        currentBarVolBid = 0L;
-        currentPutCallRatio = 1.0f;
-        latestPutVolume = 0L;
-        latestCallVolume = 0L;
-        prevPutVolume = 0L;
-        prevCallVolume = 0L;
-        optionVolumeWarningLogged = false;
+            // FIX: Do NOT clear bbWindow, smaWindow, highWindow, lowWindow, avgGain, ema12, etc.
+            // Python trains on continuous data across days. Java must maintain indicator memory across the night gap!
 
-        // We still reset barsCount to ensure the Strategy waits 5 minutes after the morning bell
-        barsCount = 0;
-        flowInfo("STRATEGY.RESET", "Daily limits reset. Indicator memory successfully carried over to new day symbol=" + symbol);
+            currentBarVolAsk = 0L;
+            currentBarVolBid = 0L;
+            currentPutCallRatio = 1.0f;
+            latestPutVolume = 0L;
+            latestCallVolume = 0L;
+            prevPutVolume = 0L;
+            prevCallVolume = 0L;
+            optionVolumeWarningLogged = false;
+            clearIndependentMicroBarState();
+            training30sReturnWindow20.clear();
+            training30sVolumeWindow20.clear();
+            training30sOptionFlowWindow20.clear();
+            lastTraining30sFeatureValues = new HashMap<>();
+            lastTraining30sClose = 0.0;
+            lastTraining30sEpoch = 0L;
+            clearMicroEntryArms("new-day-reset");
+
+            // We still reset barsCount to ensure the Strategy rewarms for the configured opening-profile bar count after the morning bell.
+            barsCount = 0;
+            flowInfo("STRATEGY.RESET", "Daily limits reset. Indicator memory successfully carried over to new day symbol=" + symbol);
+        } finally {
+            if (resetEvent != null && resetEvent.ackLatch != null) {
+                resetEvent.ackLatch.countDown();
+            }
+        }
     }
 
 
 
     public void forceEndOfDayFlatten(double currentPrice) {
         int position = currentPosition;
-        boolean flattenGate = position != 0 && !inFlightOrder && currentPrice > 0.0;
-        flowCondition("STRATEGY.EOD", "FLATTEN_GATE", flattenGate, "symbol=" + symbol + " position=" + position + " inFlight=" + inFlightOrder + " currentPrice=" + currentPrice);
-        if (!flattenGate) return;
-        flowInfo("STRATEGY.EOD", "Closing position size=" + Math.abs(position) + " symbol=" + symbol + " price=" + currentPrice);
         String action = (position > 0) ? "SELL" : "BUY";
+        double executionPrice = priceForAction(action, currentPrice);
+        boolean flattenGate = position != 0 && !inFlightOrder && executionPrice > 0.0;
+        flowCondition("STRATEGY.EOD", "FLATTEN_GATE", flattenGate, "symbol=" + symbol + " position=" + position + " inFlight=" + inFlightOrder + " executionPrice=" + executionPrice);
+        if (!flattenGate) return;
+        flowInfo("STRATEGY.EOD", "Closing position size=" + Math.abs(position) + " symbol=" + symbol + " price=" + executionPrice);
         this.inFlightOrder = true;
-        parent.placeTrade(symbol, action, currentPrice, Math.abs(position), "MKT");
+        parent.placeTrade(symbol, action, executionPrice, Math.abs(position), "MKT");
     }
 
     private void logTradeToCsv(String exitAction, int qty, double entryPrice, double exitPrice, double tradePnL) {
@@ -1442,7 +2935,12 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private void handleOrderClosed(int orderId, String status) {
-        this.inFlightOrder = false;
+        if (orderId == this.pendingOrderId || this.pendingOrderId == -1) {
+            this.inFlightOrder = false;
+            this.pendingOrderReconcileRequested = false;
+            this.pendingOrderId = -1;
+            this.lastPendingOrderReconcileLogTime = 0;
+        }
         flowData("STRATEGY.ORDER", "closed orderId=" + orderId + " status=" + status + " symbol=" + symbol);
     }
 
@@ -1505,6 +3003,12 @@ public class PingPongStrategy implements TradingStrategy {
         if (open30ShortEntryAi != null) open30ShortEntryAi.close();
         if (open30LongExitAi != null) open30LongExitAi.close();
         if (open30ShortExitAi != null) open30ShortExitAi.close();
+        if (longExitLifecycleAi != null) longExitLifecycleAi.close();
+        if (shortExitLifecycleAi != null) shortExitLifecycleAi.close();
+        if (longMicroEntryAi != null) longMicroEntryAi.close();
+        if (shortMicroEntryAi != null) shortMicroEntryAi.close();
+        if (longMicroExitGuardAi != null) longMicroExitGuardAi.close();
+        if (shortMicroExitGuardAi != null) shortMicroExitGuardAi.close();
         flowInfo("STRATEGY.STOP", "Strategy stopped symbol=" + symbol);
     }
 
@@ -1517,6 +3021,8 @@ public class PingPongStrategy implements TradingStrategy {
     public int getCurrentPosition() { return currentPosition; }
     public double getLastPrice() { return lastPrice; }
     public int getTradeCount() { return tradeCount; }
+    public int getHardStopExitCount() { return hardStopExitCount; }
+    public long getLastHardStopExitTimeMs() { return lastHardStopExitTimeMs; }
     public double getTotalNetPnL() { return totalNetPnL; }
     
     // Legacy interface preserved for TradingStrategy Interface
@@ -1544,13 +3050,29 @@ public class PingPongStrategy implements TradingStrategy {
         eventQueue.offer(new StrategyEvent.RestoreStateEvent(rPrice, rTrades, rEnabled, rArmed, restoredYesterdayClose));
     }
 
+    public void restoreState(double rPrice, int rTrades, boolean rEnabled, boolean rArmed, double restoredYesterdayClose,
+                             int restoredHardStopExitCount, long restoredLastHardStopExitTimeMs) {
+        eventQueue.offer(new StrategyEvent.RestoreStateEvent(rPrice, rTrades, rEnabled, rArmed, restoredYesterdayClose,
+            restoredHardStopExitCount, restoredLastHardStopExitTimeMs));
+    }
+
     private void handleRestoreState(double rPrice, int rTrades, boolean rEnabled, boolean rArmed, double restoredYesterdayClose) {
+        handleRestoreState(rPrice, rTrades, rEnabled, rArmed, restoredYesterdayClose, 0, 0L);
+    }
+
+    private void handleRestoreState(double rPrice, int rTrades, boolean rEnabled, boolean rArmed, double restoredYesterdayClose,
+                                    int restoredHardStopExitCount, long restoredLastHardStopExitTimeMs) {
         this.lastPrice = rPrice;
         this.tradeCount = Math.max(0, rTrades);
         this.enabled = rEnabled;
         this.allowNewEntries = rArmed;
         this.yesterdayClose = Math.max(0.0, restoredYesterdayClose);
-        flowData("STRATEGY.STATE", "restored symbol=" + symbol + " lastPrice=" + rPrice + " tradeCount=" + this.tradeCount + " enabled=" + rEnabled + " armed=" + rArmed + " yesterdayClose=" + this.yesterdayClose);
+        this.hardStopExitCount = Math.max(0, restoredHardStopExitCount);
+        this.lastHardStopExitTimeMs = Math.max(0L, restoredLastHardStopExitTimeMs);
+        if (this.hardStopExitCount >= maxHardStopsPerDay) {
+            this.allowNewEntries = false;
+        }
+        flowData("STRATEGY.STATE", "restored symbol=" + symbol + " lastPrice=" + rPrice + " tradeCount=" + this.tradeCount + " enabled=" + rEnabled + " armed=" + this.allowNewEntries + " yesterdayClose=" + this.yesterdayClose + " hardStopExitCount=" + this.hardStopExitCount + " lastHardStopExitTimeMs=" + this.lastHardStopExitTimeMs);
     }
 
     public void setYesterdayClose(double yesterdayClose) {

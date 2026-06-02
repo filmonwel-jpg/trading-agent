@@ -73,6 +73,16 @@ public abstract class StrategyEvent {
         }
     }
 
+    public static class OrderFlowSnapshotEvent extends StrategyEvent {
+        public final long atBidVolume;
+        public final long atAskVolume;
+
+        public OrderFlowSnapshotEvent(long atBidVolume, long atAskVolume) {
+            this.atBidVolume = atBidVolume;
+            this.atAskVolume = atAskVolume;
+        }
+    }
+
     public static class OrderSubmittedEvent extends StrategyEvent {
         public final int orderId;
         public final String action;
@@ -122,7 +132,14 @@ public abstract class StrategyEvent {
     }
 
     public static class ResetForNewDayEvent extends StrategyEvent {
+        public final CountDownLatch ackLatch;
+
         public ResetForNewDayEvent() {
+            this(null);
+        }
+
+        public ResetForNewDayEvent(CountDownLatch ackLatch) {
+            this.ackLatch = ackLatch;
         }
     }
 
@@ -132,13 +149,22 @@ public abstract class StrategyEvent {
         public final boolean rEnabled;
         public final boolean rArmed;
         public final double restoredYesterdayClose;
+        public final int restoredHardStopExitCount;
+        public final long restoredLastHardStopExitTimeMs;
 
         public RestoreStateEvent(double rPrice, int rTrades, boolean rEnabled, boolean rArmed, double restoredYesterdayClose) {
+            this(rPrice, rTrades, rEnabled, rArmed, restoredYesterdayClose, 0, 0L);
+        }
+
+        public RestoreStateEvent(double rPrice, int rTrades, boolean rEnabled, boolean rArmed, double restoredYesterdayClose,
+                                 int restoredHardStopExitCount, long restoredLastHardStopExitTimeMs) {
             this.rPrice = rPrice;
             this.rTrades = rTrades;
             this.rEnabled = rEnabled;
             this.rArmed = rArmed;
             this.restoredYesterdayClose = restoredYesterdayClose;
+            this.restoredHardStopExitCount = restoredHardStopExitCount;
+            this.restoredLastHardStopExitTimeMs = restoredLastHardStopExitTimeMs;
         }
     }
 

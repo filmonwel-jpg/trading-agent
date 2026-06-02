@@ -39,6 +39,24 @@ REQUIRED_PRODUCER_COLUMNS = [
     'setup_failed_breakout_prob',
 ]
 
+TIMESFM_COLUMN_MAPPING = {
+    'TimesFM_Ret30s_p50': 'tsm_ret_30s_p50',
+    'TimesFM_Ret120s_p50': 'tsm_ret_120s_p50',
+    'TimesFM_Ret30s_p10': 'tsm_ret_30s_p10',
+    'TimesFM_Ret30s_p90': 'tsm_ret_30s_p90',
+    'TimesFM_UpProb30s': 'tsm_up_prob_30s',
+    'TimesFM_VolForecast120s': 'tsm_vol_forecast_120s',
+    'TimesFM_Uncertainty': 'tsm_uncertainty',
+}
+
+SEQUENCE_COLUMN_MAPPING = {
+    'SeqLSTM_UpProb30s': 'seq_lstm_up_prob_30s',
+    'SeqTCN_UpProb30s': 'seq_tcn_up_prob_30s',
+    'SeqTransformer_UpProb30s': 'seq_transformer_up_prob_30s',
+    'SeqPatchTST_UpProb30s': 'seq_patchtst_up_prob_30s',
+    'SeqModelConsensus_UpProb30s': 'seq_model_consensus_up_prob_30s',
+}
+
 TIMESFM_BACKEND = os.getenv('TIMESFM_BACKEND', 'proxy').strip().lower()
 SEQUENCE_BACKEND = os.getenv('SEQUENCE_BACKEND', 'proxy').strip().lower()
 REGIME_ENSEMBLE_BACKEND = os.getenv('REGIME_ENSEMBLE_BACKEND', 'blend').strip().lower()
@@ -145,6 +163,47 @@ def _regime_source_bucket(col_name):
     return 'other'
 
 
+def _midpoint_series(df):
+    bid = _as_numeric(df.get('Bid', np.nan), np.nan, index=df.index)
+    ask = _as_numeric(df.get('Ask', np.nan), np.nan, index=df.index)
+    mid = ((bid + ask) / 2.0).where(bid.notna() | ask.notna())
+    mid = mid.fillna(bid).fillna(ask)
+
+    if 'WAP' in df.columns:
+        wap = _as_numeric(df.get('WAP', np.nan), np.nan, index=df.index)
+        mid = mid.fillna(wap)
+    return mid
+
+
+def _price_series(df, column_name, default=0.0):
+    primary = _as_numeric(df.get(column_name, np.nan), np.nan, index=df.index)
+    midpoint = _midpoint_series(df)
+    resolved = primary.where(primary.notna() & primary.ne(0.0), midpoint)
+    return resolved.fillna(default).astype(float)
+
+
+def _high_series(df, close_series):
+    high = _as_numeric(df.get('High', np.nan), np.nan, index=df.index)
+    midpoint = _midpoint_series(df)
+    resolved = high.where(high.notna() & high.ne(0.0), np.maximum(close_series, midpoint.fillna(close_series)))
+    return resolved.fillna(close_series).astype(float)
+
+
+def _low_series(df, close_series):
+    low = _as_numeric(df.get('Low', np.nan), np.nan, index=df.index)
+    midpoint = _midpoint_series(df)
+    resolved = low.where(low.notna() & low.ne(0.0), np.minimum(close_series, midpoint.fillna(close_series)))
+    return resolved.fillna(close_series).astype(float)
+
+
+def _volume_series(df):
+    if 'Volume' in df.columns:
+        volume = _as_numeric(df.get('Volume', 0.0), 0.0, index=df.index)
+    else:
+        volume = _as_numeric(df.get('Count', 0.0), 0.0, index=df.index)
+    return volume.clip(lower=0.0)
+
+
 _REGIME_WEIGHT_MAP = _parse_weight_map(REGIME_SOURCE_WEIGHTS)
 _REGIME_CLASS_WEIGHT_MAPS = {
     'trend': _parse_weight_map(REGIME_SOURCE_WEIGHTS_TREND) if REGIME_SOURCE_WEIGHTS_TREND else None,
@@ -198,9 +257,9 @@ def _compute_regime_column_ensemble(df):
 
 def _compute_regime_proxy_features(df):
     """Baseline proxy for regime classifier probabilities from trend/chop/vol structure."""
-    close = _as_numeric(df.get('Close', 0.0), 0.0, index=df.index)
-    high = _as_numeric(df.get('High', close), 0.0, index=df.index)
-    low = _as_numeric(df.get('Low', close), 0.0, index=df.index)
+    close = _price_series(df, 'Close', default=0.0)
+    high = _high_series(df, close)
+    low = _low_series(df, close)
 
     tr = np.maximum(high - low, np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()))
     atr = tr.rolling(window=12, min_periods=4).mean().fillna(0.0)
@@ -230,7 +289,7 @@ def _compute_regime_proxy_features(df):
 
 
 def _compute_timesfm_proxy_features(df):
-    close = _as_numeric(df.get('Close', 0.0), 0.0, index=df.index)
+    close = _price_series(df, 'Close', default=0.0)
 
     ret_30s = _safe_pct_change(close)
     ret_120s = _safe_pct_change(close, periods=4)
@@ -257,15 +316,7 @@ def _compute_timesfm_proxy_features(df):
 
 
 def _compute_timesfm_column_features(df):
-    mapping = {
-        'TimesFM_Ret30s_p50': 'tsm_ret_30s_p50',
-        'TimesFM_Ret120s_p50': 'tsm_ret_120s_p50',
-        'TimesFM_Ret30s_p10': 'tsm_ret_30s_p10',
-        'TimesFM_Ret30s_p90': 'tsm_ret_30s_p90',
-        'TimesFM_UpProb30s': 'tsm_up_prob_30s',
-        'TimesFM_VolForecast120s': 'tsm_vol_forecast_120s',
-        'TimesFM_Uncertainty': 'tsm_uncertainty',
-    }
+    mapping = TIMESFM_COLUMN_MAPPING
     available = [src for src in mapping if src in df.columns]
     if len(available) < 4:
         return _compute_timesfm_proxy_features(df)
@@ -390,13 +441,7 @@ def compute_sentiment_event_features(df):
 def compute_sequence_model_features(df):
     """Proxy outputs shaped like LSTM/TCN/PatchTST/Transformer heads over rolling OHLCV windows."""
     if SEQUENCE_BACKEND == 'columns':
-        column_mapping = {
-            'SeqLSTM_UpProb30s': 'seq_lstm_up_prob_30s',
-            'SeqTCN_UpProb30s': 'seq_tcn_up_prob_30s',
-            'SeqTransformer_UpProb30s': 'seq_transformer_up_prob_30s',
-            'SeqPatchTST_UpProb30s': 'seq_patchtst_up_prob_30s',
-            'SeqModelConsensus_UpProb30s': 'seq_model_consensus_up_prob_30s',
-        }
+        column_mapping = SEQUENCE_COLUMN_MAPPING
         copied = 0
         for src, dest in column_mapping.items():
             if src in df.columns:
@@ -413,8 +458,8 @@ def compute_sequence_model_features(df):
                 ) / 4.0
             return df
 
-    close = _as_numeric(df.get('Close', 0.0), 0.0, index=df.index)
-    volume = _as_numeric(df.get('Volume', 0.0), 0.0, index=df.index)
+    close = _price_series(df, 'Close', default=0.0)
+    volume = _volume_series(df)
     ret_30s = _safe_pct_change(close).fillna(0.0)
 
     trend = ret_30s.rolling(window=12, min_periods=4).mean().fillna(0.0)
@@ -439,12 +484,26 @@ def compute_sequence_model_features(df):
     return df
 
 
+def normalize_external_meta_feature_columns(df):
+    out = df.copy()
+    for mapping, default in ((TIMESFM_COLUMN_MAPPING, 0.0), (SEQUENCE_COLUMN_MAPPING, 0.5)):
+        for src, dest in mapping.items():
+            if src in out.columns:
+                out[dest] = _as_numeric(out[src], default, index=out.index)
+
+    for col in REQUIRED_PRODUCER_COLUMNS:
+        if col in out.columns:
+            fill_value = 0.5 if col.startswith('seq_') and col.endswith('_prob_30s') else 0.0
+            out[col] = pd.to_numeric(out[col], errors='coerce').fillna(fill_value).astype(float)
+    return out
+
+
 def compute_chart_setup_features(df):
     """Baseline numeric setup probabilities derived from OHLCV sequence behavior."""
-    close = _as_numeric(df.get('Close', 0.0), 0.0, index=df.index)
-    open_ = _as_numeric(df.get('Open', close), 0.0, index=df.index)
-    high = _as_numeric(df.get('High', close), 0.0, index=df.index)
-    low = _as_numeric(df.get('Low', close), 0.0, index=df.index)
+    close = _price_series(df, 'Close', default=0.0)
+    open_ = _price_series(df, 'Open', default=float(close.iloc[0]) if len(close) else 0.0)
+    high = _high_series(df, close)
+    low = _low_series(df, close)
 
     prev_high_20 = high.rolling(window=20, min_periods=8).max().shift(1)
     prev_low_20 = low.rolling(window=20, min_periods=8).min().shift(1)

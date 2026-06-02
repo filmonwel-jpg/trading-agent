@@ -104,16 +104,46 @@ public class StackStatusController {
 
     private List<Map<String, Object>> collectSymbolStatuses() {
         List<Map<String, Object>> statuses = new ArrayList<>();
-        try (Stream<Path> paths = Files.list(runtimeDir())) {
-            paths
-                .filter(path -> path.getFileName().toString().startsWith("trading-"))
-                .filter(path -> path.getFileName().toString().endsWith(".properties"))
-                .sorted(Comparator.comparing(path -> path.getFileName().toString()))
-                .forEach(path -> statuses.add(readSymbolStatus(path)));
-        } catch (IOException ignored) {
-            // Best-effort endpoint.
+        for (Path path : listSymbolPropertyFiles()) {
+            statuses.add(readSymbolStatus(path));
         }
         return statuses;
+    }
+
+    private List<Path> listSymbolPropertyFiles() {
+        return listSymbolPropertyFiles(runtimeDir());
+    }
+
+    private List<Path> listSymbolPropertyFiles(Path rootRuntime) {
+        Path databentoBots = rootRuntime.resolve("databento").resolve("bots");
+        List<Path> databentoBotFiles = listTradingPropertyFiles(databentoBots);
+        if (!databentoBotFiles.isEmpty()) {
+            return databentoBotFiles;
+        }
+        return listTradingPropertyFiles(rootRuntime);
+    }
+
+    private List<Path> listTradingPropertyFiles(Path directory) {
+        if (!Files.isDirectory(directory)) {
+            return List.of();
+        }
+        try (Stream<Path> paths = Files.list(directory)) {
+            return paths
+                .filter(Files::isRegularFile)
+                .filter(path -> path.getFileName().toString().startsWith("trading-"))
+                .filter(path -> path.getFileName().toString().endsWith(".properties"))
+                .filter(path -> !isTemplatePropertyFile(path))
+                .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                .toList();
+        } catch (IOException ignored) {
+            // Best-effort endpoint.
+            return List.of();
+        }
+    }
+
+    private boolean isTemplatePropertyFile(Path path) {
+        String fileName = path.getFileName().toString().toLowerCase(Locale.US);
+        return fileName.contains("template");
     }
 
     private Map<String, Object> readSymbolStatus(Path propertiesPath) {
@@ -122,8 +152,12 @@ public class StackStatusController {
         int port = parseInt(props.get("server.port"));
         String statusBaseUrl = port > 0 ? "http://127.0.0.1:" + port : "";
         Map<String, Object> control = statusBaseUrl.isEmpty() ? Map.of() : getJson(statusBaseUrl + "/api/control/status");
+        Map<String, Object> feedHealth = statusBaseUrl.isEmpty() ? Map.of() : getJson(statusBaseUrl + "/api/control/feed-health");
         Map<String, Object> health = statusBaseUrl.isEmpty() ? Map.of() : getJson(statusBaseUrl + "/actuator/health");
         boolean healthOk = "UP".equalsIgnoreCase(String.valueOf(health.getOrDefault("status", "")));
+        if (!healthOk) {
+            healthOk = databentoFeedHealthOk(control, feedHealth);
+        }
         boolean connected = Boolean.TRUE.equals(control.get("connected"));
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -134,16 +168,40 @@ public class StackStatusController {
         result.put("appLogFile", props.getOrDefault("logging.file.name", ""));
         result.put("statusBaseUrl", statusBaseUrl);
         result.put("healthOk", healthOk);
-        result.put("healthStatus", health.getOrDefault("status", "unknown"));
+        result.put("healthStatus", healthOk && health.isEmpty() ? "UP (feed-health-fallback)" : health.getOrDefault("status", "unknown"));
         result.put("connected", connected);
+        result.put("marketDataProvider", control.getOrDefault("marketDataProvider", props.getOrDefault("trading.market-data.provider", "ibkr")));
         result.put("strategyEnabled", control.getOrDefault("strategyEnabled", false));
         result.put("killSwitch", control.getOrDefault("killSwitch", false));
         result.put("position", control.containsKey("currentPosition") ? control.get("currentPosition") : control.getOrDefault("position", 0));
         result.put("openOrders", control.getOrDefault("openOrders", 0));
         result.put("orderInFlight", control.getOrDefault("orderInFlight", false));
+        result.put("positionSyncState", control.getOrDefault("positionSyncState", "unknown"));
+        result.put("positionSyncComplete", control.getOrDefault("positionSyncComplete", false));
         result.put("lastOrderAction", control.getOrDefault("lastOrderAction", ""));
+        result.put("databentoFeedHealthy", control.getOrDefault("databentoFeedHealthy", feedHealth.getOrDefault("healthy", false)));
+        result.put("databentoGatewayRunning", feedHealth.getOrDefault("gatewayRunning", false));
+        result.put("databentoRestartCount", feedHealth.getOrDefault("restartCount", 0));
+        result.put("databentoFeed", feedHealth);
         result.put("controlReachable", !control.isEmpty());
         return result;
+    }
+
+    private boolean databentoFeedHealthOk(Map<String, Object> control, Map<String, Object> feedHealth) {
+        if (control == null || control.isEmpty() || feedHealth == null || feedHealth.isEmpty()) {
+            return false;
+        }
+        String provider = String.valueOf(control.getOrDefault("marketDataProvider", "")).trim().toLowerCase(Locale.US);
+        if (!"databento".equals(provider)) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(feedHealth.get("healthy"))) {
+            return true;
+        }
+        if (Boolean.TRUE.equals(feedHealth.get("withinStartupGrace"))) {
+            return true;
+        }
+        return Boolean.FALSE.equals(feedHealth.get("marketDataExpectedNow"));
     }
 
     private Map<String, Object> collectHarvesterStatus() {

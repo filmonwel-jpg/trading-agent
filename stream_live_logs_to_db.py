@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -12,6 +13,30 @@ from typing import Iterable
 
 
 JDBC_POSTGRES_RE = re.compile(r"^jdbc:postgresql://(?P<host>[^:/]+)(:(?P<port>\d+))?/(?P<database>[^?]+)")
+LIVE_PROCESS_LOG_TABLE = "databento_live_process_logs"
+
+
+def normalize_symbol_identifier(symbol: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9_]+", "_", str(symbol or "").strip().lower())
+    cleaned = cleaned.strip("_")
+    if not cleaned:
+        raise ValueError("Symbol is required for per-symbol live process log tables.")
+    if cleaned[0].isdigit():
+        cleaned = f"s_{cleaned}"
+    return cleaned
+
+
+def live_process_log_table_name(symbol: str | None = None) -> str:
+    if symbol is None:
+        return LIVE_PROCESS_LOG_TABLE
+    return f"{normalize_symbol_identifier(symbol)}_{LIVE_PROCESS_LOG_TABLE}"
+
+
+def live_process_log_index_names(table_name: str) -> tuple[str, str]:
+    return (
+        f"idx_{table_name}_symbol_ts",
+        f"idx_{table_name}_run_id",
+    )
 
 
 @dataclass
@@ -52,9 +77,26 @@ def resolve_db_config(repo_root: Path, args: argparse.Namespace) -> DbConfig:
     app_props = load_properties(repo_root / "src/main/resources/application.properties")
     runtime_props = load_properties(repo_root / "runtime/postgres-local.properties")
 
-    jdbc_url = args.db_url or app_props.get("spring.datasource.url", "")
-    user = args.db_user or app_props.get("spring.datasource.username", "")
-    password = args.db_password or runtime_props.get("spring.datasource.password", "")
+    jdbc_url = (
+        args.db_url
+        or os.getenv("HARVEST_DB_URL", "")
+        or os.getenv("SPRING_DATASOURCE_URL", "")
+        or runtime_props.get("spring.datasource.url", "")
+        or app_props.get("spring.datasource.url", "")
+    )
+    user = (
+        args.db_user
+        or os.getenv("HARVEST_DB_USER", "")
+        or os.getenv("SPRING_DATASOURCE_USERNAME", "")
+        or runtime_props.get("spring.datasource.username", "")
+        or app_props.get("spring.datasource.username", "")
+    )
+    password = (
+        args.db_password
+        or os.getenv("HARVEST_DB_PASSWORD", "")
+        or os.getenv("SPRING_DATASOURCE_PASSWORD", "")
+        or runtime_props.get("spring.datasource.password", "")
+    )
 
     match = JDBC_POSTGRES_RE.match(jdbc_url)
     if not match:
@@ -72,7 +114,7 @@ def resolve_db_config(repo_root: Path, args: argparse.Namespace) -> DbConfig:
 
 
 class LiveProcessLogStore:
-    def __init__(self, config: DbConfig) -> None:
+    def __init__(self, config: DbConfig, symbol: str) -> None:
         try:
             import psycopg
         except ImportError as exc:  # pragma: no cover - environment dependent
@@ -80,22 +122,29 @@ class LiveProcessLogStore:
                 "psycopg is required for --tee-db support. Install it with: pip install 'psycopg[binary]>=3.2'"
             ) from exc
 
+        self._config = config
         self._psycopg = psycopg
-        self._conn = psycopg.connect(
-            host=config.host,
-            port=config.port,
-            dbname=config.database,
-            user=config.user,
-            password=config.password,
-            autocommit=True,
-        )
-        self._ensure_schema()
+        self._table_name = live_process_log_table_name(symbol)
+        self._schema_ready = False
 
-    def _ensure_schema(self) -> None:
-        with self._conn.cursor() as cursor:
+    def _connect(self):
+        return self._psycopg.connect(
+            host=self._config.host,
+            port=self._config.port,
+            dbname=self._config.database,
+            user=self._config.user,
+            password=self._config.password,
+            autocommit=True,
+            connect_timeout=5,
+            application_name="live_process_log_sink",
+        )
+
+    def _ensure_schema(self, conn) -> None:
+        symbol_ts_index, run_id_index = live_process_log_index_names(self._table_name)
+        with conn.cursor() as cursor:
             cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS live_process_logs (
+                f"""
+                CREATE TABLE IF NOT EXISTS {self._table_name} (
                     id BIGSERIAL PRIMARY KEY,
                     run_id TEXT NOT NULL,
                     symbol TEXT NOT NULL,
@@ -108,27 +157,31 @@ class LiveProcessLogStore:
                 """
             )
             cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_live_process_logs_symbol_ts ON live_process_logs (symbol, log_ts DESC)"
+                f"CREATE INDEX IF NOT EXISTS {symbol_ts_index} ON {self._table_name} (symbol, log_ts DESC)"
             )
             cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_live_process_logs_run_id ON live_process_logs (run_id)"
+                f"CREATE INDEX IF NOT EXISTS {run_id_index} ON {self._table_name} (run_id)"
             )
+        self._schema_ready = True
 
     def write_batch(self, rows: Iterable[tuple[str, str, str, str, str]]) -> None:
         rows = list(rows)
         if not rows:
             return
-        with self._conn.cursor() as cursor:
-            cursor.executemany(
-                """
-                INSERT INTO live_process_logs (run_id, symbol, source, source_file, log_line)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                rows,
-            )
+        with self._connect() as conn:
+            if not self._schema_ready:
+                self._ensure_schema(conn)
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    f"""
+                    INSERT INTO {self._table_name} (run_id, symbol, source, source_file, log_line)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    rows,
+                )
 
     def close(self) -> None:
-        self._conn.close()
+        return None
 
 
 class MirrorSink:
@@ -162,7 +215,7 @@ def main() -> int:
 
     try:
         try:
-            db_store = LiveProcessLogStore(resolve_db_config(repo_root, args))
+            db_store = LiveProcessLogStore(resolve_db_config(repo_root, args), args.symbol)
         except Exception as exc:  # pragma: no cover - environment dependent
             db_enabled = False
             print(f"[RUN][WARN] live process log DB sink disabled: {exc}", file=sys.stderr, flush=True)

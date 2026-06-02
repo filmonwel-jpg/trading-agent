@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Databento to IBKR Data Flow</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --border: #334155;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    header, main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1, h2 {
+      margin: 0 0 12px;
+    }
+
+    p, li {
+      color: var(--muted);
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      margin: 22px 0;
+      overflow-x: auto;
+    }
+
+    .hint {
+      border-left: 4px solid var(--accent);
+      padding: 10px 14px;
+      background: rgba(56, 189, 248, 0.08);
+      border-radius: 8px;
+    }
+
+    .mermaid {
+      background: #ffffff;
+      border-radius: 10px;
+      padding: 18px;
+      min-width: 960px;
+    }
+
+    code {
+      color: #bae6fd;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Databento to IBKR Data Flow</h1>
+    <p>
+      Browser-rendered architecture view for the Databento market-data + IBKR execution stack.
+      If the Markdown file shows Mermaid as code in your IDE, open this HTML file instead.
+    </p>
+    <p class="hint">
+      Open from the repository with: <code>open docs/databento-ibkr-data-flow.html</code>
+    </p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>End-to-end architecture</h2>
+      <div class="mermaid">
+flowchart LR
+    DB[(Databento Live Market Data)]
+    TWS[IBKR TWS / IB Gateway<br/>local API endpoint]
+    BROKER[(IBKR Broker / Exchange Routing)]
+
+    subgraph DATABENTO_FEED["Databento market-data side"]
+        NORM["scripts/databento_live_normalizer.py<br/>Databento Live client<br/>TBBO / trades / OPRA 1s bars"]
+        RELAY["scripts/databento_shared_feed_relay.py<br/>shared feed relay<br/>default 127.0.0.1:9800"]
+    end
+
+    subgraph BOT_FLEET["Per-symbol Java bot fleet"]
+        BOT["Spring Boot symbol bot<br/>IBKRTrader"]
+        DBGW["DatabentoLiveGateway<br/>reads normalized JSON"]
+        HEALTH["DatabentoFeedHealth<br/>freshness / silence / restart checks"]
+        STRAT["PingPongStrategy actor<br/>1s bars -> 30s buckets<br/>features -> ONNX decisions"]
+        RISK["IBKRTrader risk/order gate<br/>stale quote guard<br/>shared capital<br/>notional/share limits"]
+        SGCLIENT["SharedIbkrGatewayClient<br/>newline-delimited JSON socket client"]
+    end
+
+    subgraph SHARED_IBKR["Shared IBKR execution side"]
+        SGSERVER["SharedIbkrGatewayProtocolServer<br/>default 127.0.0.1:9910"]
+        SGGW["SharedIBKRExecutionGateway<br/>symbol/order/request routing<br/>position & order sync"]
+    end
+
+    DB -->|"live Databento records<br/>equities TBBO/trades + OPRA bars"| NORM
+    NORM -->|"normalized newline JSON<br/>equity_bar / option_bar / status"| RELAY
+    RELAY -->|"per-symbol JSON stream"| DBGW
+    DBGW -->|"DatabentoEvent"| BOT
+    BOT --> HEALTH
+    BOT -->|"quote snapshot + order flow + source bars"| STRAT
+
+    STRAT -->|"entry/exit intent"| RISK
+    RISK -->|"submit_order / cancel_symbol_orders<br/>flatten_symbol / request_position_sync"| SGCLIENT
+
+    SGCLIENT -->|"newline-delimited JSON commands"| SGSERVER
+    SGSERVER --> SGGW
+    SGGW -->|"one shared IBKR API connection"| TWS
+    TWS --> BROKER
+
+    BROKER -->|"fills / order status / positions"| TWS
+    TWS -->|"IBKR callbacks / polling"| SGGW
+    SGGW -->|"gateway events<br/>order_status / position_updated / error"| SGSERVER
+    SGSERVER -->|"acks + async JSON events"| SGCLIENT
+    SGCLIENT --> BOT
+    BOT -->|"order progress / closed / position state"| STRAT
+
+    RISK -. "fallback if shared gateway disabled/failed<br/>and direct IBKR socket is available" .-> TWS
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Runtime sequence</h2>
+      <div class="mermaid">
+sequenceDiagram
+    participant DB as Databento
+    participant Norm as databento_live_normalizer.py
+    participant Relay as shared feed relay :9800
+    participant Bot as Java symbol bot / IBKRTrader
+    participant Strat as PingPongStrategy
+    participant SG as shared IBKR gateway :9910
+    participant TWS as IBKR TWS / Gateway
+    participant Broker as IBKR Broker
+
+    DB->>Norm: Live TBBO/trades/options records
+    Norm->>Relay: Normalized JSON events
+    Relay->>Bot: Per-symbol equity_bar / option_bar / status
+    Bot->>Strat: Quote snapshot, order flow, 1s bars
+    Strat->>Strat: Aggregate to 30s, compute features, run ONNX models
+    Strat->>Bot: Trade intent: BUY / SELL / cover / exit
+    Bot->>Bot: Risk gates, stale quote check, shared capital check
+    Bot->>SG: submit_order / cancel / flatten / position sync
+    SG->>TWS: IBKR API order/account requests
+    TWS->>Broker: Broker execution routing
+    Broker-->>TWS: Fills, order status, positions
+    TWS-->>SG: Execution/account callbacks
+    SG-->>Bot: Ack + async events
+    Bot-->>Strat: Order submitted/progress/closed, position updates
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>How to read it</h2>
+      <ol>
+        <li>Databento live records enter through <code>scripts/databento_live_normalizer.py</code>.</li>
+        <li>The shared relay fans normalized JSON events to each Java symbol bot.</li>
+        <li><code>IBKRTrader</code> forwards bars/quotes/order-flow into <code>PingPongStrategy</code>.</li>
+        <li>The strategy aggregates 1-second source data into 30-second feature buckets and runs ONNX decisions.</li>
+        <li>Trade intents go back through <code>IBKRTrader</code> risk gates.</li>
+        <li>Preferred execution goes through the shared Python IBKR gateway on <code>127.0.0.1:9910</code>.</li>
+        <li>IBKR fills/status/position events flow back through the gateway to the Java bot and strategy.</li>
+      </ol>
+    </section>
+  </main>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+  </script>
+</body>
+</html>
+

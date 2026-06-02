@@ -92,6 +92,7 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 				<configuration>
+					<mainClass>com.calgary.fili.trader.bot.TradingAgentApplication</mainClass>
 					<includeSystemScope>true</includeSystemScope>
 					<excludes>
 						<exclude>

@@ -37,7 +37,21 @@ def load_postgres_settings(root_dir: str | Path | None = None) -> dict[str, str]
     base_dir = Path(root_dir or Path(__file__).resolve().parent)
     merged: dict[str, str] = {}
     merged.update(load_properties_file(base_dir / 'src' / 'main' / 'resources' / 'application.properties'))
-    merged.update(load_properties_file(base_dir / 'runtime' / 'postgres-local.properties'))
+
+    # Support git worktree layouts by scanning upward for runtime/postgres-local.properties.
+    # Parent candidates are loaded first; closer paths override farther ones.
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for directory in [*base_dir.parents, base_dir]:
+        candidate = (directory / 'runtime' / 'postgres-local.properties').resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists() and candidate.is_file():
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        merged.update(load_properties_file(candidate))
 
     url = (
         os.getenv('HARVEST_DB_URL')

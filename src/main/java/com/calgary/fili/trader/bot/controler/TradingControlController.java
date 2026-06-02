@@ -23,6 +23,19 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.calgary.fili.trader.bot.trader.IBKRTrader;
 
+/**
+ * Operational control surface for one symbol bot.
+ *
+ * <p>This controller is not strategy logic; it is the runtime operator interface. It exposes:</p>
+ * <ul>
+ *   <li>read-only status and feed-health endpoints for dashboards/health checks</li>
+ *   <li>mutating controls such as pause, resume, flatten, cancel-open-orders, and kill switch</li>
+ *   <li>SSE log streams for both trade logs and the main application log</li>
+ * </ul>
+ *
+ * <p>Because each bot process owns only one symbol, every endpoint here acts on the single injected
+ * {@link IBKRTrader} instance. There is no multi-symbol routing layer inside this controller.</p>
+ */
 @CrossOrigin(origins = "*")
 @RestController
 @RequestMapping("/api/control")
@@ -45,6 +58,11 @@ public class TradingControlController {
         return trader.controlStatus();
     }
 
+    @GetMapping("/feed-health")
+    public Map<String, Object> feedHealth() {
+        return trader.databentoFeedHealthStatus();
+    }
+
     @GetMapping("/logs/db/recent")
     public List<Map<String, Object>> recentDatabaseTradeLogs(
         @RequestParam(name = "symbol", required = false) String symbol,
@@ -55,6 +73,8 @@ public class TradingControlController {
 
     @GetMapping("/logs/stream")
     public SseEmitter streamLogs() {
+        // Trade-log streaming is implemented as tail-following over the log file rather than polling the database.
+        // New subscribers first receive a recent in-memory backlog, then continue on a shared tailer thread.
         SseEmitter emitter = LogStreamHub.registerEmitter();
         String logFile = trader.getTradeLogFile();
         try {
@@ -89,6 +109,8 @@ public class TradingControlController {
     }
 
     private void startLogTailerIfNeeded(String logFile) {
+        // Only one tailer thread per log stream should exist inside the process; otherwise multiple tailers would
+        // repeatedly reread the same file and fan out duplicate log lines to all SSE subscribers.
         if (!logTailerRunning.compareAndSet(false, true)) {
             return;
         }
@@ -190,6 +212,8 @@ public class TradingControlController {
 
     @PostMapping("/flatten")
     public Map<String, Object> flatten() {
+        // Flatten is intentionally exposed as an operator endpoint because it is the main emergency/manual recovery
+        // action when a bot appears stuck or the session is about to close.
         String result = trader.flattenPosition();
         return response(result);
     }
@@ -202,6 +226,11 @@ public class TradingControlController {
     @PostMapping("/shared-capital/reset/{force}")
     public Map<String, Object> resetSharedCapital(@PathVariable boolean force) {
         return trader.resetSharedCapitalReservations(force);
+    }
+
+    @PostMapping("/state/reset-daily")
+    public Map<String, Object> resetDailyStrategyState(@RequestParam(name = "reason", defaultValue = "manual") String reason) {
+        return trader.resetDailyStrategyState(reason);
     }
 
     @PostMapping("/switch/{newSymbol}")

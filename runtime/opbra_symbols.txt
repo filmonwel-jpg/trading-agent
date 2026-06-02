@@ -1,0 +1,11 @@
+# OPRA option symbols for Databento OPRA.PILLAR ohlcv-1s
+# One symbol per line. Underlyings like TSLA/AAPL alone will return no data.
+# Format example: AAPL  260417C00150000
+
+AAPL  260417C00150000
+AAPL  260417P00150000
+TSLA  260417C00250000
+TSLA  260417P00250000
+NVDA  260417C01200000
+NVDA  260417P01200000
+

@@ -8,11 +8,11 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/filmonghezehey/trading-agent/schedule_weekday_morning_mt.sh</string>
+    <string>/Users/filmonghezehey/trading-agent/worktrees/databento/schedule_weekday_morning_mt.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/filmonghezehey/trading-agent</string>
+  <string>/Users/filmonghezehey/trading-agent/worktrees/databento</string>
 
   <key>StartInterval</key>
   <integer>60</integer>
@@ -21,10 +21,10 @@
   <false/>
 
   <key>StandardOutPath</key>
-  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-weekday-morning-mt.out.log</string>
+  <string>/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/launchd-weekday-morning-mt.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-weekday-morning-mt.err.log</string>
+  <string>/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/launchd-weekday-morning-mt.err.log</string>
 </dict>
 </plist>
 

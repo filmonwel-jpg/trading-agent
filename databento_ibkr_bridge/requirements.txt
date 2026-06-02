@@ -1,4 +1,6 @@
 databento>=0.43.0
 ib_async>=2.1.0
+pandas>=2.2
+psycopg[binary]>=3.2
 python-dotenv>=1.0.1
 

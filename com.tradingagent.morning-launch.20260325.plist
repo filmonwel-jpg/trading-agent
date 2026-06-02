@@ -8,11 +8,11 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/filmonghezehey/trading-agent/start_trading_stack_20260325.sh</string>
+    <string>/Users/filmonghezehey/trading-agent/worktrees/databento/start_trading_stack_20260325.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/filmonghezehey/trading-agent</string>
+  <string>/Users/filmonghezehey/trading-agent/worktrees/databento</string>
 
   <key>StartCalendarInterval</key>
   <dict>
@@ -30,10 +30,10 @@
   <false/>
 
   <key>StandardOutPath</key>
-  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-morning-20260325.out.log</string>
+  <string>/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/launchd-morning-20260325.out.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/filmonghezehey/trading-agent/runtime/launchd-morning-20260325.err.log</string>
+  <string>/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/launchd-morning-20260325.err.log</string>
 </dict>
 </plist>
 

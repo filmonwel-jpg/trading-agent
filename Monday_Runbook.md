@@ -171,6 +171,81 @@ Per-symbol runtime files currently point to:
   - trade log: `runtime/trades-AMD.csv`
   - state file: `runtime/trader-state-AMD.properties`
 
+## 5b. Live process log DB recovery
+
+Use this when the mirrored live log files exist under `runtime/*_live_trade_logs.txt`, but the PostgreSQL live-process tables are missing rows for the prior session.
+
+Typical trigger:
+
+- `python3 check_morning_stack.py` reports missing or incomplete live-process rows for one or more symbols
+- the text files such as `runtime/tsla_live_trade_logs.txt` or `runtime/qqq_live_trade_logs.txt` still contain the missed session output
+
+Default one-command recovery (targets yesterday automatically):
+
+```bash
+python3 scripts/backfill_live_process_logs.py
+```
+
+Useful variants:
+
+```bash
+python3 scripts/backfill_live_process_logs.py --day 2026-04-14
+python3 scripts/backfill_live_process_logs.py --day 2026-04-14 --symbols=TSLA,NVDA
+python3 scripts/backfill_live_process_logs.py --day 2026-04-14 --dry-run
+```
+
+What it does:
+
+- scans `runtime/*_live_trade_logs.txt`
+- reconstructs `run_id` values from each process startup
+- inserts rows into per-symbol live-process tables such as `tsla_databento_live_process_logs` with the original `log_ts`
+- skips already completed files and resumes partially imported files safely
+
+### One-time migration from the old shared table
+
+If you already have historical rows in the old shared live-process table and want to split them into the new per-symbol tables, run this one-time migration:
+
+```bash
+python3 scripts/migrate_shared_live_process_logs.py --dry-run
+python3 scripts/migrate_shared_live_process_logs.py
+```
+
+Useful variants:
+
+```bash
+python3 scripts/migrate_shared_live_process_logs.py --symbols=TSLA,NVDA
+```
+
+What it does:
+
+- reads from `databento_live_process_logs`
+- writes into per-symbol tables such as `tsla_databento_live_process_logs`
+- skips rows already present in the destination table, so it is safe to rerun
+
+Quick verification after recovery:
+
+```bash
+python3 check_morning_stack.py
+python3 scripts/backfill_live_process_logs.py --day 2026-04-14 --symbols=QQQ
+```
+
+Expected result:
+
+- `check_morning_stack.py` no longer reports missing live-process DB rows for the recovered symbols/day
+- a repeat backfill run reports `SKIP-EXISTING` for already completed files
+
+Prerequisites:
+
+- run from the repo root
+- `runtime/postgres-local.properties` is present
+- the target `runtime/*_live_trade_logs.txt` files still exist
+
+Prevention note:
+
+- for future live sessions, launch with DB tee enabled so logs are persisted immediately
+- single symbol: `./run_symbol.sh TSLA --start --tee --tee-db`
+- bulk launcher: `./start_all_databento_bots.sh --start --tee --tee-db`
+
 ## 6. Abort conditions
 
 Do **not** continue to live launch if any of these occur:

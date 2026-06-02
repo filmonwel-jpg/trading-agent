@@ -6,11 +6,18 @@ import com.calgary.fili.trader.bot.strategy.PingPongStrategy;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.io.*;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.*;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,11 +26,44 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 import io.micrometer.core.instrument.MeterRegistry;
 
+/**
+ * Central live-runtime orchestrator for one symbol process.
+ *
+ * <p>This class is the main integration seam between:</p>
+ * <ul>
+ *   <li>Spring Boot startup/shutdown lifecycle</li>
+ *   <li>live market data (either direct IBKR or Databento)</li>
+ *   <li>execution routing (either direct IBKR socket ownership or the shared Python gateway)</li>
+ *   <li>the single-threaded {@code PingPongStrategy} actor</li>
+ *   <li>cross-bot coordination such as shared capital and shared Databento relay startup</li>
+ * </ul>
+ *
+ * <p>Operationally, one JVM process owns exactly one symbol. The process may still consume a shared
+ * Databento relay stream or a shared IBKR execution gateway, but strategy state is symbol-local and must
+ * remain isolated from other processes.</p>
+ *
+ * <p>Important invariants:</p>
+ * <ul>
+ *   <li>Strategy state changes should be delegated into {@code PingPongStrategy}'s actor queue rather than
+ *       mutated directly from callback threads.</li>
+ *   <li>Market-data freshness gates order placement when Databento is the source of truth.</li>
+ *   <li>Order-type policy is intent-based, not action-only: entries use fast limit, exits/covers use market.</li>
+ *   <li>When shared Databento feed mode is enabled, this bot should not open its own Databento session on
+ *       relay failure because that would scale poorly across many symbol bots.</li>
+ * </ul>
+ */
 @Component
 public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final Logger log = LoggerFactory.getLogger(IBKRTrader.class);
+    private static final Set<String> DATABENTO_API_KEY_PLACEHOLDERS = Set.of(
+        "replace_me",
+        "paste_your_api_key_here",
+        "<your-key>",
+        "<your_databento_api_key>",
+        "changeme"
+    );
 
     private EClientSocket client;
     private EJavaSignal signal = new EJavaSignal();
@@ -67,21 +107,51 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     private static final int MAX_RECONNECTION_ATTEMPTS = 10;
     private static final long INITIAL_RECONNECT_DELAY_MS = 1000;
     private static final long MAX_RECONNECT_DELAY_MS = 30000;
+    private DatabentoLiveGateway databentoLiveGateway;
+    private SharedIbkrGatewayClient sharedIbkrGatewayClient;
+    private final DatabentoFeedHealth databentoFeedHealth = new DatabentoFeedHealth();
+    private final ScheduledExecutorService databentoSupervisorScheduler = Executors.newSingleThreadScheduledExecutor();
+    private volatile ScheduledFuture<?> databentoFeedMonitorFuture;
+    private volatile ScheduledFuture<?> marketScheduleMonitorFuture;
+    private final AtomicBoolean databentoRestartPending = new AtomicBoolean(false);
+    private final AtomicBoolean databentoSidecarConfigErrorLogged = new AtomicBoolean(false);
+    private ModelBundleResolver modelBundleResolver;
+    private ModelBundleResolver.ResolvedBundle resolvedModelBundle;
 
     @Value("${trading.host:127.0.0.1}") private String ibHost;
     @Value("${trading.port:7497}") private int ibPort;
     @Value("${trading.client-id:1}") private int clientId;
+    @Value("${trading.market-data.provider:ibkr}") private String marketDataProvider;
     @Value("${trading.symbol:}") private String symbol;
     @Value("${trading.trade-amount:40000}") private int tradeAmount;
     @Value("${trading.max-trades:20}") private int maxTrades;
     @Value("${trading.reversal-percentage:0.0005}") private double reversalPercentage;
     @Value("${trading.stop-loss-percentage:0.004}") private double stopLossPercentage;
     @Value("${trading.max-daily-drawdown:500.0}") private double maxDailyDrawdown;
+    @Value("${trading.post-hard-stop-entry-cooldown-ms:300000}") private long postHardStopEntryCooldownMs;
+    @Value("${trading.max-hard-stops-per-day:3}") private int maxHardStopsPerDay;
     @Value("${trading.ai.long-entry-threshold:0.68}") private double aiLongEntryThreshold;
     @Value("${trading.ai.short-entry-threshold:0.63}") private double aiShortEntryThreshold;
     @Value("${trading.ai.long-exit-threshold:0.58}") private double aiLongExitThreshold;
     @Value("${trading.ai.short-exit-threshold:0.60}") private double aiShortExitThreshold;
     @Value("${trading.ai.regime-threshold:0.50}") private double aiRegimeThreshold;
+    @Value("${trading.ai.entry-threshold-raise-percent:0.0}") private double aiEntryThresholdRaisePercent;
+    @Value("${trading.ai.open30.long-entry-threshold:}") private String aiOpen30LongEntryThresholdRaw;
+    @Value("${trading.ai.open30.short-entry-threshold:}") private String aiOpen30ShortEntryThresholdRaw;
+    @Value("${trading.ai.open30.long-exit-threshold:}") private String aiOpen30LongExitThresholdRaw;
+    @Value("${trading.ai.open30.short-exit-threshold:}") private String aiOpen30ShortExitThresholdRaw;
+    @Value("${trading.ai.regime.choppy.long-entry-threshold:}") private String aiChoppyLongEntryThresholdRaw;
+    @Value("${trading.ai.regime.choppy.short-entry-threshold:}") private String aiChoppyShortEntryThresholdRaw;
+    @Value("${trading.ai.regime.choppy.long-exit-threshold:}") private String aiChoppyLongExitThresholdRaw;
+    @Value("${trading.ai.regime.choppy.short-exit-threshold:}") private String aiChoppyShortExitThresholdRaw;
+    @Value("${trading.ai.regime.trend.long-entry-threshold:}") private String aiTrendLongEntryThresholdRaw;
+    @Value("${trading.ai.regime.trend.short-entry-threshold:}") private String aiTrendShortEntryThresholdRaw;
+    @Value("${trading.ai.regime.trend.long-exit-threshold:}") private String aiTrendLongExitThresholdRaw;
+    @Value("${trading.ai.regime.trend.short-exit-threshold:}") private String aiTrendShortExitThresholdRaw;
+    @Value("${trading.ai.regime.volatile.long-entry-threshold:}") private String aiVolatileLongEntryThresholdRaw;
+    @Value("${trading.ai.regime.volatile.short-entry-threshold:}") private String aiVolatileShortEntryThresholdRaw;
+    @Value("${trading.ai.regime.volatile.long-exit-threshold:}") private String aiVolatileLongExitThresholdRaw;
+    @Value("${trading.ai.regime.volatile.short-exit-threshold:}") private String aiVolatileShortExitThresholdRaw;
     @Value("${trading.market-data-request-id:1001}") private int marketDataRequestId;
     @Value("${trading.risk.max-order-notional:25000}") private double maxOrderNotional;
     @Value("${trading.risk.max-daily-orders:40}") private int maxDailyOrders;
@@ -90,12 +160,73 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.shared-capital.file:runtime/shared-capital.properties}") private String sharedCapitalFile;
     @Value("${trading.shared-capital.total-notional:0}") private double sharedCapitalTotalNotional;
     @Value("${trading.model.dir:}") private String modelDir;
+    @Value("${trading.databento.python-bin:python3}") private String databentoPythonBin;
+    @Value("${trading.databento.normalizer-script:scripts/databento_live_normalizer.py}") private String databentoNormalizerScript;
+    @Value("${trading.databento.env-file:runtime/databento.env}") private String databentoEnvFile;
+    @Value("${trading.databento.live-gateway:}") private String databentoLiveGatewayOverride;
+    @Value("${trading.databento.equity-dataset:DBEQ.BASIC}") private String databentoEquityDataset;
+    @Value("${trading.databento.equity-schema:tbbo}") private String databentoEquitySchema;
+    @Value("${trading.databento.startup-history-seconds:360}") private double databentoStartupHistorySeconds;
+    @Value("${trading.databento.shared-feed.startup-history-seconds:0}") private double databentoSharedFeedStartupHistorySeconds;
+    @Value("${trading.databento.startup-history-schema:ohlcv-1s}") private String databentoStartupHistorySchema;
+    @Value("${trading.databento.options-dataset:OPRA.PILLAR}") private String databentoOptionsDataset;
+    @Value("${trading.databento.options-schema:ohlcv-1s}") private String databentoOptionsSchema;
+    @Value("${trading.databento.option-parents:}") private String databentoOptionParents;
+    @Value("${trading.databento.heartbeat-seconds:15}") private int databentoHeartbeatSeconds;
+    @Value("${trading.databento.startup-delay-seconds:40}") private double databentoStartupDelaySeconds;
+    @Value("${trading.databento.auto-restart.enabled:true}") private boolean databentoAutoRestartEnabled;
+    @Value("${trading.databento.restart-delay-ms:2000}") private long databentoRestartDelayMs;
+    @Value("${trading.databento.max-silence-ms:120000}") private long databentoMaxSilenceMs;
+    @Value("${trading.databento.quote-stale-threshold-ms:5000}") private long databentoQuoteStaleThresholdMs;
+    @Value("${trading.databento.allow-stale-closing-market-order:true}") private boolean databentoAllowStaleClosingMarketOrder;
+    @Value("${trading.databento.model-routing-csv:runtime/databento/model-routing.csv}") private String databentoModelRoutingCsv;
+    @Value("${trading.databento.symbol-plan-csv:training_data/databento_30s/symbol_model_plan.csv}") private String databentoSymbolPlanCsv;
+    @Value("${trading.databento.shared-feed.enabled:true}") private boolean databentoSharedFeedEnabled;
+    @Value("${trading.databento.shared-feed.host:127.0.0.1}") private String databentoSharedFeedHost;
+    @Value("${trading.databento.shared-feed.port:9800}") private int databentoSharedFeedPort;
+    @Value("${trading.databento.shared-feed.start-if-missing:true}") private boolean databentoSharedFeedStartIfMissing;
+    @Value("${trading.databento.shared-feed.fallback-to-private-sidecar:false}") private boolean databentoSharedFeedFallbackToPrivateSidecar;
+    @Value("${trading.databento.shared-feed.start-timeout-ms:15000}") private long databentoSharedFeedStartTimeoutMs;
+    @Value("${trading.databento.shared-feed.expected-client-count:1}") private int databentoSharedFeedExpectedClientCount;
+    @Value("${trading.databento.shared-feed.client-wait-timeout-ms:15000}") private long databentoSharedFeedClientWaitTimeoutMs;
+    @Value("${trading.databento.shared-feed.script:scripts/databento_shared_feed_relay.py}") private String databentoSharedFeedScript;
+    @Value("${trading.databento.shared-feed.bots-dir:runtime/databento/bots}") private String databentoSharedFeedBotsDir;
+    @Value("${trading.databento.shared-feed.lock-file:runtime/databento/shared-feed-relay.lock}") private String databentoSharedFeedLockFile;
+    @Value("${trading.databento.shared-feed.pid-file:runtime/databento/shared-feed-relay.pid}") private String databentoSharedFeedPidFile;
+    @Value("${trading.databento.shared-feed.log-file:runtime/databento/logs/databento-shared-feed-relay.log}") private String databentoSharedFeedLogFile;
+    @Value("${trading.databento.restart-jitter-ms:2500}") private long databentoRestartJitterMs;
+    @Value("${trading.ibkr.shared-gateway.enabled:false}") private boolean ibkrSharedGatewayEnabled;
+    @Value("${trading.ibkr.shared-gateway.host:127.0.0.1}") private String ibkrSharedGatewayHost;
+    @Value("${trading.ibkr.shared-gateway.port:9910}") private int ibkrSharedGatewayPort;
+    @Value("${trading.ibkr.shared-gateway.connect-timeout-ms:3000}") private long ibkrSharedGatewayConnectTimeoutMs;
+    @Value("${trading.ibkr.shared-gateway.ack-timeout-ms:5000}") private long ibkrSharedGatewayAckTimeoutMs;
+    @Value("${trading.ibkr.shared-gateway.skip-direct-connection:false}") private boolean ibkrSharedGatewaySkipDirectConnection;
+    @Value("${trading.ibkr.position-sync.timeout-ms:8000}") private long ibkrPositionSyncTimeoutMs;
     @Value("${trading.state.file:trader-state.properties}") private String stateFile;
     @Value("${trading.log.file:trades.csv}") private String tradeLogFile;
     @Value("${trading.log.storage-mode:both}") private String tradeLogStorageMode;
     private String resolvedTradeLogFile;
     private SharedCapitalManager sharedCapitalManager;
     private volatile boolean symbolPositionSeenThisCycle = false;
+
+    private enum PositionSyncMode {
+        BLOCK_BAR_FORWARDING,
+        PRESERVE_BAR_FORWARDING
+    }
+
+    private final AtomicLong positionSyncAttemptSequence = new AtomicLong(0L);
+    private volatile long lastPositionSyncAttemptId = 0L;
+    private volatile long lastPositionSyncStartedAtMs = 0L;
+    private volatile long lastPositionSyncCompletedAtMs = 0L;
+    private volatile long lastPositionSyncFailedAtMs = 0L;
+    private volatile String lastPositionSyncReason = "";
+    private volatile String lastPositionSyncMode = "";
+    private volatile String lastPositionSyncTransport = "idle";
+    private volatile String lastPositionSyncFailureStage = "";
+    private volatile String lastPositionSyncFailureReason = "";
+    private volatile String lastPositionSyncAckDetail = "";
+    private volatile Integer lastPositionSyncReqId = null;
+    private volatile ScheduledFuture<?> positionSyncTimeoutFuture;
 
     private final MeterRegistry meterRegistry;
     private final TradeLogStore tradeLogStore;
@@ -122,8 +253,27 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             Paths.get(sharedCapitalFile),
             sharedCapitalTotalNotional
         );
+        modelBundleResolver = new ModelBundleResolver(modelDir, databentoSymbolPlanCsv, databentoModelRoutingCsv);
         flowInfo("BOOT", "IBKRTrader bean initialized");
         flowData("BOOT", "tradeLog storageMode=" + normalizedTradeLogStorageMode());
+        flowData("BOOT", "marketDataProvider=" + normalizedMarketDataProvider() + " routingCsv=" + databentoModelRoutingCsv + " symbolPlanCsv=" + databentoSymbolPlanCsv);
+        if (useDatabentoMarketData()) {
+            flowData(
+                "BOOT",
+                "databento sharedFeedEnabled=" + databentoSharedFeedEnabled
+                    + " relayHost=" + databentoSharedFeedHost
+                    + " relayPort=" + databentoSharedFeedPort
+                    + " liveGateway=" + (databentoLiveGatewayOverride == null || databentoLiveGatewayOverride.isBlank() ? "<default>" : databentoLiveGatewayOverride.trim())
+                    + " startIfMissing=" + databentoSharedFeedStartIfMissing
+            );
+        }
+        flowData(
+            "BOOT",
+            "ibkr sharedGatewayEnabled=" + ibkrSharedGatewayEnabled
+                + " host=" + ibkrSharedGatewayHost
+                + " port=" + ibkrSharedGatewayPort
+                + " skipDirectConnection=" + ibkrSharedGatewaySkipDirectConnection
+        );
         if (sharedCapitalManager.isEnabled()) {
             SharedCapitalManager.Snapshot snapshot = sharedCapitalManager.snapshot();
             flowData(
@@ -139,10 +289,23 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     @Override
     public void run(String... args) throws Exception {
+        // Spring hands control here once the application context is fully built.
+        // From this point onward the process behaves like a dedicated symbol daemon:
+        // connect execution, bootstrap strategy state, subscribe market data, then stay alive.
         flowInfo("BOOT", "SPRING BOOT STARTED: Initializing Trading Bot...");
+        if (useSharedIbkrGateway() && ibkrSharedGatewaySkipDirectConnection) {
+            // Shared-gateway-only mode means this JVM never opens its own IBKR socket; it boots entirely
+            // through the Python execution gateway and then stays alive to receive async events.
+            ensureSharedIbkrGatewayConnected(true);
+            flowCondition("BOOT", "IBKR_CONNECTED", isSharedIbkrGatewayConnected(), "sharedGateway host=" + ibkrSharedGatewayHost + " port=" + ibkrSharedGatewayPort);
+            onConnected();
+            Thread.currentThread().join();
+            return;
+        }
         client = new EClientSocket(this, signal);
         client.eConnect(ibHost, ibPort, clientId);
         flowData("BOOT", "connect host=" + ibHost + " port=" + ibPort + " clientId=" + clientId + " symbol=" + symbol);
+        // IBKR delivers callbacks through the reader thread; without it the socket would be connected but mute.
         startReaderLoop();
         Thread.sleep(1000);
         if (client.isConnected()) {
@@ -157,16 +320,39 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     }
 
     private void onConnected() {
+        // Treat any successful execution-channel connection as a full symbol bootstrap event.
+        // We intentionally re-request positions/open orders and rebuild live subscriptions here so
+        // reconnect and cold-start follow the same initialization path.
         positionSyncComplete = false;
         symbolPositionSeenThisCycle = false;
         lastScheduleAllowNewEntries = null;
         boolean symbolPresent = symbol != null && !symbol.isBlank();
         flowCondition("BOOT", "SYMBOL_PRESENT", symbolPresent, "rawSymbol=" + symbol);
         symbol = symbolPresent ? symbol.trim().toUpperCase() : "TSLA";
-        flowData("BOOT", "normalizedSymbol=" + symbol + " modelDir=" + (modelDir == null || modelDir.isBlank() ? "classpath" : modelDir));
+        // Feed health and the shared gateway both track symbols by normalized uppercase keys.
+        databentoFeedHealth.registerSymbol(symbol);
+        ensureSharedIbkrGatewayConnected(false);
+        registerSymbolWithSharedGateway();
+        // The schedule monitor is independent of bar delivery so close logic still fires during feed outages.
+        startMarketScheduleMonitor();
+        resetOptionVolumeAccumulators("startup");
+        // Model resolution happens once per bootstrap/reconnect so strategy inference uses the latest promoted bundle.
+        resolvedModelBundle = resolveModelBundle(symbol);
+        String effectiveModelDir = resolvedModelBundle != null && resolvedModelBundle.modelDir() != null && !resolvedModelBundle.modelDir().isBlank()
+            ? resolvedModelBundle.modelDir()
+            : modelDir;
+        flowData(
+            "BOOT",
+            "normalizedSymbol=" + symbol
+                + " marketDataProvider=" + normalizedMarketDataProvider()
+                + " modelDir=" + (effectiveModelDir == null || effectiveModelDir.isBlank() ? "classpath" : effectiveModelDir)
+                + " bundleJob=" + (resolvedModelBundle == null ? "" : resolvedModelBundle.jobName())
+                + " bundleVariant=" + (resolvedModelBundle == null ? "" : resolvedModelBundle.variant())
+                + " bundleNote=" + (resolvedModelBundle == null ? "" : resolvedModelBundle.note())
+        );
 
         if (shopStrategy == null) {
-            shopStrategy = new PingPongStrategy(this, symbol, 0.003, tradeAmount, maxTrades, true, 12, 14, reversalPercentage, stopLossPercentage, maxDailyDrawdown, 1.20, 0.70, modelDir);
+            shopStrategy = new PingPongStrategy(this, symbol, 0.003, tradeAmount, maxTrades, true, 12, 14, reversalPercentage, stopLossPercentage, maxDailyDrawdown, 1.20, 0.70, effectiveModelDir, postHardStopEntryCooldownMs, maxHardStopsPerDay);
             loadStrategyState();
             meterRegistry.gauge("trading.strategy.stop.queue.depth", shopStrategy, PingPongStrategy::getLastStopQueueDepth);
             meterRegistry.gauge("trading.strategy.stop.ack.latency.last", shopStrategy, PingPongStrategy::getLastStopAckLatencyMs);
@@ -177,7 +363,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             meterRegistry.gauge("trading.reconnection.attempts", this, IBKRTrader::getReconnectionAttempts);
         }
 
-        shopStrategy.setAiThresholds(aiLongEntryThreshold, aiShortEntryThreshold, aiLongExitThreshold, aiShortExitThreshold, aiRegimeThreshold);
+        shopStrategy.setAiThresholds(buildAiThresholdConfig());
 
         if (this.yesterdayClose > 0) {
             shopStrategy.setYesterdayClose(this.yesterdayClose);
@@ -186,12 +372,28 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             flowCondition("IBKR.SYNC", "YESTERDAY_CLOSE_AVAILABLE", false, "value=" + this.yesterdayClose);
         }
 
-        client.reqPositions();
-        subscribeToMarketData();
+        // Position sync must happen before the strategy is allowed to act on ticks/bars, otherwise it can trade
+        // before it knows whether it already owns inventory from a prior session.
+        requestPositions(PositionSyncMode.BLOCK_BAR_FORWARDING, "startup-bootstrap");
+        if (useDatabentoMarketData()) {
+            startDatabentoFeedMonitor();
+            startDatabentoLiveGateway();
+        } else {
+            stopDatabentoFeedMonitor();
+            if (client != null && client.isConnected()) {
+                subscribeToMarketData();
+            } else {
+                flowInfo("IBKR.SUBSCRIBE", "Direct market-data subscription skipped because direct IBKR client is not connected.");
+            }
+        }
 
         Contract contract = buildStockContract();
         String queryTime = LocalDate.now(MARKET_ZONE).atStartOfDay(MARKET_ZONE).minusSeconds(1).format(DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"));
-        client.reqHistoricalData(marketDataRequestId + 2, contract, queryTime, "1 D", "1 day", "TRADES", 1, 1, false, null);
+        if (client != null && client.isConnected()) {
+            client.reqHistoricalData(marketDataRequestId + 2, contract, queryTime, "1 D", "1 day", "TRADES", 1, 1, false, null);
+        } else {
+            flowInfo("IBKR.SYNC", "Historical close bootstrap skipped because direct IBKR client is not connected.");
+        }
     }
 
     private void subscribeToMarketData() {
@@ -218,6 +420,8 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             shopStrategy.setEnabled(false);
             flowInfo("CONNECTION", "Strategy paused during disconnection.");
         }
+        // Any in-memory order tracking may now be stale relative to the broker, so clear local timers/contexts
+        // and rebuild truth from sync callbacks after reconnect.
         orderContextById.clear();
         cumulativeFilledByOrderId.clear();
         staleOrderTimeoutByOrderId.values().forEach(f -> f.cancel(false));
@@ -281,9 +485,19 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         reconnectionAttempts = 0;
         positionSyncComplete = false;
         lastScheduleAllowNewEntries = null;
-        client.reqPositions();
-        client.reqOpenOrders();
-        subscribeToMarketData();
+        // Reconnect follows the same operational bootstrap pattern as cold start: resume schedule monitoring,
+        // reset transient feed-derived state, then resynchronize positions/orders before strategy trading resumes.
+        startMarketScheduleMonitor();
+        resetOptionVolumeAccumulators("reconnect");
+        requestPositions(PositionSyncMode.BLOCK_BAR_FORWARDING, "reconnect-bootstrap");
+        requestOpenOrdersSync();
+        if (useDatabentoMarketData()) {
+            startDatabentoFeedMonitor();
+            startDatabentoLiveGateway();
+        } else {
+            stopDatabentoFeedMonitor();
+            subscribeToMarketData();
+        }
         if (shopStrategy != null && !runtimeKillSwitch) {
             shopStrategy.setEnabled(true);
             flowCondition("CONNECTION", "STRATEGY_RESUMED_AFTER_RECONNECT", true, "killSwitch=" + runtimeKillSwitch);
@@ -299,6 +513,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         if (!expectedTicker) return;
 
         if (field == 9) {
+            // IBKR field 9 is prior close; the strategy uses it for daily context and gap-aware logic.
             this.yesterdayClose = price;
             flowConditionDebug("IBKR.TICK", "YESTERDAY_CLOSE_VALID", price > 0.0, "value=" + price);
             flowDataDebug("IBKR.TICK", "field=9 yesterdayClose=" + price);
@@ -310,6 +525,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         }
 
         if (field == 1) {
+            // Bid updates refresh the quote snapshot used for sell-side reference pricing and sizing.
             this.currentBidPrice = price;
             flowDataDebug("IBKR.TICK", "field=1 bid=" + price);
             if (shopStrategy != null) {
@@ -319,6 +535,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         }
 
         if (field == 2) {
+            // Ask updates refresh the quote snapshot used for buy-side reference pricing and sizing.
             this.currentAskPrice = price;
             flowDataDebug("IBKR.TICK", "field=2 ask=" + price);
             if (shopStrategy != null) {
@@ -330,6 +547,8 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         if (field == 4) {
             if (Math.abs(price - this.currentLastPrice) > 0.001) {
                 this.currentLastPrice = price;
+                // Last-trade ticks are only used for exit-style monitoring once position sync has completed.
+                // That keeps the strategy from reacting to market motion before inventory state is trusted.
                 boolean canForward = shopStrategy != null && positionSyncComplete;
                 flowConditionDebug("IBKR->AI.TICK", "FORWARD_TICK_TO_STRATEGY", canForward, "lastPrice=" + price + " positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
                 if (canForward) {
@@ -346,39 +565,16 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
         ZonedDateTime barTs = null;
         if (expectedReq) {
+            // Normalize bar timestamps into market-local time once so logging, schedule logic, and strategy
+            // all reason about the same wall clock.
             barTs = Instant.ofEpochSecond(time).atZone(ZoneOffset.UTC).withZoneSameInstant(MARKET_ZONE);
             flowData("IBKR.BAR", "reqId=" + reqId + " tsEt=" + barTs + " ohlc=" + open + "/" + high + "/" + low + "/" + close + " count=" + count);
             flowCondition("IBKR->AI.BAR", "FORWARD_BAR_TO_STRATEGY", canForward, "positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
         }
 
         if (expectedReq && shopStrategy != null && barTs != null) {
-            LocalTime timeEt = barTs.toLocalTime();
-            LocalDate barDateEt = barTs.toLocalDate();
-
-            boolean allowEntriesByClock = !timeEt.isBefore(LocalTime.of(9, 30, 0)) && timeEt.isBefore(LocalTime.of(15, 50, 0));
-            if (lastScheduleAllowNewEntries == null || lastScheduleAllowNewEntries.booleanValue() != allowEntriesByClock) {
-                shopStrategy.setAllowNewEntries(allowEntriesByClock);
-                lastScheduleAllowNewEntries = allowEntriesByClock;
-                flowInfo("SCHEDULE", "Clock gate set allowNewEntries=" + allowEntriesByClock + " at " + timeEt);
-            }
-
-            if (timeEt.isAfter(LocalTime.of(9, 29, 55)) && timeEt.isBefore(LocalTime.of(9, 31, 0))) {
-                if (!shopStrategy.isEnabled()) {
-                    shopStrategy.resetForNewDay();
-                    shopStrategy.setEnabled(true);
-                    flowInfo("SCHEDULE", "9:30 AM ET: Market Open. Strategy awake and indicators reset.");
-                }
-            }
-
-            if (timeEt.isAfter(LocalTime.of(15, 59, 45)) && timeEt.isBefore(LocalTime.of(16, 0, 0))) {
-                boolean closeActionNotDoneToday = !barDateEt.equals(lastCloseFlattenDate);
-                if (shopStrategy.isEnabled() && closeActionNotDoneToday) {
-                    flowInfo("SCHEDULE", "3:59 PM ET: Market closing. Flattening positions and going to sleep.");
-                    flattenPosition();
-                    shopStrategy.setEnabled(false);
-                    lastCloseFlattenDate = barDateEt;
-                }
-            }
+            // Schedule enforcement runs even if the strategy later decides to ignore the bar.
+            applyMarketSchedule(barTs);
         }
 
         if (canForward) {
@@ -393,25 +589,25 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
                 if (vwapVal <= 0) vwapVal = close;
             }
 
+            // Strategy ingests the fully normalized 5-second bar only after quote/position gating succeeds.
             shopStrategy.on5SecondBar(time, open, high, low, close, vol, vwapVal);
         }
     }
 
     public void placeTrade(String symbol, String action, double currentPrice, int quantity, String orderType) {
+        // This method is the last synchronous gate before an order leaves the Java process.
+        // By the time we reach the actual broker/gateway call, the request should already have been
+        // normalized for intent (entry vs exit), quote freshness, notional limits, daily caps, and
+        // shared-capital policy. Keeping the policy concentrated here prevents strategy call sites from
+        // duplicating routing logic and drifting out of sync.
         rollRiskCountersIfNeeded();
-        if (currentOrderId < 0 || isKillSwitchActive()) {
-            flowCondition("ORDER.GATE", "READY_TO_PLACE_ORDER", false, "currentOrderId=" + currentOrderId + " killSwitch=" + isKillSwitchActive());
+        boolean readyToPlaceOrder = (currentOrderId >= 0 || isSharedIbkrGatewayConnected()) && !isKillSwitchActive();
+        if (!readyToPlaceOrder) {
+            flowCondition("ORDER.GATE", "READY_TO_PLACE_ORDER", false, "currentOrderId=" + currentOrderId + " sharedGatewayConnected=" + isSharedIbkrGatewayConnected() + " killSwitch=" + isKillSwitchActive());
             if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
             return;
         }
-        flowCondition("ORDER.GATE", "READY_TO_PLACE_ORDER", true, "currentOrderId=" + currentOrderId + " killSwitch=" + isKillSwitchActive());
-
-        if (quantity <= 0 || currentPrice <= 0.0) {
-            flowCondition("ORDER.GATE", "VALID_QTY_PRICE", false, "qty=" + quantity + " price=" + currentPrice);
-            if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
-            return;
-        }
-        flowCondition("ORDER.GATE", "VALID_QTY_PRICE", true, "qty=" + quantity + " price=" + currentPrice);
+        flowCondition("ORDER.GATE", "READY_TO_PLACE_ORDER", true, "currentOrderId=" + currentOrderId + " sharedGatewayConnected=" + isSharedIbkrGatewayConnected() + " killSwitch=" + isKillSwitchActive());
 
         if (orderType == null || orderType.isBlank()) {
             flowCondition("ORDER.GATE", "ORDER_TYPE_PRESENT", false, "orderType=" + orderType);
@@ -419,20 +615,36 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             return;
         }
 
-        String normalizedOrderType = orderType.trim().toUpperCase();
-        int finalQty = Math.min(quantity, getMaxShareCap());
-        int orderIdToUse = currentOrderId;
-
         boolean isClosingTrade = false;
         if (shopStrategy != null) {
             int currentPos = shopStrategy.getCurrentPosition();
+            // Intent matters more than raw action: SELL can be either short-entry or long-exit, and BUY can be
+            // either long-entry or short-cover. We infer that here so routing policy stays consistent everywhere.
             if (("SELL".equals(action) && currentPos > 0) || ("BUY".equals(action) && currentPos < 0)) {
                 isClosingTrade = true;
                 flowInfo("RISK", "Trade identified as EXIT. Bypassing Notional Limits.");
             }
         }
+        String enforcedOrderType = resolvePreferredOrderType(action, isClosingTrade);
 
-        if (!isClosingTrade && (currentPrice * finalQty) > maxOrderNotional) {
+        if (shouldBlockForStaleDatabentoQuote(enforcedOrderType, isClosingTrade)) {
+            if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
+            return;
+        }
+
+        // Resolve the best executable reference from the live quote book before notional and share-cap checks.
+        double executionReferencePrice = resolveExecutionReferencePrice(action, currentPrice, enforcedOrderType);
+        int finalQty = Math.min(quantity, getMaxShareCap());
+        int orderIdToUse = currentOrderId;
+
+        if (quantity <= 0 || executionReferencePrice <= 0.0) {
+            flowCondition("ORDER.GATE", "VALID_QTY_PRICE", false, "qty=" + quantity + " price=" + executionReferencePrice + " requestedPrice=" + currentPrice + " lastAsk=" + currentAskPrice);
+            if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
+            return;
+        }
+        flowCondition("ORDER.GATE", "VALID_QTY_PRICE", true, "qty=" + quantity + " price=" + executionReferencePrice + " requestedPrice=" + currentPrice + " lastAsk=" + currentAskPrice);
+
+        if (!isClosingTrade && (executionReferencePrice * finalQty) > maxOrderNotional) {
             flowError("RISK", "Order blocked: notional exceeds limit");
             if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
             return;
@@ -443,9 +655,11 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             return;
         }
 
-        double requestedNotional = Math.max(0.0, currentPrice * finalQty);
+        double requestedNotional = Math.max(0.0, executionReferencePrice * finalQty);
         boolean capitalReserved = false;
         if (!isClosingTrade && sharedCapitalManager != null && sharedCapitalManager.isEnabled()) {
+            // Opening trades reserve shared notional up front so sibling symbol bots cannot oversubscribe capital
+            // between intent creation and eventual fill/cancel callbacks.
             SharedCapitalManager.ReservationDecision decision = sharedCapitalManager.tryReserve(symbol, requestedNotional);
             if (!decision.allowed()) {
                 flowError("RISK", "Order blocked: shared capital unavailable " + decision.message());
@@ -463,6 +677,83 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             );
         }
 
+        if (isSharedIbkrGatewayConnected()) {
+            try {
+                // Shared gateway is the preferred execution path because it centralizes broker connectivity while
+                // still sending async order/position events back into this symbol process.
+                SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.submitOrder(
+                    symbol,
+                    action,
+                    finalQty,
+                    enforcedOrderType,
+                    executionReferencePrice,
+                    ("LMT".equals(enforcedOrderType) || "FAST_LMT".equals(enforcedOrderType)) ? executionReferencePrice : null,
+                    orderType,
+                    Map.of("source", "IBKRTrader", "symbol", symbol, "closing_trade", isClosingTrade)
+                );
+                if (!response.ok) {
+                    if (capitalReserved) {
+                        releaseSharedCapital(symbol, "shared-gateway-submit-failed");
+                    }
+                    flowError("IBKR.GATEWAY", "submit_order rejected detail=" + response.detail);
+                    if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
+                    return;
+                }
+                Integer sharedGatewayOrderId = response.payloadInt("gatewayOrderId");
+                int sharedOrderId = sharedGatewayOrderId == null ? Math.max(1, currentOrderId) : sharedGatewayOrderId;
+                String gatewayStatus = response.payloadString("status");
+                Integer gatewayRemaining = response.payloadInt("remaining");
+                Integer gatewayFilled = response.payloadInt("filled");
+                Double gatewayAvgFillPrice = response.payloadDouble("avg_fill_price");
+                boolean gatewayEffectiveTerminal = isSharedGatewayEffectivelyTerminal(gatewayStatus, gatewayRemaining, response.payloadBoolean("effective_terminal"));
+                orderContextById.put(sharedOrderId, new OrderContext(symbol, action, finalQty, isClosingTrade, requestedNotional, capitalReserved));
+                orderSentTimes.put(sharedOrderId, System.currentTimeMillis());
+                lastPlacedOrderId = sharedOrderId;
+                lastPlacedOrderAction = action;
+                lastPlacedOrderQuantity = finalQty;
+                if (gatewayEffectiveTerminal) {
+                    int filledQty = gatewayFilled == null ? 0 : Math.max(0, gatewayFilled);
+                    if (filledQty > 0 && shopStrategy != null) {
+                        shopStrategy.onOrderProgress(sharedOrderId, action, filledQty, gatewayRemaining == null ? 0 : Math.max(0, gatewayRemaining), gatewayAvgFillPrice == null ? 0.0 : gatewayAvgFillPrice);
+                    }
+                    if (capitalReserved && !isClosingTrade && filledQty == 0) {
+                        releaseSharedCapital(symbol, "shared-gateway-submit-terminal-no-fill-" + gatewayStatus);
+                    } else if (isClosingTrade && filledQty > 0) {
+                        releaseSharedCapital(symbol, "shared-gateway-submit-terminal-fill-" + gatewayStatus);
+                    }
+                    orderContextById.remove(sharedOrderId);
+                    orderSentTimes.remove(sharedOrderId);
+                    cumulativeFilledByOrderId.remove(sharedOrderId);
+                    ScheduledFuture<?> timeoutFuture = staleOrderTimeoutByOrderId.remove(sharedOrderId);
+                    if (timeoutFuture != null) {
+                        timeoutFuture.cancel(false);
+                    }
+                    if (shopStrategy != null) {
+                        shopStrategy.onOrderClosed(sharedOrderId, gatewayStatus == null || gatewayStatus.isBlank() ? "Inactive" : gatewayStatus);
+                    }
+                    dailySubmittedOrders++;
+                    flowData("ORDER.SEND", "sharedGateway terminal/noop orderId=" + sharedOrderId + " action=" + action + " status=" + gatewayStatus + " filled=" + filledQty + " remaining=" + gatewayRemaining + " type=" + enforcedOrderType);
+                    requestPostOrderPositionValidation(symbol, sharedOrderId, "shared-gateway-terminal-submit");
+                    return;
+                }
+                if (shopStrategy != null) shopStrategy.onOrderSubmitted(sharedOrderId, action, finalQty);
+                dailySubmittedOrders++;
+                flowData("ORDER.SEND", "sharedGateway orderId=" + sharedOrderId + " action=" + action + " type=" + enforcedOrderType + " requestedPrice=" + currentPrice + " executionReferencePrice=" + executionReferencePrice);
+                requestPostOrderPositionValidation(symbol, sharedOrderId, "shared-gateway-submit");
+                return;
+            } catch (IOException e) {
+                if (capitalReserved) {
+                    releaseSharedCapital(symbol, "shared-gateway-submit-io-failed");
+                }
+                flowError("IBKR.GATEWAY", "submit_order failed reason=" + e.getMessage());
+                if (ibkrSharedGatewaySkipDirectConnection || client == null || !client.isConnected()) {
+                    if (shopStrategy != null) shopStrategy.onOrderClosed(currentOrderId, "Cancelled");
+                    return;
+                }
+                flowInfo("IBKR.GATEWAY", "Falling back to direct IBKR order placement because shared gateway submission failed.");
+            }
+        }
+
         Contract contract = new Contract();
         contract.symbol(symbol);
         contract.secType("STK");
@@ -474,15 +765,17 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         order.totalQuantity(Decimal.parse(String.valueOf(finalQty)));
         order.outsideRth(true);
 
-        if ("FAST_LMT".equals(normalizedOrderType)) {
+        if ("FAST_LMT".equals(enforcedOrderType)) {
+            // FAST_LMT crosses slightly through the inside quote to behave like a near-marketable IOC while still
+            // preserving an explicit limit bound.
             order.orderType("LMT");
             double aggressiveOffset = 0.05;
-            double fastPrice = "BUY".equals(action) ? (currentPrice + aggressiveOffset) : (currentPrice - aggressiveOffset);
+            double fastPrice = "BUY".equals(action) ? (executionReferencePrice + aggressiveOffset) : (executionReferencePrice - aggressiveOffset);
             order.lmtPrice(Math.round(fastPrice * 100.0) / 100.0);
             order.tif("IOC");
-        } else if ("LMT".equals(normalizedOrderType)) {
+        } else if ("LMT".equals(enforcedOrderType)) {
             order.orderType("LMT");
-            order.lmtPrice(currentPrice);
+            order.lmtPrice(Math.round(executionReferencePrice * 100.0) / 100.0);
             order.tif("IOC");
         } else {
             order.orderType("MKT");
@@ -493,7 +786,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         orderSentTimes.put(orderIdToUse, System.currentTimeMillis());
 
         try {
-            flowData("ORDER.SEND", "orderId=" + orderIdToUse + " action=" + action + " type=" + normalizedOrderType);
+            flowData("ORDER.SEND", "orderId=" + orderIdToUse + " action=" + action + " type=" + enforcedOrderType + " requestedPrice=" + currentPrice + " executionReferencePrice=" + executionReferencePrice + " lastAsk=" + currentAskPrice + " lastBid=" + currentBidPrice);
             client.placeOrder(orderIdToUse, contract, order);
         } catch (Exception e) {
             orderContextById.remove(orderIdToUse);
@@ -513,6 +806,19 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         if (shopStrategy != null) shopStrategy.onOrderSubmitted(orderIdToUse, action, finalQty);
         dailySubmittedOrders++;
         currentOrderId++;
+        requestPostOrderPositionValidation(symbol, orderIdToUse, "direct-ibkr-submit");
+    }
+
+    private void requestPostOrderPositionValidation(String orderSymbol, int orderId, String source) {
+        String normalizedSymbol = orderSymbol == null || orderSymbol.isBlank() ? symbol : orderSymbol;
+        String normalizedSource = source == null || source.isBlank() ? "order-submit" : source;
+        flowInfo(
+            "IBKR.SYNC",
+            "requesting post-order position validation symbol=" + normalizedSymbol
+                + " orderId=" + orderId
+                + " source=" + normalizedSource
+        );
+        requestPositions(PositionSyncMode.PRESERVE_BAR_FORWARDING, "post-order-position-validation-" + normalizedSymbol + "-" + orderId + "-" + normalizedSource);
     }
 
     protected int getMaxShareCap() {
@@ -536,10 +842,25 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         try (InputStream is = Files.newInputStream(path)) {
             props.load(is);
             double rPrice = Double.parseDouble(props.getProperty("strategy.lastPrice", "0.0"));
-            int rTrades = Integer.parseInt(props.getProperty("strategy.tradeCount", "0"));
+            int persistedTradeCount = Integer.parseInt(props.getProperty("strategy.tradeCount", "0"));
             this.yesterdayClose = Double.parseDouble(props.getProperty("strategy.yesterdayClose", "0.0"));
-            shopStrategy.restoreState(rPrice, rTrades, true);
-            flowData("STATE", "Restored state lastPrice=" + rPrice + " trades=" + rTrades + " yesterdayClose=" + yesterdayClose);
+            String restoredDate = props.getProperty("strategy.stateDate", "");
+            boolean sameMarketDay = LocalDate.now(MARKET_ZONE).toString().equals(restoredDate);
+            int rTrades = sameMarketDay ? persistedTradeCount : 0;
+            int restoredHardStops = sameMarketDay ? Integer.parseInt(props.getProperty("strategy.hardStopExitCount", "0")) : 0;
+            long restoredLastHardStopTime = sameMarketDay ? Long.parseLong(props.getProperty("strategy.lastHardStopExitTimeMs", "0")) : 0L;
+            shopStrategy.restoreState(rPrice, rTrades, true, false, this.yesterdayClose, restoredHardStops, restoredLastHardStopTime);
+            if (!sameMarketDay && persistedTradeCount > 0) {
+                flowInfo("STATE", "Reset stale tradeCount on startup symbol=" + symbol + " persistedTradeCount=" + persistedTradeCount + " restoredDate=" + restoredDate + " marketDate=" + LocalDate.now(MARKET_ZONE));
+                props.setProperty("strategy.tradeCount", "0");
+                props.setProperty("strategy.stateDate", LocalDate.now(MARKET_ZONE).toString());
+                props.setProperty("strategy.hardStopExitCount", "0");
+                props.setProperty("strategy.lastHardStopExitTimeMs", "0");
+                try (OutputStream os = Files.newOutputStream(path)) {
+                    props.store(os, "Trader State");
+                }
+            }
+            flowData("STATE", "Restored state lastPrice=" + rPrice + " trades=" + rTrades + " persistedTrades=" + persistedTradeCount + " yesterdayClose=" + yesterdayClose + " sameMarketDay=" + sameMarketDay + " hardStopExitCount=" + restoredHardStops + " lastHardStopExitTimeMs=" + restoredLastHardStopTime);
         } catch (Exception e) {
             flowError("STATE", "Restore failed: " + e.getMessage());
         }
@@ -555,6 +876,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         props.setProperty("strategy.lastPrice", String.valueOf(shopStrategy.getLastPrice()));
         props.setProperty("strategy.tradeCount", String.valueOf(shopStrategy.getTradeCount()));
         props.setProperty("strategy.yesterdayClose", String.valueOf(this.yesterdayClose));
+        props.setProperty("strategy.stateDate", LocalDate.now(MARKET_ZONE).toString());
+        props.setProperty("strategy.hardStopExitCount", String.valueOf(shopStrategy.getHardStopExitCount()));
+        props.setProperty("strategy.lastHardStopExitTimeMs", String.valueOf(shopStrategy.getLastHardStopExitTimeMs()));
         try (OutputStream os = Files.newOutputStream(Paths.get(stateFile))) {
             props.store(os, "Trader State");
             flowData("STATE", "Persisted state file=" + stateFile + " lastPrice=" + shopStrategy.getLastPrice() + " tradeCount=" + shopStrategy.getTradeCount() + " yesterdayClose=" + this.yesterdayClose);
@@ -568,6 +892,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         reader.start();
         readerThread = new Thread(() -> {
             while (!isShuttingDown) {
+                // EWrapper callbacks are pumped from this loop; every direct IBKR event flows through here.
                 signal.waitForSignal();
                 try { reader.processMsgs(); } catch (Exception ignored) {}
             }
@@ -578,12 +903,15 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Override public void nextValidId(int orderId) { this.currentOrderId = orderId; flowData("IBKR.SYNC", "nextValidId=" + orderId); }
     @Override public void positionEnd() {
         if (!symbolPositionSeenThisCycle) {
+            // A completed sync with no symbol position means we should release any stale reservation left over
+            // from a previous process incarnation or interrupted fill lifecycle.
             releaseSharedCapital(symbol, "position-sync-flat");
         }
         positionSyncComplete = true;
         if (shopStrategy != null) {
             shopStrategy.setPositionSynced(true);
         }
+        markPositionSyncCompleted("direct-ibkr-position-end", "symbolPositionSeenThisCycle=" + symbolPositionSeenThisCycle);
         flowCondition("IBKR.SYNC", "POSITION_SYNC_COMPLETE", true, "symbol=" + symbol);
     }
     @Override public void connectAck() {}
@@ -607,7 +935,13 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Override public void position(String account, Contract contract, Decimal pos, double avgCost) {
         if (contract.symbol().equals(symbol)) {
             symbolPositionSeenThisCycle = true;
+            flowData(
+                "IBKR.SYNC",
+                "position update account=" + account + " symbol=" + symbol + " brokerPosition=" + pos.value().intValue() + " avgCost=" + avgCost
+            );
             if (shopStrategy != null) shopStrategy.syncPosition(pos.value().intValue(), avgCost);
+            // Reconcile reservations against broker-reported inventory so shared capital follows actual exposure,
+            // not just submitted orders.
             reconcileSharedCapitalWithPosition(pos.value().intValue(), currentLastPrice > 0.0 ? currentLastPrice : avgCost);
         }
     }
@@ -620,9 +954,20 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         if (avgFillPrice > 0.0) {
             lastOrderAvgFillPrice = avgFillPrice;
         }
+        if (orderContext != null && shopStrategy != null) {
+            int previousFilledQty = cumulativeFilledByOrderId.getOrDefault(orderId, 0);
+            int filledDelta = Math.max(0, filledQty - previousFilledQty);
+            if (filledDelta > 0) {
+                cumulativeFilledByOrderId.put(orderId, filledQty);
+                shopStrategy.onOrderProgress(orderId, orderContext.action(), filledDelta, remainingQty, avgFillPrice);
+            }
+        }
+        boolean terminal = isTerminalOrderStatus(status);
         if (orderContext != null) {
             if (!orderContext.closingTrade() && orderContext.capitalReserved()) {
-                if (isTerminalOrderStatus(status) || remainingQty == 0) {
+                // Entry orders either convert their reservation into actual exposure on fill or release it on
+                // terminal cancellation/rejection.
+                if (terminal) {
                     if (filledQty > 0) {
                         double reservedAmount = avgFillPrice > 0.0 ? avgFillPrice * filledQty : orderContext.reservedNotional();
                         reconcileSharedCapitalWithPosition(filledQty, avgFillPrice > 0.0 ? avgFillPrice : currentLastPrice > 0.0 ? currentLastPrice : 0.0, reservedAmount);
@@ -630,12 +975,13 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
                         releaseSharedCapital(orderContext.symbol(), "entry-order-terminal-" + status);
                     }
                 }
-            } else if (orderContext.closingTrade() && (isTerminalOrderStatus(status) || remainingQty == 0)) {
+            } else if (orderContext.closingTrade() && terminal) {
                 if (filledQty > 0 && remainingQty == 0) {
                     releaseSharedCapital(orderContext.symbol(), "closing-order-terminal-" + status);
                 }
             }
-            if (isTerminalOrderStatus(status) || remainingQty == 0) {
+            if (terminal) {
+                // Terminal statuses are the cleanup point for local watchdogs and order bookkeeping.
                 orderContextById.remove(orderId);
                 orderSentTimes.remove(orderId);
                 cumulativeFilledByOrderId.remove(orderId);
@@ -646,7 +992,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             }
         }
         if (shopStrategy != null) {
-            if ("Filled".equalsIgnoreCase(status) || "Cancelled".equalsIgnoreCase(status) || remainingQty == 0) {
+            if (terminal) {
                 shopStrategy.onOrderClosed(orderId, status);
             }
         }
@@ -659,20 +1005,184 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         if (shopStrategy == null || shopStrategy.getCurrentPosition() == 0) {
             releaseSharedCapital(symbol, "shutdown-flat");
         }
+        if (databentoLiveGateway != null) {
+            databentoLiveGateway.stop();
+        }
+        if (sharedIbkrGatewayClient != null) {
+            sharedIbkrGatewayClient.disconnect();
+        }
+        // Tear down monitors before disconnecting sockets so background tasks stop generating restart/reconnect work
+        // while the process is intentionally exiting.
+        stopDatabentoFeedMonitor();
+        stopMarketScheduleMonitor();
         if (client != null) client.eDisconnect();
         staleOrderScheduler.shutdown();
         reconnectionScheduler.shutdown();
+        databentoSupervisorScheduler.shutdown();
     }
 
     public void cancelStaleOrder(int orderIdToCancel) {
+        if (isSharedIbkrGatewayConnected()) {
+            try {
+                SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.cancelSymbolOrders(symbol, "strategy-watchdog-stale-order-" + orderIdToCancel);
+                if (response.ok) {
+                    flowInfo("IBKR.GATEWAY", "cancel_symbol_orders detail=" + response.detail + " orderId=" + orderIdToCancel + " symbol=" + symbol);
+                    return;
+                }
+                flowError("IBKR.GATEWAY", "cancel_symbol_orders rejected detail=" + response.detail + " orderId=" + orderIdToCancel + " symbol=" + symbol);
+                if (ibkrSharedGatewaySkipDirectConnection) {
+                    return;
+                }
+            } catch (IOException e) {
+                flowError("IBKR.GATEWAY", "cancel_symbol_orders failed orderId=" + orderIdToCancel + " reason=" + e.getMessage());
+                if (ibkrSharedGatewaySkipDirectConnection) {
+                    return;
+                }
+            }
+        }
         if (client != null && orderIdToCancel >= 0) {
             client.cancelOrder(orderIdToCancel, new OrderCancel());
         }
     }
 
     public void requestPositions() {
+        requestPositions(PositionSyncMode.PRESERVE_BAR_FORWARDING, "strategy-refresh");
+    }
+
+    private void requestPositions(PositionSyncMode mode, String reason) {
+        String normalizedReason = (reason == null || reason.isBlank()) ? "ibkr-trader-requestPositions" : reason;
+        boolean preserveBarForwarding = mode == PositionSyncMode.PRESERVE_BAR_FORWARDING && positionSyncComplete;
+        symbolPositionSeenThisCycle = false;
+        if (!preserveBarForwarding) {
+            positionSyncComplete = false;
+        }
+        if (shopStrategy != null) {
+            // Keep bars/features flowing during opportunistic resyncs, but stop new entries until broker state is
+            // re-confirmed. Cold-start/reconnect still uses the stricter full gate above.
+            shopStrategy.setPositionSynced(false);
+        }
+        String initialTransport = isSharedIbkrGatewayConnected() ? "shared-gateway" : ((client != null && client.isConnected()) ? "direct-ibkr" : "unavailable");
+        beginPositionSyncAttempt(mode, normalizedReason, preserveBarForwarding, initialTransport);
+        if (isSharedIbkrGatewayConnected()) {
+            try {
+                // Shared gateway sync is preferred because it returns the broker view through the same async event
+                // channel used for live order updates.
+                SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.requestPositionSync(normalizedReason);
+                recordPositionSyncAck("shared-gateway", response);
+                flowInfo("IBKR.GATEWAY", "request_position_sync detail=" + response.detail + " reqId=" + response.payloadInt("reqId"));
+                return;
+            } catch (IOException e) {
+                markPositionSyncFailure("shared-gateway-request", e.getMessage());
+                flowError("IBKR.GATEWAY", "request_position_sync failed reason=" + e.getMessage());
+                if (ibkrSharedGatewaySkipDirectConnection) {
+                    return;
+                }
+                lastPositionSyncTransport = "direct-ibkr-fallback";
+                flowInfo("IBKR.SYNC", "position sync fallback to direct-ibkr because shared gateway request failed attemptId=" + lastPositionSyncAttemptId);
+            }
+        }
         if (client != null && client.isConnected()) {
+            lastPositionSyncTransport = "direct-ibkr";
+            flowInfo("IBKR.SYNC", "position sync dispatched via direct-ibkr attemptId=" + lastPositionSyncAttemptId + " reason=" + normalizedReason);
             client.reqPositions();
+            return;
+        }
+        markPositionSyncFailure("request-dispatch", "no-available-position-sync-transport");
+    }
+
+    private void beginPositionSyncAttempt(PositionSyncMode mode, String reason, boolean preserveBarForwarding, String transport) {
+        cancelPositionSyncTimeout();
+        long attemptId = positionSyncAttemptSequence.incrementAndGet();
+        lastPositionSyncAttemptId = attemptId;
+        lastPositionSyncStartedAtMs = System.currentTimeMillis();
+        lastPositionSyncReason = reason == null ? "" : reason;
+        lastPositionSyncMode = mode == null ? "" : mode.name();
+        lastPositionSyncTransport = transport == null || transport.isBlank() ? "unknown" : transport;
+        lastPositionSyncFailureStage = "";
+        lastPositionSyncFailureReason = "";
+        lastPositionSyncFailedAtMs = 0L;
+        lastPositionSyncAckDetail = "";
+        lastPositionSyncReqId = null;
+        int currentPosition = shopStrategy != null ? shopStrategy.getCurrentPosition() : 0;
+        flowInfo(
+            "IBKR.SYNC",
+            "position sync requested attemptId=" + attemptId
+                + " reason=" + lastPositionSyncReason
+                + " mode=" + lastPositionSyncMode
+                + " transport=" + lastPositionSyncTransport
+                + " preserveBarForwarding=" + preserveBarForwarding
+                + " positionSyncComplete=" + positionSyncComplete
+                + " currentPosition=" + currentPosition
+                + " openOrders=" + getOpenOrdersCount()
+                + " orderInFlight=" + isOrderInFlight()
+                + " sharedGatewayConnected=" + isSharedIbkrGatewayConnected()
+                + " directIbkrConnected=" + (client != null && client.isConnected())
+        );
+        schedulePositionSyncTimeout(attemptId);
+    }
+
+    private void recordPositionSyncAck(String transport, SharedIbkrGatewayMessage response) {
+        lastPositionSyncTransport = transport == null || transport.isBlank() ? lastPositionSyncTransport : transport;
+        lastPositionSyncAckDetail = response == null || response.detail == null ? "" : response.detail;
+        lastPositionSyncReqId = response == null ? null : response.payloadInt("reqId");
+        flowInfo(
+            "IBKR.SYNC",
+            "position sync acknowledged attemptId=" + lastPositionSyncAttemptId
+                + " transport=" + lastPositionSyncTransport
+                + " reqId=" + lastPositionSyncReqId
+                + " detail=" + lastPositionSyncAckDetail
+        );
+    }
+
+    private void markPositionSyncFailure(String stage, String detail) {
+        lastPositionSyncFailedAtMs = System.currentTimeMillis();
+        lastPositionSyncFailureStage = stage == null ? "" : stage;
+        lastPositionSyncFailureReason = detail == null ? "" : detail;
+        flowError(
+            "IBKR.SYNC",
+            "position sync unsuccessful attemptId=" + lastPositionSyncAttemptId
+                + " stage=" + lastPositionSyncFailureStage
+                + " reason=" + lastPositionSyncFailureReason
+                + " mode=" + lastPositionSyncMode
+                + " transport=" + lastPositionSyncTransport
+                + " reqId=" + lastPositionSyncReqId
+                + " positionSyncComplete=" + positionSyncComplete
+                + " currentPosition=" + (shopStrategy != null ? shopStrategy.getCurrentPosition() : 0)
+                + " openOrders=" + getOpenOrdersCount()
+                + " orderInFlight=" + isOrderInFlight()
+                + " startedAtMs=" + lastPositionSyncStartedAtMs
+        );
+    }
+
+    private void markPositionSyncCompleted(String source, String detail) {
+        lastPositionSyncCompletedAtMs = System.currentTimeMillis();
+        lastPositionSyncTransport = source == null || source.isBlank() ? lastPositionSyncTransport : source;
+        cancelPositionSyncTimeout();
+        flowInfo(
+            "IBKR.SYNC",
+            "position sync completed attemptId=" + lastPositionSyncAttemptId
+                + " source=" + lastPositionSyncTransport
+                + " detail=" + (detail == null ? "" : detail)
+                + " durationMs=" + Math.max(0L, lastPositionSyncCompletedAtMs - lastPositionSyncStartedAtMs)
+                + " symbolPositionSeenThisCycle=" + symbolPositionSeenThisCycle
+        );
+    }
+
+    private void schedulePositionSyncTimeout(long attemptId) {
+        long timeoutMs = Math.max(1000L, ibkrPositionSyncTimeoutMs);
+        positionSyncTimeoutFuture = staleOrderScheduler.schedule(() -> {
+            if (attemptId != lastPositionSyncAttemptId || positionSyncComplete) {
+                return;
+            }
+            markPositionSyncFailure("timeout", "position sync did not complete within " + timeoutMs + "ms");
+        }, timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelPositionSyncTimeout() {
+        ScheduledFuture<?> timeoutFuture = positionSyncTimeoutFuture;
+        positionSyncTimeoutFuture = null;
+        if (timeoutFuture != null) {
+            timeoutFuture.cancel(false);
         }
     }
 
@@ -714,7 +1224,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         return response;
     }
 
-    public boolean isConnected() { return client != null && client.isConnected(); }
+    public boolean isConnected() { return (client != null && client.isConnected()) || isSharedIbkrGatewayConnected(); }
     public int getClientId() { return clientId; }
     public boolean isStrategyEnabled() { return shopStrategy != null && shopStrategy.isEnabled(); }
     public int getOpenOrdersCount() { return orderContextById.size(); }
@@ -793,6 +1303,85 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     public int getStrategyStopAckLatencySamples() { return shopStrategy != null ? shopStrategy.getStopAckLatencySampleCount() : 0; }
     public double getConnectionStatus() { return isConnected() ? 1.0 : 0.0; }
     public int getReconnectionAttempts() { return reconnectionAttempts; }
+    public String getTrackedSymbol() { return symbol == null || symbol.isBlank() ? "UNSET" : symbol.trim().toUpperCase(Locale.US); }
+    public boolean isDatabentoMarketDataEnabled() { return useDatabentoMarketData(); }
+    public double getDatabentoEnabledMetric() { return useDatabentoMarketData() ? 1.0 : 0.0; }
+    public double getDatabentoGatewayRunningMetric() { return useDatabentoMarketData() && currentDatabentoSnapshot().gatewayRunning() ? 1.0 : 0.0; }
+    public double getDatabentoRestartCountMetric() { return useDatabentoMarketData() ? currentDatabentoSnapshot().restartCount() : 0.0; }
+    public double getDatabentoQuoteAgeMsMetric() {
+        if (!useDatabentoMarketData()) return 0.0;
+        long age = currentDatabentoSnapshot().primarySymbolHealth().quoteAgeMs();
+        return age >= 0L ? age : 0.0;
+    }
+    public double getDatabentoBarAgeMsMetric() {
+        if (!useDatabentoMarketData()) return 0.0;
+        long age = currentDatabentoSnapshot().primarySymbolHealth().barAgeMs();
+        return age >= 0L ? age : 0.0;
+    }
+    public double getDatabentoOptionAgeMsMetric() {
+        if (!useDatabentoMarketData()) return 0.0;
+        long age = currentDatabentoSnapshot().primarySymbolHealth().optionAgeMs();
+        return age >= 0L ? age : 0.0;
+    }
+    public double getDatabentoQuoteFreshMetric() {
+        return useDatabentoMarketData() && currentDatabentoSnapshot().primarySymbolHealth().quoteFresh() ? 1.0 : 0.0;
+    }
+    public boolean isDatabentoFeedHealthy() {
+        return !useDatabentoMarketData() || currentDatabentoSnapshot().healthy();
+    }
+    public DatabentoFeedHealth.Snapshot currentDatabentoSnapshot() {
+        return databentoFeedHealth.snapshot(
+            getTrackedSymbol(),
+            System.currentTimeMillis(),
+            databentoQuoteStaleThresholdMs,
+            databentoMaxSilenceMs,
+            isDatabentoMarketDataExpectedNow()
+        );
+    }
+    public Map<String, Object> databentoFeedHealthStatus() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("enabled", useDatabentoMarketData());
+        payload.put("quoteStaleThresholdMs", databentoQuoteStaleThresholdMs);
+        payload.put("maxSilenceMs", databentoMaxSilenceMs);
+        payload.put("autoRestartEnabled", databentoAutoRestartEnabled);
+        payload.put("restartDelayMs", databentoRestartDelayMs);
+        payload.putAll(databentoFeedHealth.snapshotAsMap(
+            getTrackedSymbol(),
+            System.currentTimeMillis(),
+            databentoQuoteStaleThresholdMs,
+            databentoMaxSilenceMs,
+            isDatabentoMarketDataExpectedNow()
+        ));
+        return payload;
+    }
+
+    private String positionSyncStateSummary() {
+        if (lastPositionSyncFailedAtMs > 0L && lastPositionSyncFailedAtMs >= lastPositionSyncCompletedAtMs) {
+            return "failed:" + compactPositionSyncToken(lastPositionSyncFailureStage, "stage")
+                + ":" + compactPositionSyncToken(lastPositionSyncFailureReason, "reason");
+        }
+        if (positionSyncComplete) {
+            return "synced:" + compactPositionSyncToken(lastPositionSyncTransport, "source");
+        }
+        if (lastPositionSyncStartedAtMs > 0L) {
+            return "syncing:" + compactPositionSyncToken(lastPositionSyncMode, "mode")
+                + ":" + compactPositionSyncToken(lastPositionSyncTransport, "transport");
+        }
+        return "unknown";
+    }
+
+    private String compactPositionSyncToken(String raw, String fallback) {
+        String normalized = raw == null ? "" : raw.trim().toLowerCase(Locale.US);
+        if (normalized.isBlank()) {
+            return fallback;
+        }
+        normalized = normalized.replaceAll("[^a-z0-9]+", "-");
+        normalized = normalized.replaceAll("^-+|-+$", "");
+        if (normalized.isBlank()) {
+            return fallback;
+        }
+        return normalized.length() > 48 ? normalized.substring(0, 48) : normalized;
+    }
 
     public Map<String, Object> controlStatus() {
         Map<String, Object> status = new LinkedHashMap<>();
@@ -806,6 +1395,8 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         status.put("dailySubmittedOrders", submittedToday);
         status.put("currentPosition", currentPosition);
         status.put("position", currentPosition);
+        status.put("strategyTradeCount", shopStrategy != null ? shopStrategy.getTradeCount() : 0);
+        status.put("maxTrades", maxTrades);
         status.put("tradeLogStorageMode", normalizedTradeLogStorageMode());
         status.put("tradeLogFileEnabled", isTradeLogFileEnabled());
         status.put("tradeLogDatabaseEnabled", isTradeLogDatabaseEnabled());
@@ -823,6 +1414,30 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         status.put("stopAckLatencySamples", getStrategyStopAckLatencySamples());
         status.put("reconnecting", isReconnecting);
         status.put("reconnectionAttempts", reconnectionAttempts);
+        status.put("positionSyncComplete", positionSyncComplete);
+        status.put("positionSyncAttemptId", lastPositionSyncAttemptId);
+        status.put("positionSyncStartedAtMs", lastPositionSyncStartedAtMs);
+        status.put("positionSyncCompletedAtMs", lastPositionSyncCompletedAtMs);
+        status.put("positionSyncFailedAtMs", lastPositionSyncFailedAtMs);
+        status.put("positionSyncReason", lastPositionSyncReason);
+        status.put("positionSyncMode", lastPositionSyncMode);
+        status.put("positionSyncTransport", lastPositionSyncTransport);
+        status.put("positionSyncLastFailureStage", lastPositionSyncFailureStage);
+        status.put("positionSyncLastFailureReason", lastPositionSyncFailureReason);
+        status.put("positionSyncLastAckDetail", lastPositionSyncAckDetail);
+        status.put("positionSyncLastReqId", lastPositionSyncReqId);
+        status.put("positionSyncState", positionSyncStateSummary());
+        status.put("ibkrSharedGatewayEnabled", useSharedIbkrGateway());
+        status.put("ibkrSharedGatewayConnected", isSharedIbkrGatewayConnected());
+        status.put("ibkrSharedGatewaySkipDirectConnection", ibkrSharedGatewaySkipDirectConnection);
+        status.put("marketDataProvider", normalizedMarketDataProvider());
+        status.put("databentoFeedHealthy", isDatabentoFeedHealthy());
+        if (useDatabentoMarketData()) {
+            status.put("databentoSharedFeedEnabled", useSharedDatabentoFeed());
+            status.put("databentoSharedFeedHost", databentoSharedFeedHost);
+            status.put("databentoSharedFeedPort", databentoSharedFeedPort);
+            status.put("databentoFeed", databentoFeedHealthStatus());
+        }
         if (sharedCapitalManager != null && sharedCapitalManager.isEnabled()) {
             SharedCapitalManager.Snapshot snapshot = sharedCapitalManager.snapshot();
             status.put("sharedCapitalEnabled", true);
@@ -849,6 +1464,22 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         return true;
     }
 
+    public Map<String, Object> resetDailyStrategyState(String reason) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        if (shopStrategy == null) {
+            response.put("message", "strategy-not-ready");
+            response.put("reason", reason == null ? "manual" : reason);
+            response.put("status", controlStatus());
+            return response;
+        }
+        boolean resetApplied = shopStrategy.resetForNewDayAndWait(1500L);
+        persistStrategyState();
+        response.put("message", resetApplied ? "daily-strategy-state-reset" : "daily-strategy-state-reset-timeout");
+        response.put("reason", reason == null ? "manual" : reason);
+        response.put("status", controlStatus());
+        return response;
+    }
+
     public void setRuntimeKillSwitch(boolean enabled) {
         this.runtimeKillSwitch = enabled;
         if (enabled && shopStrategy != null) {
@@ -857,6 +1488,20 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     }
 
     public int cancelOpenOrders() {
+        if (isSharedIbkrGatewayConnected()) {
+            int openCount = orderContextById.size();
+            try {
+                SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.cancelSymbolOrders(symbol, "cancel-open-orders");
+                flowInfo("IBKR.GATEWAY", "cancel_symbol_orders detail=" + response.detail + " cancelledCount=" + response.payloadInt("cancelledCount"));
+                Integer cancelledCount = response.payloadInt("cancelledCount");
+                return cancelledCount == null ? openCount : cancelledCount;
+            } catch (IOException e) {
+                flowError("IBKR.GATEWAY", "cancel_symbol_orders failed reason=" + e.getMessage());
+                if (ibkrSharedGatewaySkipDirectConnection) {
+                    return 0;
+                }
+            }
+        }
         if (!isConnected()) return 0;
         int openCount = orderContextById.size();
         CompletableFuture.runAsync(() -> {
@@ -871,12 +1516,59 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     }
 
     public String flattenPosition() {
+        // Flatten is used by both operational controls and schedule-driven close handling.
+        // It intentionally shares the same order-routing policy as ordinary strategy exits:
+        // use market for closing intent and compute the best available quote-based reference price first.
         if (shopStrategy == null) return "strategy-not-ready";
         int position = shopStrategy.getCurrentPosition();
+        if (isSharedIbkrGatewayConnected()) {
+            try {
+                String localAction = position > 0 ? "SELL" : position < 0 ? "BUY" : "";
+                double flattenReferencePrice = localAction.isBlank()
+                    ? Math.max(0.0, currentLastPrice)
+                    : resolveExecutionReferencePrice(localAction, currentLastPrice, resolvePreferredOrderType(localAction, true));
+                SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.flattenSymbol(
+                    symbol,
+                    flattenReferencePrice,
+                    position == 0 ? null : Math.abs(position),
+                    "flatten-position-broker-check"
+                );
+                if (!response.ok) {
+                    return "flatten-rejected-by-gateway";
+                }
+                Integer gatewayOrderId = response.payloadInt("gatewayOrderId");
+                if (gatewayOrderId == null) {
+                    return "already-flat";
+                }
+                String action = response.payloadString("action");
+                if (action == null || action.isBlank()) {
+                    action = localAction;
+                }
+                Integer responseQuantity = response.payloadInt("quantity");
+                int flattenQuantity = responseQuantity == null ? Math.abs(position) : Math.max(0, responseQuantity);
+                if (action == null || action.isBlank() || flattenQuantity <= 0) {
+                    return "flatten-requested-untracked";
+                }
+                int sharedOrderId = gatewayOrderId == null ? Math.max(1, currentOrderId) : gatewayOrderId;
+                orderContextById.put(sharedOrderId, new OrderContext(symbol, action, flattenQuantity, true, 0.0, false));
+                orderSentTimes.put(sharedOrderId, System.currentTimeMillis());
+                lastPlacedOrderId = sharedOrderId;
+                lastPlacedOrderAction = action;
+                lastPlacedOrderQuantity = flattenQuantity;
+                if (shopStrategy != null) shopStrategy.onOrderSubmitted(sharedOrderId, action, flattenQuantity);
+                return "flatten-requested";
+            } catch (IOException e) {
+                flowError("IBKR.GATEWAY", "flatten_symbol failed reason=" + e.getMessage());
+                if (ibkrSharedGatewaySkipDirectConnection) {
+                    return "flatten-failed-gateway-io";
+                }
+            }
+        }
         if (position == 0) return "already-flat";
-        if (currentLastPrice <= 0.0) return "flatten-failed-no-price";
         String action = (position > 0) ? "SELL" : "BUY";
-        placeTrade(symbol, action, currentLastPrice, Math.abs(position), "MKT");
+        double flattenReferencePrice = resolveExecutionReferencePrice(action, currentLastPrice, resolvePreferredOrderType(action, true));
+        if (flattenReferencePrice <= 0.0) return "flatten-failed-no-price";
+        placeTrade(symbol, action, flattenReferencePrice, Math.abs(position), "MKT");
         return "flatten-requested";
     }
 
@@ -954,6 +1646,28 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             || "Inactive".equalsIgnoreCase(status);
     }
 
+    private boolean isSharedGatewayEffectivelyTerminal(String status, Integer remaining, Boolean gatewayEffectiveTerminal) {
+        if (Boolean.TRUE.equals(gatewayEffectiveTerminal)) {
+            return true;
+        }
+        if (isTerminalOrderStatus(status)) {
+            return true;
+        }
+        return remaining != null && remaining == 0 && isZeroRemainingSharedGatewayLifecycleStatus(status);
+    }
+
+    private boolean isZeroRemainingSharedGatewayLifecycleStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        // These are cancellation lifecycle statuses where the gateway may report remaining=0 before IBKR emits a
+        // final Cancelled/ApiCancelled event. Submission lifecycle statuses (PendingSubmit/ApiPending) are not
+        // terminal: IBKR can still fill those IOC/limit orders after the initial submit response, so closing local
+        // order state here would hide real broker exposure from the strategy.
+        return "PendingCancel".equalsIgnoreCase(status)
+            || "CancelSubmitted".equalsIgnoreCase(status);
+    }
+
     private String normalizedTradeLogStorageMode() {
         String rawMode = tradeLogStorageMode == null ? "" : tradeLogStorageMode.trim().toLowerCase(Locale.US);
         return switch (rawMode) {
@@ -962,12 +1676,984 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         };
     }
 
+    private void startDatabentoLiveGateway() {
+        // Databento startup has two modes:
+        //  1) shared relay mode (preferred for large bot fleets)
+        //  2) dedicated sidecar mode (only when shared-feed mode is not in use)
+        //
+        // In shared-feed mode we deliberately avoid per-bot fallback because a large bot fleet could exceed
+        // Databento connection limits if every symbol process tried to recover independently.
+        if (!useDatabentoMarketData()) {
+            return;
+        }
+        if (databentoLiveGateway != null && databentoLiveGateway.isRunning()) {
+            return;
+        }
+
+        Map<String, String> sidecarEnv = resolveDatabentoSidecarEnvironment();
+        if (useSharedDatabentoFeed() && tryStartSharedDatabentoRelayGateway(sidecarEnv)) {
+            return;
+        }
+        if (useSharedDatabentoFeed()) {
+            if (databentoSharedFeedFallbackToPrivateSidecar) {
+                flowInfo("DATABENTO", "Private-sidecar fallback is configured but disabled in shared-feed mode to avoid exhausting Databento connection limits. Waiting for shared relay recovery.");
+            }
+            return;
+        }
+        startDedicatedDatabentoLiveGateway(sidecarEnv);
+    }
+
+    private boolean tryStartSharedDatabentoRelayGateway(Map<String, String> sidecarEnv) {
+        if (!ensureSharedDatabentoRelayReady(sidecarEnv)) {
+            return false;
+        }
+        databentoSidecarConfigErrorLogged.set(false);
+        databentoLiveGateway = DatabentoLiveGateway.forRelay(
+            databentoSharedFeedHost,
+            databentoSharedFeedPort,
+            symbol,
+            symbol + ":feed-client-" + clientId,
+            this::handleDatabentoEvent,
+            line -> flowError("DATABENTO.RELAY", line),
+            this::handleDatabentoGatewayExit
+        );
+        try {
+            databentoLiveGateway.start();
+            databentoFeedHealth.markGatewayStarted(List.of(symbol), System.currentTimeMillis());
+            databentoRestartPending.set(false);
+            return true;
+        } catch (IOException e) {
+            flowError("DATABENTO", "Failed to connect to shared relay reason=" + e.getMessage());
+            databentoFeedHealth.markGatewayExited(-2, System.currentTimeMillis());
+            if (!databentoSharedFeedFallbackToPrivateSidecar) {
+                requestDatabentoGatewayRestart("shared-relay-connect-failed:" + e.getClass().getSimpleName());
+            }
+            return false;
+        }
+    }
+
+    private void startDedicatedDatabentoLiveGateway(Map<String, String> sidecarEnv) {
+        String apiKey = effectiveDatabentoApiKey(sidecarEnv);
+        if (!isUsableDatabentoApiKey(apiKey)) {
+            logDatabentoSidecarConfigErrorOnce(
+                "Databento sidecar not started: missing valid DATABENTO_API_KEY. Set it in the parent environment or in "
+                    + Paths.get(databentoEnvFile).toAbsolutePath().normalize()
+            );
+            return;
+        }
+        databentoSidecarConfigErrorLogged.set(false);
+
+        List<String> command = new ArrayList<>();
+        command.add(databentoPythonBin);
+        command.add(Paths.get(databentoNormalizerScript).toAbsolutePath().normalize().toString());
+        command.add("--symbols");
+        command.add(symbol);
+        command.add("--option-parents");
+        command.add(databentoOptionParents == null || databentoOptionParents.isBlank() ? symbol : databentoOptionParents.trim());
+        command.add("--equity-dataset");
+        command.add(databentoEquityDataset);
+        command.add("--equity-schema");
+        command.add(databentoEquitySchema);
+        command.add("--startup-history-seconds");
+        command.add(String.format(Locale.US, "%.3f", Math.max(0.0, databentoStartupHistorySeconds)));
+        command.add("--startup-history-schema");
+        command.add(databentoStartupHistorySchema);
+        command.add("--options-dataset");
+        command.add(databentoOptionsDataset);
+        command.add("--options-schema");
+        command.add(databentoOptionsSchema);
+        command.add("--heartbeat-seconds");
+        command.add(String.valueOf(Math.max(1, databentoHeartbeatSeconds)));
+        command.add("--startup-delay-seconds");
+        command.add(String.format(Locale.US, "%.3f", Math.max(0.0, databentoStartupDelaySeconds)));
+        if (databentoLiveGatewayOverride != null && !databentoLiveGatewayOverride.isBlank()) {
+            command.add("--live-gateway");
+            command.add(databentoLiveGatewayOverride.trim());
+        }
+
+        databentoLiveGateway = new DatabentoLiveGateway(
+            command,
+            Paths.get("").toAbsolutePath().normalize(),
+            sidecarEnv,
+            this::handleDatabentoEvent,
+            line -> flowError("DATABENTO.STDERR", line),
+            this::handleDatabentoGatewayExit
+        );
+        try {
+            databentoLiveGateway.start();
+            databentoFeedHealth.markGatewayStarted(List.of(symbol), System.currentTimeMillis());
+            databentoRestartPending.set(false);
+        } catch (IOException e) {
+            flowError("DATABENTO", "Failed to start live gateway reason=" + e.getMessage());
+            databentoFeedHealth.markGatewayExited(-1, System.currentTimeMillis());
+            requestDatabentoGatewayRestart("start-failed:" + e.getClass().getSimpleName());
+        }
+    }
+
+    private void handleDatabentoEvent(DatabentoEvent event) {
+        if (event == null || event.event == null || event.event.isBlank()) {
+            return;
+        }
+        long nowMs = System.currentTimeMillis();
+        if (event.isStatus()) {
+            databentoFeedHealth.recordStatus(event.message, nowMs);
+            flowInfo("DATABENTO", event.message == null ? "status" : event.message);
+            return;
+        }
+        if (event.isEquityBar()) {
+            databentoFeedHealth.recordEquityBar(event, nowMs);
+            handleDatabentoEquityBar(event);
+            return;
+        }
+        if (event.isOptionBar()) {
+            databentoFeedHealth.recordOptionBar(event, nowMs);
+            handleDatabentoOptionBar(event);
+        }
+    }
+
+    private void handleDatabentoEquityBar(DatabentoEvent event) {
+        if (event.symbol == null || !event.symbol.equalsIgnoreCase(symbol)) {
+            return;
+        }
+        if (event.close <= 0.0) {
+            return;
+        }
+
+        currentLastPrice = event.close;
+        if (event.bid > 0.0) currentBidPrice = event.bid;
+        if (event.ask > 0.0) currentAskPrice = event.ask;
+        if (event.bidSize > 0L) currentBidSize = event.bidSize;
+        if (event.askSize > 0L) currentAskSize = event.askSize;
+
+        ZonedDateTime barTs = Instant.ofEpochSecond(event.barEpochSec).atZone(ZoneOffset.UTC).withZoneSameInstant(MARKET_ZONE);
+        applyMarketSchedule(barTs);
+        flowDataDebug("DATABENTO.BAR", "symbol=" + symbol + " tsEt=" + barTs + " ohlc=" + event.open + "/" + event.high + "/" + event.low + "/" + event.close + " vol=" + event.volume + " bid=" + currentBidPrice + " ask=" + currentAskPrice);
+
+        if (shopStrategy != null) {
+            shopStrategy.onQuoteSnapshot(currentBidPrice, currentAskPrice, currentBidSize, currentAskSize, latestShortableShares);
+            if (event.atBidVol > 0L || event.atAskVol > 0L) {
+                shopStrategy.onOrderFlowSnapshot(event.atBidVol, event.atAskVol);
+            }
+        }
+
+        boolean canForward = shopStrategy != null && positionSyncComplete;
+        flowConditionDebug("DATABENTO->AI.BAR", "FORWARD_BAR_TO_STRATEGY", canForward, "positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
+        if (canForward) {
+            shopStrategy.onTickForExitsOnly(event.close);
+            shopStrategy.onSourceBar(event.barEpochSec, event.open, event.high, event.low, event.close, event.volume, event.wap > 0.0 ? event.wap : event.close);
+        }
+    }
+
+    private void handleDatabentoOptionBar(DatabentoEvent event) {
+        if (event.underlying == null || !event.underlying.equalsIgnoreCase(symbol)) {
+            return;
+        }
+        long deltaVolume = Math.max(0L, event.volume);
+        if (deltaVolume <= 0L) {
+            return;
+        }
+        if ("P".equalsIgnoreCase(event.right)) {
+            latestPutVolume += deltaVolume;
+        } else if ("C".equalsIgnoreCase(event.right)) {
+            latestCallVolume += deltaVolume;
+        } else {
+            return;
+        }
+        if (shopStrategy != null) {
+            shopStrategy.onOptionVolumeUpdate(latestPutVolume, latestCallVolume);
+        }
+    }
+
+    private synchronized void applyMarketSchedule(ZonedDateTime barTs) {
+        // This clock gate is intentionally idempotent and may be invoked from either bar-driven flow or the
+        // timer-based schedule monitor. The goal is to make open/close transitions reliable even when the
+        // market-data stream is degraded near the session boundary.
+        if (shopStrategy == null || barTs == null) {
+            return;
+        }
+
+        LocalTime timeEt = barTs.toLocalTime();
+        LocalDate barDateEt = barTs.toLocalDate();
+
+        boolean allowEntriesByClock = !timeEt.isBefore(LocalTime.of(9, 30, 0)) && timeEt.isBefore(LocalTime.of(15, 50, 0));
+        if (lastScheduleAllowNewEntries == null || lastScheduleAllowNewEntries.booleanValue() != allowEntriesByClock) {
+            shopStrategy.setAllowNewEntries(allowEntriesByClock);
+            lastScheduleAllowNewEntries = allowEntriesByClock;
+            flowInfo("SCHEDULE", "Clock gate set allowNewEntries=" + allowEntriesByClock + " at " + timeEt);
+        }
+
+        if (timeEt.isAfter(LocalTime.of(9, 29, 55)) && timeEt.isBefore(LocalTime.of(9, 31, 0))) {
+            if (!shopStrategy.isEnabled()) {
+                resetOptionVolumeAccumulators("market-open");
+                shopStrategy.resetForNewDay();
+                shopStrategy.setEnabled(true);
+                flowInfo("SCHEDULE", "9:30 AM ET: Market Open. Strategy awake and indicators reset.");
+            }
+        }
+
+        if (timeEt.isAfter(LocalTime.of(15, 59, 45)) && timeEt.isBefore(LocalTime.of(16, 0, 0))) {
+            boolean closeActionNotDoneToday = !barDateEt.equals(lastCloseFlattenDate);
+            if (shopStrategy.isEnabled() && closeActionNotDoneToday) {
+                flowInfo("SCHEDULE", "3:59 PM ET: Market closing. Cancelling open orders, syncing broker position, flattening, and going to sleep.");
+                performEndOfDayFlatten(barDateEt);
+                shopStrategy.setEnabled(false);
+                lastCloseFlattenDate = barDateEt;
+            }
+        }
+    }
+
+    protected String performEndOfDayFlatten(LocalDate scheduleDateEt) {
+        int cancelled = cancelOpenOrders();
+        requestPositionsForEndOfDay("eod-pre-flatten");
+        String flattenResult = flattenPosition();
+        requestPositionsForEndOfDay("eod-post-flatten-confirm");
+        flowInfo(
+            "SCHEDULE",
+            "EOD flatten workflow completed date=" + scheduleDateEt
+                + " cancelledOpenOrders=" + cancelled
+                + " flattenResult=" + flattenResult
+                + " positionSyncComplete=" + positionSyncComplete
+        );
+        return flattenResult;
+    }
+
+    protected void requestPositionsForEndOfDay(String reason) {
+        requestPositions(PositionSyncMode.PRESERVE_BAR_FORWARDING, reason);
+    }
+
+    private ModelBundleResolver.ResolvedBundle resolveModelBundle(String tradingSymbol) {
+        if (modelBundleResolver == null) {
+            return new ModelBundleResolver.ResolvedBundle(tradingSymbol, tradingSymbol, "default", modelDir, "resolver-unavailable");
+        }
+        return modelBundleResolver.resolveForSymbol(tradingSymbol);
+    }
+
+    private PingPongStrategy.AiThresholdConfig buildAiThresholdConfig() {
+        return new PingPongStrategy.AiThresholdConfig(
+            applyEntryThresholdLift(aiLongEntryThreshold),
+            applyEntryThresholdLift(aiShortEntryThreshold),
+            aiLongExitThreshold,
+            aiShortExitThreshold,
+            applyEntryThresholdLift(resolveOptionalThreshold(aiOpen30LongEntryThresholdRaw, aiLongEntryThreshold)),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiOpen30ShortEntryThresholdRaw, aiShortEntryThreshold)),
+            resolveOptionalThreshold(aiOpen30LongExitThresholdRaw, aiLongExitThreshold),
+            resolveOptionalThreshold(aiOpen30ShortExitThresholdRaw, aiShortExitThreshold),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiChoppyLongEntryThresholdRaw, aiLongEntryThreshold)),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiChoppyShortEntryThresholdRaw, aiShortEntryThreshold)),
+            resolveOptionalThreshold(aiChoppyLongExitThresholdRaw, aiLongExitThreshold),
+            resolveOptionalThreshold(aiChoppyShortExitThresholdRaw, aiShortExitThreshold),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiTrendLongEntryThresholdRaw, aiLongEntryThreshold)),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiTrendShortEntryThresholdRaw, aiShortEntryThreshold)),
+            resolveOptionalThreshold(aiTrendLongExitThresholdRaw, aiLongExitThreshold),
+            resolveOptionalThreshold(aiTrendShortExitThresholdRaw, aiShortExitThreshold),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiVolatileLongEntryThresholdRaw, aiLongEntryThreshold)),
+            applyEntryThresholdLift(resolveOptionalThreshold(aiVolatileShortEntryThresholdRaw, aiShortEntryThreshold)),
+            resolveOptionalThreshold(aiVolatileLongExitThresholdRaw, aiLongExitThreshold),
+            resolveOptionalThreshold(aiVolatileShortExitThresholdRaw, aiShortExitThreshold),
+            aiRegimeThreshold
+        );
+    }
+
+    private double applyEntryThresholdLift(double threshold) {
+        if (Double.isNaN(threshold) || Double.isInfinite(threshold)) {
+            return threshold;
+        }
+        double raisePercent = Double.isNaN(aiEntryThresholdRaisePercent) || Double.isInfinite(aiEntryThresholdRaisePercent)
+            ? 0.0
+            : Math.max(0.0, aiEntryThresholdRaisePercent);
+        if (raisePercent == 0.0) {
+            return threshold;
+        }
+        double lifted = threshold * (1.0 + (raisePercent / 100.0));
+        return Math.max(0.0, Math.min(0.99, lifted));
+    }
+
+    private double resolveOptionalThreshold(String rawValue, double fallback) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Double.parseDouble(rawValue.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private boolean useDatabentoMarketData() {
+        return "databento".equals(normalizedMarketDataProvider());
+    }
+
+    private boolean useSharedDatabentoFeed() {
+        return useDatabentoMarketData() && databentoSharedFeedEnabled;
+    }
+
+    private boolean useSharedIbkrGateway() {
+        return ibkrSharedGatewayEnabled;
+    }
+
+    private boolean isSharedIbkrGatewayConnected() {
+        return sharedIbkrGatewayClient != null && sharedIbkrGatewayClient.isConnected();
+    }
+
+    private void ensureSharedIbkrGatewayConnected(boolean failFast) {
+        if (!useSharedIbkrGateway() || isSharedIbkrGatewayConnected()) {
+            return;
+        }
+        try {
+            sharedIbkrGatewayClient = new SharedIbkrGatewayClient(
+                ibkrSharedGatewayHost,
+                ibkrSharedGatewayPort,
+                Duration.ofMillis(Math.max(1000L, ibkrSharedGatewayConnectTimeoutMs)),
+                Duration.ofMillis(Math.max(1000L, ibkrSharedGatewayAckTimeoutMs)),
+                this::handleSharedIbkrGatewayEvent
+            );
+            sharedIbkrGatewayClient.connect();
+            flowInfo("IBKR.GATEWAY", "Connected shared gateway host=" + ibkrSharedGatewayHost + " port=" + ibkrSharedGatewayPort);
+        } catch (IOException e) {
+            flowError("IBKR.GATEWAY", "connect failed reason=" + e.getMessage());
+            if (failFast) {
+                throw new IllegalStateException("Shared IBKR gateway is required but unavailable", e);
+            }
+        }
+    }
+
+    private void registerSymbolWithSharedGateway() {
+        if (!isSharedIbkrGatewayConnected()) {
+            return;
+        }
+        try {
+            SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.registerSymbol(symbol, symbol + ":client-" + clientId);
+            flowInfo("IBKR.GATEWAY", "register_symbol detail=" + response.detail + " symbol=" + symbol);
+        } catch (IOException e) {
+            flowError("IBKR.GATEWAY", "register_symbol failed reason=" + e.getMessage());
+        }
+    }
+
+    public void requestOpenOrdersSync() {
+        if (isSharedIbkrGatewayConnected()) {
+            try {
+                SharedIbkrGatewayMessage response = sharedIbkrGatewayClient.requestOpenOrdersSync("ibkr-trader-requestOpenOrders");
+                flowInfo("IBKR.GATEWAY", "request_open_orders_sync detail=" + response.detail + " reqId=" + response.payloadInt("reqId"));
+                return;
+            } catch (IOException e) {
+                flowError("IBKR.GATEWAY", "request_open_orders_sync failed reason=" + e.getMessage());
+                if (ibkrSharedGatewaySkipDirectConnection) {
+                    return;
+                }
+            }
+        }
+        if (client != null && client.isConnected()) {
+            client.reqOpenOrders();
+        }
+    }
+
+    private void handleSharedIbkrGatewayEvent(SharedIbkrGatewayMessage message) {
+        // Shared-gateway events are asynchronous relative to the command that originally triggered them.
+        // This handler is responsible for reconciling Java-side symbol state with the Python gateway's view
+        // of positions and order progress so the strategy does not trade on stale ownership assumptions.
+        if (message == null) {
+            return;
+        }
+        String eventSymbol = message.symbol == null ? "" : message.symbol.trim().toUpperCase(Locale.US);
+        String tracked = symbol == null ? "" : symbol.trim().toUpperCase(Locale.US);
+        if (!eventSymbol.isBlank() && !tracked.isBlank() && !eventSymbol.equals(tracked)) {
+            return;
+        }
+        String eventType = message.eventType == null ? "" : message.eventType.trim().toLowerCase(Locale.US);
+        switch (eventType) {
+            case "position_updated" -> {
+                if (message.position != null) {
+                    symbolPositionSeenThisCycle = true;
+                    positionSyncComplete = true;
+                    double avgCost = message.avgCost == null ? (currentLastPrice > 0.0 ? currentLastPrice : 0.0) : message.avgCost;
+                    if (shopStrategy != null) {
+                        // Gateway position events are treated as authoritative and immediately overwrite local
+                        // inventory assumptions after reconnect or async broker changes.
+                        shopStrategy.syncPosition(message.position, avgCost);
+                        shopStrategy.setPositionSynced(true);
+                    }
+                    reconcileSharedCapitalWithPosition(message.position, avgCost);
+                    markPositionSyncCompleted("shared-gateway-position-updated", "position=" + message.position + " avgCost=" + avgCost);
+                }
+            }
+            case "position_sync_completed" -> {
+                if (!symbolPositionSeenThisCycle) {
+                    releaseSharedCapital(symbol, "shared-gateway-position-sync-flat");
+                }
+                // Completion is a distinct signal: it tells the strategy that silence now means flat, not pending.
+                positionSyncComplete = true;
+                if (shopStrategy != null) {
+                    shopStrategy.setPositionSynced(true);
+                }
+                markPositionSyncCompleted("shared-gateway-position-sync-completed", "symbolPositionSeenThisCycle=" + symbolPositionSeenThisCycle);
+            }
+            case "order_status", "order_cancelled" -> {
+                Integer orderId = message.gatewayOrderId != null ? message.gatewayOrderId : message.ibOrderId;
+                if (orderId != null) {
+                    OrderContext orderContext = orderContextById.get(orderId);
+                    String status = message.payloadString("status");
+                    if (status == null || status.isBlank()) {
+                        status = message.detail == null || message.detail.isBlank() ? eventType : message.detail;
+                    }
+                    Integer remaining = message.payloadInt("remaining");
+                    Integer filled = message.payloadInt("filled");
+                    Double avgFillPrice = message.payloadDouble("avg_fill_price");
+                    flowData(
+                        "IBKR.GATEWAY.ORDER_STATUS",
+                        "eventType=" + eventType
+                            + " symbol=" + (eventSymbol.isBlank() ? tracked : eventSymbol)
+                            + " gatewayOrderId=" + message.gatewayOrderId
+                            + " ibOrderId=" + message.ibOrderId
+                            + " permId=" + message.permId
+                            + " resolvedOrderId=" + orderId
+                            + " status=" + status
+                            + " filled=" + filled
+                            + " remaining=" + remaining
+                            + " avgFillPrice=" + avgFillPrice
+                            + " contextFound=" + (orderContext != null)
+                            + " detail=" + message.detail
+                    );
+                    if (avgFillPrice != null && avgFillPrice > 0.0) {
+                        lastOrderAvgFillPrice = avgFillPrice;
+                    }
+                    boolean terminal = isSharedGatewayEffectivelyTerminal(status, remaining, message.payloadBoolean("effective_terminal"));
+                    if (orderContext != null && shopStrategy != null && filled != null) {
+                        int filledQty = Math.max(0, filled);
+                        int previousFilledQty = cumulativeFilledByOrderId.getOrDefault(orderId, 0);
+                        int filledDelta = Math.max(0, filledQty - previousFilledQty);
+                        if (filledDelta > 0) {
+                            cumulativeFilledByOrderId.put(orderId, filledQty);
+                            shopStrategy.onOrderProgress(orderId, orderContext.action(), filledDelta, remaining == null ? 0 : Math.max(0, remaining), avgFillPrice == null ? 0.0 : avgFillPrice);
+                        }
+                    }
+                    if (orderContext != null && terminal) {
+                        int filledQty = filled == null
+                            ? ("filled".equalsIgnoreCase(status) ? orderContext.quantity() : 0)
+                            : Math.max(0, filled);
+                        if (!orderContext.closingTrade() && orderContext.capitalReserved()) {
+                            if (filledQty > 0) {
+                                double referencePrice = avgFillPrice != null && avgFillPrice > 0.0
+                                    ? avgFillPrice
+                                    : (currentLastPrice > 0.0 ? currentLastPrice : orderContext.reservedNotional() / Math.max(1, orderContext.quantity()));
+                                double reservedAmount = avgFillPrice != null && avgFillPrice > 0.0
+                                    ? avgFillPrice * filledQty
+                                    : orderContext.reservedNotional();
+                                reconcileSharedCapitalWithPosition(filledQty, referencePrice, reservedAmount);
+                            } else {
+                                releaseSharedCapital(orderContext.symbol(), "shared-gateway-entry-terminal-" + status);
+                            }
+                        } else if (orderContext.closingTrade() && filledQty > 0) {
+                            releaseSharedCapital(orderContext.symbol(), "shared-gateway-closing-terminal-" + status);
+                        }
+                    }
+                    if (terminal) {
+                        // Mirror direct-IBKR cleanup semantics so both execution modes leave the strategy in the
+                        // same unlocked state once an order is finished.
+                        orderContextById.remove(orderId);
+                        orderSentTimes.remove(orderId);
+                        cumulativeFilledByOrderId.remove(orderId);
+                        ScheduledFuture<?> timeoutFuture = staleOrderTimeoutByOrderId.remove(orderId);
+                        if (timeoutFuture != null) {
+                            timeoutFuture.cancel(false);
+                        }
+                        if (shopStrategy != null) {
+                            shopStrategy.onOrderClosed(orderId, status);
+                        }
+                    }
+                }
+            }
+            case "error" -> flowError("IBKR.GATEWAY", message.detail == null ? "event-error" : message.detail);
+            default -> flowInfo("IBKR.GATEWAY", "eventType=" + message.eventType + " detail=" + message.detail);
+        }
+    }
+
+    private boolean ensureSharedDatabentoRelayReady(Map<String, String> sidecarEnv) {
+        if (isSharedDatabentoRelayListening()) {
+            return true;
+        }
+        if (!databentoSharedFeedStartIfMissing) {
+            logDatabentoSidecarConfigErrorOnce(
+                "Databento shared relay is not listening on " + databentoSharedFeedHost + ":" + databentoSharedFeedPort
+                    + ". Enable trading.databento.shared-feed.start-if-missing or start the relay manually."
+            );
+            return false;
+        }
+
+        String apiKey = effectiveDatabentoApiKey(sidecarEnv);
+        if (!isUsableDatabentoApiKey(apiKey)) {
+            logDatabentoSidecarConfigErrorOnce(
+                "Databento shared relay not started: missing valid DATABENTO_API_KEY. Set it in the parent environment or in "
+                    + Paths.get(databentoEnvFile).toAbsolutePath().normalize()
+            );
+            return false;
+        }
+
+        long timeoutMs = Math.max(3000L, databentoSharedFeedStartTimeoutMs);
+        Path lockPath = Paths.get(databentoSharedFeedLockFile).toAbsolutePath().normalize();
+        try {
+            if (lockPath.getParent() != null) {
+                Files.createDirectories(lockPath.getParent());
+            }
+            try (FileChannel channel = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                FileLock lock = null;
+                long deadline = System.currentTimeMillis() + timeoutMs;
+                while (lock == null && System.currentTimeMillis() < deadline) {
+                    try {
+                        lock = channel.tryLock();
+                    } catch (OverlappingFileLockException ignored) {
+                        lock = null;
+                    }
+                    if (lock == null) {
+                        if (isSharedDatabentoRelayListening()) {
+                            return true;
+                        }
+                        sleepQuietly(200L);
+                    }
+                }
+                if (lock != null) {
+                    try (FileLock ignored = lock) {
+                        if (!isSharedDatabentoRelayListening()) {
+                            startSharedDatabentoRelayProcess(sidecarEnv);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            flowError("DATABENTO", "Failed to coordinate shared relay startup reason=" + e.getMessage());
+        }
+
+        if (waitForSharedDatabentoRelay(timeoutMs)) {
+            return true;
+        }
+
+        flowError("DATABENTO", "Shared relay did not become ready on " + databentoSharedFeedHost + ":" + databentoSharedFeedPort);
+        return false;
+    }
+
+    private void startSharedDatabentoRelayProcess(Map<String, String> sidecarEnv) throws IOException {
+        Path relayScriptPath = Paths.get(databentoSharedFeedScript).toAbsolutePath().normalize();
+        Path normalizerScriptPath = Paths.get(databentoNormalizerScript).toAbsolutePath().normalize();
+        Path botsDirPath = Paths.get(databentoSharedFeedBotsDir).toAbsolutePath().normalize();
+        Path workingDirPath = Paths.get("").toAbsolutePath().normalize();
+        Path pidFilePath = Paths.get(databentoSharedFeedPidFile).toAbsolutePath().normalize();
+        Path logFilePath = Paths.get(databentoSharedFeedLogFile).toAbsolutePath().normalize();
+
+        if (!Files.isRegularFile(relayScriptPath)) {
+            throw new FileNotFoundException("missing shared relay script: " + relayScriptPath);
+        }
+        if (!Files.isRegularFile(normalizerScriptPath)) {
+            throw new FileNotFoundException("missing normalizer script: " + normalizerScriptPath);
+        }
+        if (!Files.isDirectory(botsDirPath)) {
+            throw new FileNotFoundException("missing bots dir: " + botsDirPath);
+        }
+        if (pidFilePath.getParent() != null) {
+            Files.createDirectories(pidFilePath.getParent());
+        }
+        if (logFilePath.getParent() != null) {
+            Files.createDirectories(logFilePath.getParent());
+        }
+
+        List<String> relayCommand = new ArrayList<>();
+        relayCommand.add(databentoPythonBin);
+        relayCommand.add(relayScriptPath.toString());
+        relayCommand.add("--python-bin");
+        relayCommand.add(databentoPythonBin);
+        relayCommand.add("--normalizer-script");
+        relayCommand.add(normalizerScriptPath.toString());
+        relayCommand.add("--bots-dir");
+        relayCommand.add(botsDirPath.toString());
+        relayCommand.add("--working-dir");
+        relayCommand.add(workingDirPath.toString());
+        relayCommand.add("--listen-host");
+        relayCommand.add(databentoSharedFeedHost);
+        relayCommand.add("--listen-port");
+        relayCommand.add(String.valueOf(databentoSharedFeedPort));
+        relayCommand.add("--pid-file");
+        relayCommand.add(pidFilePath.toString());
+        if (databentoLiveGatewayOverride != null && !databentoLiveGatewayOverride.isBlank()) {
+            relayCommand.add("--live-gateway");
+            relayCommand.add(databentoLiveGatewayOverride.trim());
+        }
+        relayCommand.add("--equity-dataset");
+        relayCommand.add(databentoEquityDataset);
+        relayCommand.add("--equity-schema");
+        relayCommand.add(databentoEquitySchema);
+        relayCommand.add("--startup-history-seconds");
+        relayCommand.add(String.format(Locale.US, "%.3f", effectiveSharedRelayStartupHistorySeconds()));
+        relayCommand.add("--startup-history-schema");
+        relayCommand.add(databentoStartupHistorySchema);
+        relayCommand.add("--options-dataset");
+        relayCommand.add(databentoOptionsDataset);
+        relayCommand.add("--options-schema");
+        relayCommand.add(databentoOptionsSchema);
+        relayCommand.add("--heartbeat-seconds");
+        relayCommand.add(String.valueOf(Math.max(1, databentoHeartbeatSeconds)));
+        relayCommand.add("--startup-delay-seconds");
+        relayCommand.add(String.format(Locale.US, "%.3f", Math.max(0.0, databentoStartupDelaySeconds)));
+        relayCommand.add("--expected-client-count");
+        relayCommand.add(String.valueOf(Math.max(1, databentoSharedFeedExpectedClientCount)));
+        relayCommand.add("--wait-for-clients-timeout-seconds");
+        relayCommand.add(String.valueOf(Math.max(1L, databentoSharedFeedClientWaitTimeoutMs) / 1000.0));
+
+        ProcessBuilder builder = new ProcessBuilder(relayCommand);
+        builder.directory(workingDirPath.toFile());
+        if (sidecarEnv != null && !sidecarEnv.isEmpty()) {
+            builder.environment().putAll(sidecarEnv);
+        }
+        builder.redirectOutput(ProcessBuilder.Redirect.appendTo(logFilePath.toFile()));
+        builder.redirectError(ProcessBuilder.Redirect.appendTo(logFilePath.toFile()));
+        Process relayProcess = builder.start();
+        flowInfo(
+            "DATABENTO",
+            "Started shared relay pid=" + relayProcess.pid()
+                + " host=" + databentoSharedFeedHost
+                + " port=" + databentoSharedFeedPort
+                + " logFile=" + logFilePath
+        );
+    }
+
+    private double effectiveSharedRelayStartupHistorySeconds() {
+        return Math.max(0.0, databentoSharedFeedStartupHistorySeconds);
+    }
+
+    private boolean waitForSharedDatabentoRelay(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(1000L, timeoutMs);
+        while (System.currentTimeMillis() < deadline) {
+            if (isSharedDatabentoRelayListening()) {
+                return true;
+            }
+            sleepQuietly(250L);
+        }
+        return isSharedDatabentoRelayListening();
+    }
+
+    private boolean isSharedDatabentoRelayListening() {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(databentoSharedFeedHost, databentoSharedFeedPort), 750);
+            return true;
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            TimeUnit.MILLISECONDS.sleep(Math.max(1L, millis));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private boolean shouldBlockForStaleDatabentoQuote(String normalizedOrderType, boolean isClosingTrade) {
+        if (!useDatabentoMarketData()) {
+            return false;
+        }
+        DatabentoFeedHealth.Snapshot snapshot = currentDatabentoSnapshot();
+        DatabentoFeedHealth.SymbolSnapshot primary = snapshot.primarySymbolHealth();
+        boolean allowClosingBypass = isClosingTrade
+            && databentoAllowStaleClosingMarketOrder
+            && "MKT".equalsIgnoreCase(normalizedOrderType);
+        boolean quoteFresh = snapshot.gatewayRunning() && primary != null && primary.quoteFresh();
+        flowCondition(
+            "ORDER.GATE",
+            "DATABENTO_QUOTE_FRESH",
+            quoteFresh || allowClosingBypass,
+            "symbol=" + getTrackedSymbol()
+                + " gatewayRunning=" + snapshot.gatewayRunning()
+                + " quoteAgeMs=" + (primary == null ? -1L : primary.quoteAgeMs())
+                + " quoteFresh=" + (primary != null && primary.quoteFresh())
+                + " allowClosingBypass=" + allowClosingBypass
+                + " restartRecommended=" + snapshot.restartRecommended()
+        );
+        if (!quoteFresh && !allowClosingBypass) {
+            flowError(
+                "ORDER.GATE",
+                "Blocked order due to stale Databento quote symbol=" + getTrackedSymbol()
+                    + " quoteAgeMs=" + (primary == null ? -1L : primary.quoteAgeMs())
+                    + " gatewayRunning=" + snapshot.gatewayRunning()
+                    + " restartRecommended=" + snapshot.restartRecommended()
+            );
+            return true;
+        }
+        return false;
+    }
+
+    private String normalizedMarketDataProvider() {
+        return marketDataProvider == null ? "ibkr" : marketDataProvider.trim().toLowerCase(Locale.US);
+    }
+
+    private void startDatabentoFeedMonitor() {
+        if (!useDatabentoMarketData()) {
+            return;
+        }
+        if (databentoFeedMonitorFuture != null && !databentoFeedMonitorFuture.isCancelled() && !databentoFeedMonitorFuture.isDone()) {
+            return;
+        }
+        long intervalSeconds = Math.max(2L, Math.min(5L, Math.max(1L, databentoHeartbeatSeconds)));
+        databentoFeedMonitorFuture = databentoSupervisorScheduler.scheduleAtFixedRate(
+            this::monitorDatabentoFeed,
+            intervalSeconds,
+            intervalSeconds,
+            TimeUnit.SECONDS
+        );
+    }
+
+    private void startMarketScheduleMonitor() {
+        if (marketScheduleMonitorFuture != null && !marketScheduleMonitorFuture.isCancelled() && !marketScheduleMonitorFuture.isDone()) {
+            return;
+        }
+        marketScheduleMonitorFuture = databentoSupervisorScheduler.scheduleAtFixedRate(
+            this::monitorMarketScheduleClock,
+            1L,
+            1L,
+            TimeUnit.SECONDS
+        );
+    }
+
+    private void stopDatabentoFeedMonitor() {
+        ScheduledFuture<?> future = databentoFeedMonitorFuture;
+        if (future != null) {
+            future.cancel(false);
+        }
+        databentoFeedMonitorFuture = null;
+    }
+
+    private void stopMarketScheduleMonitor() {
+        ScheduledFuture<?> future = marketScheduleMonitorFuture;
+        if (future != null) {
+            future.cancel(false);
+        }
+        marketScheduleMonitorFuture = null;
+    }
+
+    private void monitorMarketScheduleClock() {
+        monitorMarketScheduleClock(ZonedDateTime.now(MARKET_ZONE));
+    }
+
+    private void monitorMarketScheduleClock(ZonedDateTime currentTime) {
+        if (isShuttingDown || shopStrategy == null) {
+            return;
+        }
+        // The clock monitor is the safety net for close/open transitions when real-time bars stop arriving.
+        applyMarketSchedule(currentTime);
+    }
+
+    private void monitorDatabentoFeed() {
+        if (isShuttingDown || !useDatabentoMarketData()) {
+            return;
+        }
+        if (!hasUsableDatabentoSidecarConfiguration()) {
+            return;
+        }
+        DatabentoFeedHealth.Snapshot snapshot = currentDatabentoSnapshot();
+        if (!snapshot.gatewayRunning()) {
+            // If the sidecar/relay is gone entirely, restart immediately instead of waiting for quote-age logic.
+            requestDatabentoGatewayRestart("gateway-not-running");
+            return;
+        }
+        if (!snapshot.marketDataExpectedNow() || snapshot.withinStartupGrace()) {
+            return;
+        }
+        if (snapshot.restartRecommended()) {
+            DatabentoFeedHealth.SymbolSnapshot primary = snapshot.primarySymbolHealth();
+            // Restart decisions are based on symbol-specific quote/bar age, which avoids relying on a single
+            // callback type to declare the feed healthy.
+            requestDatabentoGatewayRestart(
+                "feed-silence quoteAgeMs=" + (primary == null ? -1L : primary.quoteAgeMs())
+                    + " barAgeMs=" + (primary == null ? -1L : primary.barAgeMs())
+                    + " marketDataAgeMs=" + (primary == null ? -1L : primary.marketDataAgeMs())
+                    + " lastStatusAgeMs=" + snapshot.lastStatusAgeMs()
+                    + " lastStatusMessage=" + (snapshot.lastStatusMessage() == null ? "" : snapshot.lastStatusMessage())
+            );
+        }
+    }
+
+    private void handleDatabentoGatewayExit(int exitCode, boolean unexpected) {
+        databentoFeedHealth.markGatewayExited(exitCode, System.currentTimeMillis());
+        resetOptionVolumeAccumulators("databento-gateway-exit");
+        if (!unexpected || isShuttingDown || !useDatabentoMarketData()) {
+            return;
+        }
+        requestDatabentoGatewayRestart("process-exit-" + exitCode);
+    }
+
+    private void requestDatabentoGatewayRestart(String reason) {
+        // Restart requests are intentionally de-duplicated and jittered. Without that, a large fleet of symbol
+        // bots could all detect the same relay outage and attempt synchronized reconnects/restarts at once.
+        if (!useDatabentoMarketData() || isShuttingDown || !databentoAutoRestartEnabled) {
+            return;
+        }
+        if (!hasUsableDatabentoSidecarConfiguration()) {
+            return;
+        }
+        if (!databentoRestartPending.compareAndSet(false, true)) {
+            return;
+        }
+        long nowMs = System.currentTimeMillis();
+        resetOptionVolumeAccumulators("databento-restart-requested");
+        long stableJitterMs = resolveDatabentoRestartJitterMs();
+        long restartDelayMs = Math.max(250L, databentoRestartDelayMs) + stableJitterMs;
+        databentoFeedHealth.markRestartRequested(reason, nowMs);
+        flowInfo("DATABENTO", "Scheduling sidecar restart reason=" + reason + " delayMs=" + restartDelayMs + " jitterMs=" + stableJitterMs);
+        databentoSupervisorScheduler.schedule(() -> {
+            try {
+                if (databentoLiveGateway != null) {
+                    databentoLiveGateway.stop();
+                }
+                databentoLiveGateway = null;
+                if (!isShuttingDown && useDatabentoMarketData()) {
+                    startDatabentoLiveGateway();
+                }
+            } finally {
+                databentoRestartPending.set(false);
+            }
+        }, restartDelayMs, TimeUnit.MILLISECONDS);
+    }
+
+    private boolean hasUsableDatabentoSidecarConfiguration() {
+        String apiKey = effectiveDatabentoApiKey(resolveDatabentoSidecarEnvironment());
+        if (isUsableDatabentoApiKey(apiKey)) {
+            databentoSidecarConfigErrorLogged.set(false);
+            return true;
+        }
+        logDatabentoSidecarConfigErrorOnce(
+            "Databento sidecar disabled: missing valid DATABENTO_API_KEY. Update the parent environment or "
+                + Paths.get(databentoEnvFile).toAbsolutePath().normalize()
+        );
+        return false;
+    }
+
+    private void logDatabentoSidecarConfigErrorOnce(String message) {
+        if (databentoSidecarConfigErrorLogged.compareAndSet(false, true)) {
+            flowError("DATABENTO", message);
+        }
+    }
+
+    private Map<String, String> resolveDatabentoSidecarEnvironment() {
+        Path envPath = Paths.get(databentoEnvFile).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(envPath)) {
+            return Map.of();
+        }
+
+        Map<String, String> env = new LinkedHashMap<>();
+        try {
+            for (String rawLine : Files.readAllLines(envPath)) {
+                String line = rawLine == null ? "" : rawLine.trim();
+                if (line.isEmpty() || line.startsWith("#")) {
+                    continue;
+                }
+                if (line.startsWith("export ")) {
+                    line = line.substring("export ".length()).trim();
+                }
+                int equalsIndex = line.indexOf('=');
+                if (equalsIndex <= 0) {
+                    continue;
+                }
+                String key = line.substring(0, equalsIndex).trim();
+                if (key.isEmpty() || System.getenv(key) != null) {
+                    continue;
+                }
+                String value = stripDatabentoEnvQuotes(line.substring(equalsIndex + 1).trim());
+                if (!value.isEmpty()) {
+                    env.put(key, value);
+                }
+            }
+        } catch (IOException e) {
+            flowError("DATABENTO", "Failed to read sidecar env file path=" + envPath + " reason=" + e.getMessage());
+        }
+        return env;
+    }
+
+    private String effectiveDatabentoApiKey(Map<String, String> sidecarEnv) {
+        String apiKey = System.getenv("DATABENTO_API_KEY");
+        if (apiKey != null && !apiKey.isBlank()) {
+            return apiKey.trim();
+        }
+        if (sidecarEnv == null) {
+            return "";
+        }
+        String fallback = sidecarEnv.get("DATABENTO_API_KEY");
+        return fallback == null ? "" : fallback.trim();
+    }
+
+    private boolean isUsableDatabentoApiKey(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return false;
+        }
+        return !DATABENTO_API_KEY_PLACEHOLDERS.contains(apiKey.trim().toLowerCase(Locale.US));
+    }
+
+    private String stripDatabentoEnvQuotes(String value) {
+        if (value == null || value.length() < 2) {
+            return value == null ? "" : value;
+        }
+        if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    private boolean isDatabentoMarketDataExpectedNow() {
+        ZonedDateTime now = ZonedDateTime.now(MARKET_ZONE);
+        DayOfWeek day = now.getDayOfWeek();
+        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
+            return false;
+        }
+        LocalTime time = now.toLocalTime();
+        return !time.isBefore(LocalTime.of(9, 30)) && time.isBefore(LocalTime.of(16, 0));
+    }
+
+    private double resolveExecutionReferencePrice(String action, double requestedPrice, String normalizedOrderType) {
+        // We prefer bid/ask over last trade because execution intent is side-sensitive:
+        // sellers should anchor to bid, buyers to ask. Last trade remains only a fallback when the quote book
+        // is temporarily unavailable.
+        double fallback = requestedPrice > 0.0
+            ? requestedPrice
+            : (currentLastPrice > 0.0 ? currentLastPrice : ("SELL".equalsIgnoreCase(action) ? currentBidPrice : currentAskPrice));
+        if ("SELL".equalsIgnoreCase(action) && currentBidPrice > 0.0) {
+            return currentBidPrice;
+        }
+        if (currentAskPrice > 0.0) {
+            return currentAskPrice;
+        }
+        return fallback;
+    }
+
+    private String resolvePreferredOrderType(String action, boolean isClosingTrade) {
+        // Order policy is intent-based, not action-based.
+        // Example: SELL can mean either "open short" (entry => FAST_LMT) or "exit long" (exit => MKT).
+        // Likewise BUY can mean either "open long" (entry => FAST_LMT) or "cover short" (exit => MKT).
+        return isClosingTrade ? "MKT" : "FAST_LMT";
+    }
+
+    private long resolveDatabentoRestartJitterMs() {
+        long maxJitterMs = Math.max(0L, databentoRestartJitterMs);
+        if (maxJitterMs <= 0L) {
+            return 0L;
+        }
+        long seed = Math.abs(Objects.hash(getTrackedSymbol(), clientId));
+        return Math.floorMod(seed, maxJitterMs + 1L);
+    }
+
+    private void resetOptionVolumeAccumulators(String reason) {
+        latestPutVolume = 0L;
+        latestCallVolume = 0L;
+        if (shopStrategy != null) {
+            shopStrategy.onOptionVolumeUpdate(0L, 0L);
+        }
+        flowInfo("DATABENTO.OPTIONS", "Reset put/call accumulators reason=" + reason + " symbol=" + getTrackedSymbol());
+    }
+
     // Logger Helpers
     private void flowInfo(String tag, String msg) { log.info(">>> [FLOW][INFO][{}] {}", tag, msg); }
     private boolean isTickerLevelTag(String tag) {
         return "IBKR.TICK".equals(tag)
             || "IBKR->AI.TICK".equals(tag)
             || "IBKR.SUBSCRIBE".equals(tag)
+            || "DATABENTO.BAR".equals(tag)
+            || "DATABENTO.STDERR".equals(tag)
+            || "DATABENTO->AI.BAR".equals(tag)
             || "STRATEGY.TAPE".equals(tag)
             || "STRATEGY.TICK".equals(tag);
     }

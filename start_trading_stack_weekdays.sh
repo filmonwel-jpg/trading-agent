@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="/Users/filmonghezehey/trading-agent"
+repo_root="$(cd "$(dirname "$0")" && pwd)"
 runtime_dir="$repo_root/runtime"
 mkdir -p "$runtime_dir"
 
@@ -74,18 +74,17 @@ start_symbol() {
   log "$symbol launcher pid=$!"
 }
 
+start_generated_bots() {
+  log "starting generated Databento bot fleet via start_all_databento_bots.sh"
+  "$repo_root/start_all_databento_bots.sh" --start --tee-db --stagger-seconds=10 --skip-ibkr-preflight
+}
+
 log "weekday trading stack launcher started"
 ensure_ibkr_ready
 start_harvester
 sleep 15
 
-start_symbol TSLA 8081
-sleep 10
-start_symbol NVDA 8082
-sleep 10
-start_symbol AMD 8083
-sleep 10
-start_symbol AMZN 8084
+start_generated_bots
 
 sleep 20
 log "running post-start validation via check_morning_stack.py"

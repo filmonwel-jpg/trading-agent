@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="/Users/filmonghezehey/trading-agent"
+repo_root="$(cd "$(dirname "$0")" && pwd)"
 runtime_dir="$repo_root/runtime"
 state_dir="$runtime_dir/schedule_state"
+bots_dir="$repo_root/runtime/databento/bots"
+legacy_bots_dir="$repo_root/runtime"
 mkdir -p "$runtime_dir" "$state_dir"
 
 export PATH="/Users/filmonghezehey/miniforge3/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -29,6 +31,71 @@ control_url() {
   local port="$1"
   local endpoint="$2"
   printf 'http://127.0.0.1:%s%s' "$port" "$endpoint"
+}
+
+trim_spaces() {
+  printf '%s' "$1" | awk '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); print}'
+}
+
+normalize_symbol() {
+  printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+extract_prop() {
+  local path="$1"
+  local key="$2"
+  if [[ ! -f "$path" ]]; then
+    return 0
+  fi
+  awk -F= -v search_key="$key" '
+    /^[[:space:]]*#/ {next}
+    /^[[:space:]]*$/ {next}
+    {
+      current=$1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", current)
+      if (current == search_key) {
+        value=substr($0, index($0, "=") + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+        exit
+      }
+    }
+  ' "$path"
+}
+
+discover_bot_targets() {
+  local path filename symbol port found_any=0
+  shopt -s nullglob
+  for path in "$bots_dir"/trading-*.properties; do
+    filename="$(basename "$path")"
+    [[ "$filename" == "trading-databento-template.properties" ]] && continue
+    found_any=1
+    symbol="$(extract_prop "$path" "trading.symbol")"
+    if [[ -z "$symbol" ]]; then
+      symbol="${filename#trading-}"
+      symbol="${symbol%.properties}"
+    fi
+    port="$(extract_prop "$path" "server.port")"
+    symbol="$(normalize_symbol "$(trim_spaces "$symbol")")"
+    port="$(trim_spaces "$port")"
+    [[ -n "$symbol" && -n "$port" ]] && printf '%s|%s|%s\n' "$symbol" "$port" "$path"
+  done
+  if [[ $found_any -eq 0 ]]; then
+    for path in "$legacy_bots_dir"/trading-*.properties; do
+      filename="$(basename "$path")"
+      [[ "$filename" == "trading-databento-template.properties" ]] && continue
+      symbol="$(extract_prop "$path" "trading.symbol")"
+      if [[ -z "$symbol" ]]; then
+        symbol="${filename#trading-}"
+        symbol="${symbol%.properties}"
+      fi
+      port="$(extract_prop "$path" "server.port")"
+      symbol="$(normalize_symbol "$(trim_spaces "$symbol")")"
+      port="$(trim_spaces "$port")"
+      [[ -n "$symbol" && -n "$port" ]] && printf '%s|%s|%s\n' "$symbol" "$port" "$path"
+    done
+  fi
+  shopt -u nullglob
 }
 
 http_get() {
@@ -216,13 +283,6 @@ flatten_and_stop_symbol() {
   open_orders="$(json_field "$port" openOrders || true)"
   log "$symbol post-pause status position=${current_position:-unknown} openOrders=${open_orders:-unknown}"
 
-  if [[ "${current_position:-x}" == "0" && "${open_orders:-x}" == "0" ]]; then
-    log "$symbol already flat and order-free after pause; enabling kill-switch and stopping process without cancel/flatten"
-    post_control "$port" "/api/control/kill-switch/true" || log "$symbol kill-switch request failed"
-    terminate_port_process "$port" "$symbol"
-    return 0
-  fi
-
   if [[ -n "${open_orders:-}" && "${open_orders:-0}" != "0" ]]; then
     if ! post_control "$port" "/api/control/cancel-open-orders"; then
       log "$symbol cancel-open-orders request failed"
@@ -231,12 +291,8 @@ flatten_and_stop_symbol() {
     log "$symbol has no open orders; skipping cancel-open-orders request"
   fi
 
-  if [[ "${current_position:-0}" != "0" && -n "${current_position:-}" ]]; then
-    if ! post_control "$port" "/api/control/flatten"; then
-      log "$symbol flatten request failed"
-    fi
-  else
-    log "$symbol already flat or position unavailable; no flatten order sent"
+  if ! post_control "$port" "/api/control/flatten"; then
+    log "$symbol flatten request failed"
   fi
 
   local flat_confirmed=0
@@ -264,10 +320,17 @@ flatten_and_stop_symbol() {
 
 log "afternoon flatten/shutdown started"
 any_failure=0
-if ! flatten_and_stop_symbol TSLA 8081; then any_failure=1; fi
-if ! flatten_and_stop_symbol NVDA 8082; then any_failure=1; fi
-if ! flatten_and_stop_symbol AMD 8083; then any_failure=1; fi
-if ! flatten_and_stop_symbol AMZN 8084; then any_failure=1; fi
+target_count=0
+while IFS='|' read -r symbol port properties_file; do
+  [[ -n "$symbol" && -n "$port" ]] || continue
+  target_count=$((target_count + 1))
+  log "discovered target symbol=$symbol port=$port properties=$properties_file"
+  if ! flatten_and_stop_symbol "$symbol" "$port"; then any_failure=1; fi
+done < <(discover_bot_targets | LC_ALL=C sort -t'|' -k1,1)
+if [[ $target_count -eq 0 ]]; then
+  log "no generated bot configs found under $bots_dir or $legacy_bots_dir"
+  any_failure=1
+fi
 if ! stop_harvester; then any_failure=1; fi
 if [[ $any_failure -eq 0 ]]; then
   if ! shutdown_ibkr; then any_failure=1; fi
