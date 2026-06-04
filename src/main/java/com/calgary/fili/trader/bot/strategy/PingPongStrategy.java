@@ -80,6 +80,28 @@ public class PingPongStrategy implements TradingStrategy {
 
     private record MicroBar(long epoch, double open, double high, double low, double close, long volume, double wap) {}
 
+    public record SetupCandidateDiagnostic(String side, long epoch, String marketTime, double probability,
+                                           double threshold, double margin, double rsi, double referencePrice,
+                                           int quantity, String regime) {}
+
+    public record AiDecisionDiagnostics(long aiEvaluations, long missingMarketTime, long preMarketBlocked,
+                                        long missingPreviousClose, long varianceBlocked, long positionOpenSkipped,
+                                        long flatEntryEvaluations, long entryGateOpen, long entryGateClosed,
+                                        long allowNewEntriesBlocked, long maxTradesBlocked,
+                                        long positionSyncBlocked, long hardStopCooldownBlocked,
+                                        long hardStopBudgetBlocked, long buyQuantityBlocked,
+                                        long sellQuantityBlocked, long longRsiGateBlocked,
+                                        long shortRsiGateBlocked, long longModelUnavailable,
+                                        long shortModelUnavailable, long longEntryModelEvaluations,
+                                        long shortEntryModelEvaluations, long longEntryPasses,
+                                        long shortEntryPasses, long longNearMisses, long shortNearMisses,
+                                        double maxLongEntryProbability, double maxLongEntryThreshold,
+                                        double maxLongEntryMargin, long maxLongEntryEpoch,
+                                        String maxLongEntryTime, double maxShortEntryProbability,
+                                        double maxShortEntryThreshold, double maxShortEntryMargin,
+                                        long maxShortEntryEpoch, String maxShortEntryTime,
+                                        List<SetupCandidateDiagnostic> closestSetupEvents) {}
+
     public interface LifecycleTelemetryListener {
         LifecycleTelemetryListener NOOP = new LifecycleTelemetryListener() {};
 
@@ -355,6 +377,8 @@ public class PingPongStrategy implements TradingStrategy {
     private static final int DEFAULT_MAX_HARD_STOPS_PER_DAY = 3;
     private static final int OPEN30_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.open30MinBars", "12"));
     private static final int REGULAR_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.regularMinBars", "60"));
+    private static final int AI_DIAGNOSTIC_TOP_SETUP_EVENTS = Integer.parseInt(System.getProperty("strategy.ai.diagnosticTopSetups", "5"));
+    private static final double AI_DIAGNOSTIC_NEAR_MISS_MARGIN = Double.parseDouble(System.getProperty("strategy.ai.nearMissMargin", "0.05"));
     private static final List<String> LEGACY_FEATURE_COLUMNS = List.of(
         "f_dist_vwap", "f_bb_lower_dist", "f_bb_upper_dist", "f_macd_diff",
         "f_body_size", "f_lower_wick", "f_upper_wick", "f_atr_norm",
@@ -672,6 +696,45 @@ public class PingPongStrategy implements TradingStrategy {
     private volatile double shortExitProbabilityThreshold = DEFAULT_SHORT_EXIT_THRESHOLD;
     private volatile double regimeProbabilityThreshold = DEFAULT_REGIME_THRESHOLD;
     private volatile AiThresholdConfig aiThresholdConfig = AiThresholdConfig.defaults();
+
+    // Backtest/live no-trade diagnostics. These are intentionally cumulative for the strategy lifetime.
+    private long aiDecisionEvaluationCount = 0L;
+    private long aiMissingMarketTimeCount = 0L;
+    private long aiPreMarketBlockedCount = 0L;
+    private long aiMissingPreviousCloseCount = 0L;
+    private long aiVarianceBlockedCount = 0L;
+    private long aiPositionOpenSkippedCount = 0L;
+    private long aiFlatEntryEvaluationCount = 0L;
+    private long aiEntryGateOpenCount = 0L;
+    private long aiEntryGateClosedCount = 0L;
+    private long aiAllowNewEntriesBlockedCount = 0L;
+    private long aiMaxTradesBlockedCount = 0L;
+    private long aiPositionSyncBlockedCount = 0L;
+    private long aiHardStopCooldownBlockedCount = 0L;
+    private long aiHardStopBudgetBlockedCount = 0L;
+    private long aiBuyQuantityBlockedCount = 0L;
+    private long aiSellQuantityBlockedCount = 0L;
+    private long aiLongRsiGateBlockedCount = 0L;
+    private long aiShortRsiGateBlockedCount = 0L;
+    private long aiLongModelUnavailableCount = 0L;
+    private long aiShortModelUnavailableCount = 0L;
+    private long aiLongEntryModelEvaluationCount = 0L;
+    private long aiShortEntryModelEvaluationCount = 0L;
+    private long aiLongEntryPassCount = 0L;
+    private long aiShortEntryPassCount = 0L;
+    private long aiLongNearMissCount = 0L;
+    private long aiShortNearMissCount = 0L;
+    private double aiMaxLongEntryProbability = Double.NEGATIVE_INFINITY;
+    private double aiMaxLongEntryThreshold = Double.NaN;
+    private double aiMaxLongEntryMargin = Double.NaN;
+    private long aiMaxLongEntryEpoch = 0L;
+    private String aiMaxLongEntryTime = "";
+    private double aiMaxShortEntryProbability = Double.NEGATIVE_INFINITY;
+    private double aiMaxShortEntryThreshold = Double.NaN;
+    private double aiMaxShortEntryMargin = Double.NaN;
+    private long aiMaxShortEntryEpoch = 0L;
+    private String aiMaxShortEntryTime = "";
+    private final List<SetupCandidateDiagnostic> aiClosestSetupEvents = new ArrayList<>();
 
     // Extended features state (safe to keep even if model uses base 23 features).
     private final Map<Integer, Double> minuteVolumeBaseline = new HashMap<>();
@@ -1331,6 +1394,52 @@ public class PingPongStrategy implements TradingStrategy {
         this.lifecycleTelemetryListener = listener == null ? LifecycleTelemetryListener.NOOP : listener;
     }
 
+    public AiDecisionDiagnostics getAiDecisionDiagnostics() {
+        List<SetupCandidateDiagnostic> closestSetupSnapshot;
+        synchronized (aiClosestSetupEvents) {
+            closestSetupSnapshot = List.copyOf(aiClosestSetupEvents);
+        }
+        return new AiDecisionDiagnostics(
+            aiDecisionEvaluationCount,
+            aiMissingMarketTimeCount,
+            aiPreMarketBlockedCount,
+            aiMissingPreviousCloseCount,
+            aiVarianceBlockedCount,
+            aiPositionOpenSkippedCount,
+            aiFlatEntryEvaluationCount,
+            aiEntryGateOpenCount,
+            aiEntryGateClosedCount,
+            aiAllowNewEntriesBlockedCount,
+            aiMaxTradesBlockedCount,
+            aiPositionSyncBlockedCount,
+            aiHardStopCooldownBlockedCount,
+            aiHardStopBudgetBlockedCount,
+            aiBuyQuantityBlockedCount,
+            aiSellQuantityBlockedCount,
+            aiLongRsiGateBlockedCount,
+            aiShortRsiGateBlockedCount,
+            aiLongModelUnavailableCount,
+            aiShortModelUnavailableCount,
+            aiLongEntryModelEvaluationCount,
+            aiShortEntryModelEvaluationCount,
+            aiLongEntryPassCount,
+            aiShortEntryPassCount,
+            aiLongNearMissCount,
+            aiShortNearMissCount,
+            aiLongEntryModelEvaluationCount == 0L ? Double.NaN : aiMaxLongEntryProbability,
+            aiLongEntryModelEvaluationCount == 0L ? Double.NaN : aiMaxLongEntryThreshold,
+            aiLongEntryModelEvaluationCount == 0L ? Double.NaN : aiMaxLongEntryMargin,
+            aiLongEntryModelEvaluationCount == 0L ? 0L : aiMaxLongEntryEpoch,
+            aiLongEntryModelEvaluationCount == 0L ? "" : aiMaxLongEntryTime,
+            aiShortEntryModelEvaluationCount == 0L ? Double.NaN : aiMaxShortEntryProbability,
+            aiShortEntryModelEvaluationCount == 0L ? Double.NaN : aiMaxShortEntryThreshold,
+            aiShortEntryModelEvaluationCount == 0L ? Double.NaN : aiMaxShortEntryMargin,
+            aiShortEntryModelEvaluationCount == 0L ? 0L : aiMaxShortEntryEpoch,
+            aiShortEntryModelEvaluationCount == 0L ? "" : aiMaxShortEntryTime,
+            closestSetupSnapshot
+        );
+    }
+
     private void emitLifecycleTelemetry(Runnable callback) {
         try {
             callback.run();
@@ -1645,6 +1754,7 @@ public class PingPongStrategy implements TradingStrategy {
             String side = position > 0 ? "long" : "short";
             emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onHardRiskExit(symbol, side, "daily_drawdown"));
             this.inFlightOrder = true;
+            flowWarn("STRATEGY.RISK", "Submitting hard-risk daily-drawdown exit symbol=" + symbol + " side=" + side + " action=" + action + " qty=" + Math.abs(position) + " execPrice=" + executionPrice + " dailyNetPnL=" + currentDailyPnL + " limit=" + (-maxDailyDrawdown));
             parent.placeTrade(symbol, action, executionPrice, Math.abs(position), "MKT");
             return;
         }
@@ -1658,23 +1768,36 @@ public class PingPongStrategy implements TradingStrategy {
 
         double longStopThreshold = currentAvgEntry * (1.0 - stopLossPercentage);
         double shortStopThreshold = currentAvgEntry * (1.0 + stopLossPercentage);
+        long secondsSinceEntry = secondsSincePositionEntry();
         if (position > 0 && longStopProbePrice > 0.0 && longStopProbePrice <= longStopThreshold) {
-            flowCondition("STRATEGY.STOP", "LONG_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + longStopProbePrice + " threshold=" + longStopThreshold);
+            double executionPrice = priceForAction("SELL", executionFallbackPrice);
+            flowCondition("STRATEGY.STOP", "LONG_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + longStopProbePrice + " threshold=" + longStopThreshold + " avgEntry=" + currentAvgEntry + " stopLossPct=" + stopLossPercentage + " secondsSinceEntry=" + secondsSinceEntry);
             recordHardStopExit("LONG", source);
             emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onHardRiskExit(symbol, "long", "hard_stop_" + source));
             this.inFlightOrder = true;
-            parent.placeTrade(symbol, "SELL", priceForAction("SELL", executionFallbackPrice), Math.abs(position), "MKT");
+            flowWarn("STRATEGY.STOP", "Submitting long hard-stop exit symbol=" + symbol + " source=" + source + " action=SELL qty=" + Math.abs(position) + " execPrice=" + executionPrice + " probePrice=" + longStopProbePrice + " threshold=" + longStopThreshold + " avgEntry=" + currentAvgEntry + " secondsSinceEntry=" + secondsSinceEntry);
+            parent.placeTrade(symbol, "SELL", executionPrice, Math.abs(position), "MKT");
             return;
         }
         if (position < 0 && shortStopProbePrice > 0.0 && shortStopProbePrice >= shortStopThreshold) {
-            flowCondition("STRATEGY.STOP", "SHORT_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + shortStopProbePrice + " threshold=" + shortStopThreshold);
+            double executionPrice = priceForAction("BUY", executionFallbackPrice);
+            flowCondition("STRATEGY.STOP", "SHORT_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + shortStopProbePrice + " threshold=" + shortStopThreshold + " avgEntry=" + currentAvgEntry + " stopLossPct=" + stopLossPercentage + " secondsSinceEntry=" + secondsSinceEntry);
             recordHardStopExit("SHORT", source);
             emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onHardRiskExit(symbol, "short", "hard_stop_" + source));
             this.inFlightOrder = true;
-            parent.placeTrade(symbol, "BUY", priceForAction("BUY", executionFallbackPrice), Math.abs(position), "MKT");
+            flowWarn("STRATEGY.STOP", "Submitting short hard-stop exit symbol=" + symbol + " source=" + source + " action=BUY qty=" + Math.abs(position) + " execPrice=" + executionPrice + " probePrice=" + shortStopProbePrice + " threshold=" + shortStopThreshold + " avgEntry=" + currentAvgEntry + " secondsSinceEntry=" + secondsSinceEntry);
+            parent.placeTrade(symbol, "BUY", executionPrice, Math.abs(position), "MKT");
             return;
         }
         flowCondition("STRATEGY.STOP", "HARD_STOP_TRIGGERED", false, "symbol=" + symbol + " source=" + source + " longProbe=" + longStopProbePrice + " shortProbe=" + shortStopProbePrice + " avgEntry=" + currentAvgEntry + " position=" + position);
+    }
+
+    private long secondsSincePositionEntry() {
+        if (positionEntryEpoch <= 0L || currentMarketTime == null) {
+            return -1L;
+        }
+        long nowEpoch = currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
+        return Math.max(0L, nowEpoch - positionEntryEpoch);
     }
 
     private void recordHardStopExit(String side, String source) {
@@ -2479,9 +2602,13 @@ public class PingPongStrategy implements TradingStrategy {
         //
         // This keeps exit-model telemetry flowing even while flat without allowing flat-state exit signals to submit
         // contradictory closing orders.
+        aiDecisionEvaluationCount++;
         boolean timeReady = currentMarketTime != null;
         flowCondition("AI.GATE", "CURRENT_MARKET_TIME_PRESENT", timeReady, "symbol=" + symbol + " currentMarketTime=" + currentMarketTime);
-        if (!timeReady) return;
+        if (!timeReady) {
+            aiMissingMarketTimeCount++;
+            return;
+        }
 
         double currentRsi = calculateRsi();
         int currentHour = currentMarketTime.getHour();
@@ -2490,15 +2617,22 @@ public class PingPongStrategy implements TradingStrategy {
 
         boolean sessionAllowed = !(currentHour == 9 && currentMarketTime.getMinute() < 30);
         flowCondition("AI.GATE", "SESSION_AFTER_0930", sessionAllowed, "symbol=" + symbol + " time=" + currentMarketTime);
-        if (!sessionAllowed) return;
+        if (!sessionAllowed) {
+            aiPreMarketBlockedCount++;
+            return;
+        }
 
         if (yesterdayClose > 0) {
             double variance = Math.abs(barClose - yesterdayClose) / yesterdayClose;
             boolean varianceAllowed = variance <= 0.05;
             flowCondition("AI.GATE", "YESTERDAY_CLOSE_AVAILABLE", true, "symbol=" + symbol + " yesterdayClose=" + yesterdayClose);
             flowCondition("AI.GATE", "PRICE_VARIANCE_LE_5PCT", varianceAllowed, "symbol=" + symbol + " variance=" + variance + " close=" + barClose + " yesterdayClose=" + yesterdayClose);
-            if (!varianceAllowed) return;
+            if (!varianceAllowed) {
+                aiVarianceBlockedCount++;
+                return;
+            }
         } else {
+            aiMissingPreviousCloseCount++;
             flowCondition("AI.GATE", "YESTERDAY_CLOSE_AVAILABLE", false, "symbol=" + symbol + " yesterdayClose=" + yesterdayClose);
         }
 
@@ -2621,6 +2755,7 @@ public class PingPongStrategy implements TradingStrategy {
         // SCENARIO 1: WE ARE ALREADY LONG
         // ==========================================
         if (currentPosition > 0) {
+            aiPositionOpenSkippedCount++;
             if (shouldExitLong) {
                 flowInfo("AI.LONG.EXIT", "Top detector signaled exit. Taking LONG profits symbol=" + symbol);
                 this.inFlightOrder = true;
@@ -2633,6 +2768,7 @@ public class PingPongStrategy implements TradingStrategy {
         // SCENARIO 2: WE ARE ALREADY SHORT
         // ==========================================
         if (currentPosition < 0) {
+            aiPositionOpenSkippedCount++;
             if (shouldExitShort) {
                 flowInfo("AI.SHORT.EXIT", "Bottom detector signaled cover. Covering SHORT symbol=" + symbol);
                 this.inFlightOrder = true;
@@ -2651,6 +2787,7 @@ public class PingPongStrategy implements TradingStrategy {
         // ==========================================
         // SCENARIO 3: WE ARE FLAT (LOOKING FOR ENTRIES)
         // ==========================================
+        aiFlatEntryEvaluationCount++;
         flowCondition("AI.ENTRY", "POSITION_SYNCED", positionSynced, "symbol=" + symbol + " positionSynced=" + positionSynced);
         long nowMs = System.currentTimeMillis();
         long hardStopCooldownRemainingMs = Math.max(0L, postHardStopEntryCooldownMs - (nowMs - lastHardStopExitTimeMs));
@@ -2671,13 +2808,23 @@ public class PingPongStrategy implements TradingStrategy {
                 + " hardStopCooldownElapsed=" + hardStopCooldownElapsed
                 + " hardStopCooldownRemainingMs=" + hardStopCooldownRemainingMs
         );
+        if (!entryGateOpen) {
+            recordClosedEntryGate(allowNewEntries, tradeCount, maxTrades, positionSynced, hardStopCooldownElapsed, hardStopBudgetAvailable);
+        }
         if (entryGateOpen) {
+            aiEntryGateOpenCount++;
             double buyReferencePrice = priceForAction("BUY", barClose);
             double sellReferencePrice = priceForAction("SELL", barClose);
             int buyQty = sharesForAmount("BUY", barClose);
             int sellQty = sharesForAmount("SELL", barClose);
             flowCondition("AI.ENTRY", "BUY_QTY_POSITIVE", buyQty > 0, "symbol=" + symbol + " qty=" + buyQty + " askOrFallback=" + buyReferencePrice);
             flowCondition("AI.ENTRY", "SELL_QTY_POSITIVE", sellQty > 0, "symbol=" + symbol + " qty=" + sellQty + " bidOrFallback=" + sellReferencePrice);
+            if (buyQty <= 0) {
+                aiBuyQuantityBlockedCount++;
+            }
+            if (sellQty <= 0) {
+                aiSellQuantityBlockedCount++;
+            }
 
             // --- DIP BUYING (LONG ENTRY) ---
             double longThreshold = (currentHour == 9) ? RSI_LONG_ENTRY_OPEN_THRESHOLD : RSI_LONG_ENTRY_REGULAR_THRESHOLD;
@@ -2685,11 +2832,22 @@ public class PingPongStrategy implements TradingStrategy {
             boolean longModelReady = activeLongEntryAi != null && activeLongEntryAi.isAvailable();
             flowCondition("AI.LONG.ENTRY", "RSI_PRE_GATE", longRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + longThreshold);
             flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " regime=" + activeRegime);
+            if (!longRsiGate) {
+                aiLongRsiGateBlockedCount++;
+            }
+            if (!longModelReady) {
+                aiLongModelUnavailableCount++;
+            }
             boolean shouldEnterLong = false;
             double longEntryProb = 0.0;
             if (longRsiGate && longModelReady) {
+                aiLongEntryModelEvaluationCount++;
                 longEntryProb = activeLongEntryAi.predictProbability(longEntryFeatures);
                 shouldEnterLong = longEntryProb >= activeLongEntryThreshold;
+                if (shouldEnterLong) {
+                    aiLongEntryPassCount++;
+                }
+                recordSetupCandidate("long", longEntryProb, activeLongEntryThreshold, currentRsi, buyReferencePrice, buyQty, activeRegime);
                 flowCondition(
                     "AI.LONG.ENTRY",
                     "AI_PREDICTS_ENTRY",
@@ -2722,11 +2880,22 @@ public class PingPongStrategy implements TradingStrategy {
             boolean shortModelReady = activeShortEntryAi != null && activeShortEntryAi.isAvailable();
             flowCondition("AI.SHORT.ENTRY", "RSI_PRE_GATE", shortRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + shortThreshold);
             flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " regime=" + activeRegime);
+            if (!shortRsiGate) {
+                aiShortRsiGateBlockedCount++;
+            }
+            if (!shortModelReady) {
+                aiShortModelUnavailableCount++;
+            }
             boolean shouldEnterShort = false;
             double shortEntryProb = 0.0;
             if (shortRsiGate && shortModelReady) {
+                aiShortEntryModelEvaluationCount++;
                 shortEntryProb = activeShortEntryAi.predictProbability(shortEntryFeatures);
                 shouldEnterShort = shortEntryProb >= activeShortEntryThreshold;
+                if (shouldEnterShort) {
+                    aiShortEntryPassCount++;
+                }
+                recordSetupCandidate("short", shortEntryProb, activeShortEntryThreshold, currentRsi, sellReferencePrice, sellQty, activeRegime);
                 flowCondition(
                     "AI.SHORT.ENTRY",
                     "AI_PREDICTS_ENTRY",
@@ -2750,6 +2919,83 @@ public class PingPongStrategy implements TradingStrategy {
                 pendingEntryThresholdMargin = shortEntryProb - activeShortEntryThreshold;
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "SELL", sellReferencePrice, sellQty, "FAST_LMT");
+            }
+        }
+    }
+
+    private void recordClosedEntryGate(boolean allowEntries, int tradesSoFar, int maxAllowedTrades,
+                                       boolean synced, boolean hardStopCooldownElapsed,
+                                       boolean hardStopBudgetAvailable) {
+        aiEntryGateClosedCount++;
+        if (!allowEntries) {
+            aiAllowNewEntriesBlockedCount++;
+        }
+        if (tradesSoFar >= maxAllowedTrades) {
+            aiMaxTradesBlockedCount++;
+        }
+        if (!synced) {
+            aiPositionSyncBlockedCount++;
+        }
+        if (!hardStopCooldownElapsed) {
+            aiHardStopCooldownBlockedCount++;
+        }
+        if (!hardStopBudgetAvailable) {
+            aiHardStopBudgetBlockedCount++;
+        }
+    }
+
+    private void recordSetupCandidate(String side, double probability, double threshold, double currentRsi,
+                                      double referencePrice, int quantity, MarketRegime activeRegime) {
+        if (!Double.isFinite(probability) || !Double.isFinite(threshold)) {
+            return;
+        }
+        double margin = probability - threshold;
+        long epoch = currentMicroArmEpoch();
+        String marketTime = currentMarketTime == null ? "" : currentMarketTime.toString();
+        String normalizedSide = side == null ? "" : side.toLowerCase(Locale.US);
+        String regime = activeRegime == null ? "" : activeRegime.name();
+
+        if ("long".equals(normalizedSide)) {
+            if (probability > aiMaxLongEntryProbability) {
+                aiMaxLongEntryProbability = probability;
+                aiMaxLongEntryThreshold = threshold;
+                aiMaxLongEntryMargin = margin;
+                aiMaxLongEntryEpoch = epoch;
+                aiMaxLongEntryTime = marketTime;
+            }
+            if (margin < 0.0 && margin >= -Math.abs(AI_DIAGNOSTIC_NEAR_MISS_MARGIN)) {
+                aiLongNearMissCount++;
+            }
+        } else if ("short".equals(normalizedSide)) {
+            if (probability > aiMaxShortEntryProbability) {
+                aiMaxShortEntryProbability = probability;
+                aiMaxShortEntryThreshold = threshold;
+                aiMaxShortEntryMargin = margin;
+                aiMaxShortEntryEpoch = epoch;
+                aiMaxShortEntryTime = marketTime;
+            }
+            if (margin < 0.0 && margin >= -Math.abs(AI_DIAGNOSTIC_NEAR_MISS_MARGIN)) {
+                aiShortNearMissCount++;
+            }
+        }
+
+        synchronized (aiClosestSetupEvents) {
+            aiClosestSetupEvents.add(new SetupCandidateDiagnostic(
+                normalizedSide,
+                epoch,
+                marketTime,
+                probability,
+                threshold,
+                margin,
+                currentRsi,
+                referencePrice,
+                quantity,
+                regime
+            ));
+            aiClosestSetupEvents.sort((left, right) -> Double.compare(right.margin(), left.margin()));
+            int maxEvents = Math.max(0, AI_DIAGNOSTIC_TOP_SETUP_EVENTS);
+            while (aiClosestSetupEvents.size() > maxEvents) {
+                aiClosestSetupEvents.remove(aiClosestSetupEvents.size() - 1);
             }
         }
     }

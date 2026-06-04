@@ -542,10 +542,82 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         System.out.println(">>> [FLOW][INFO][BACKTEST] avg_mfe_r: " + formatDouble(lifecycleSummary.avgMfeR()));
         System.out.println(">>> [FLOW][INFO][BACKTEST] avg_mae_r: " + formatDouble(lifecycleSummary.avgMaeR()));
         System.out.println(">>> [FLOW][INFO][BACKTEST] exit_reason_dist: " + lifecycleSummary.exitReasonDistribution());
+        printAiDecisionDiagnostics();
         System.out.println(">>> [FLOW][INFO][BACKTEST] Trade log: " + getTradeLogFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] Order history: " + getOrderHistoryFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] Trade lifecycle summary: " + getTradeLifecycleSummaryFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] ==============================================");
+    }
+
+    private void printAiDecisionDiagnostics() {
+        if (strategy == null) {
+            return;
+        }
+        PingPongStrategy.AiDecisionDiagnostics diagnostics = strategy.getAiDecisionDiagnostics();
+        System.out.println(
+            ">>> [FLOW][INFO][BACKTEST.NO_TRADE_DIAG] ai_evaluations=" + diagnostics.aiEvaluations()
+                + " flat_entry_evaluations=" + diagnostics.flatEntryEvaluations()
+                + " entry_gate_open=" + diagnostics.entryGateOpen()
+                + " entry_gate_closed=" + diagnostics.entryGateClosed()
+                + " missing_market_time=" + diagnostics.missingMarketTime()
+                + " pre_market_blocked=" + diagnostics.preMarketBlocked()
+                + " missing_previous_close=" + diagnostics.missingPreviousClose()
+                + " variance_blocked=" + diagnostics.varianceBlocked()
+                + " position_open_skipped=" + diagnostics.positionOpenSkipped()
+        );
+        System.out.println(
+            ">>> [FLOW][INFO][BACKTEST.NO_TRADE_DIAG] entry_gate_blockers"
+                + " allow_new_entries=" + diagnostics.allowNewEntriesBlocked()
+                + " max_trades=" + diagnostics.maxTradesBlocked()
+                + " position_sync=" + diagnostics.positionSyncBlocked()
+                + " hard_stop_cooldown=" + diagnostics.hardStopCooldownBlocked()
+                + " hard_stop_budget=" + diagnostics.hardStopBudgetBlocked()
+                + " buy_qty=" + diagnostics.buyQuantityBlocked()
+                + " sell_qty=" + diagnostics.sellQuantityBlocked()
+        );
+        System.out.println(
+            ">>> [FLOW][INFO][BACKTEST.NO_TRADE_DIAG] long_entry"
+                + " model_evals=" + diagnostics.longEntryModelEvaluations()
+                + " passes=" + diagnostics.longEntryPasses()
+                + " near_misses=" + diagnostics.longNearMisses()
+                + " rsi_blocked=" + diagnostics.longRsiGateBlocked()
+                + " model_unavailable=" + diagnostics.longModelUnavailable()
+                + " max_prob=" + formatDiagnosticDouble(diagnostics.maxLongEntryProbability())
+                + " max_threshold=" + formatDiagnosticDouble(diagnostics.maxLongEntryThreshold())
+                + " max_margin=" + formatDiagnosticDouble(diagnostics.maxLongEntryMargin())
+                + " max_epoch=" + diagnostics.maxLongEntryEpoch()
+                + " max_time=" + nullToEmpty(diagnostics.maxLongEntryTime())
+        );
+        System.out.println(
+            ">>> [FLOW][INFO][BACKTEST.NO_TRADE_DIAG] short_entry"
+                + " model_evals=" + diagnostics.shortEntryModelEvaluations()
+                + " passes=" + diagnostics.shortEntryPasses()
+                + " near_misses=" + diagnostics.shortNearMisses()
+                + " rsi_blocked=" + diagnostics.shortRsiGateBlocked()
+                + " model_unavailable=" + diagnostics.shortModelUnavailable()
+                + " max_prob=" + formatDiagnosticDouble(diagnostics.maxShortEntryProbability())
+                + " max_threshold=" + formatDiagnosticDouble(diagnostics.maxShortEntryThreshold())
+                + " max_margin=" + formatDiagnosticDouble(diagnostics.maxShortEntryMargin())
+                + " max_epoch=" + diagnostics.maxShortEntryEpoch()
+                + " max_time=" + nullToEmpty(diagnostics.maxShortEntryTime())
+        );
+        int rank = 1;
+        for (PingPongStrategy.SetupCandidateDiagnostic candidate : diagnostics.closestSetupEvents()) {
+            System.out.println(
+                ">>> [FLOW][INFO][BACKTEST.NO_TRADE_DIAG] closest_setup"
+                    + " rank=" + rank++
+                    + " side=" + candidate.side()
+                    + " epoch=" + candidate.epoch()
+                    + " time=" + nullToEmpty(candidate.marketTime())
+                    + " prob=" + formatDiagnosticDouble(candidate.probability())
+                    + " threshold=" + formatDiagnosticDouble(candidate.threshold())
+                    + " margin=" + formatDiagnosticDouble(candidate.margin())
+                    + " rsi=" + formatDiagnosticDouble(candidate.rsi())
+                    + " referencePrice=" + formatDiagnosticDouble(candidate.referencePrice())
+                    + " qty=" + candidate.quantity()
+                    + " regime=" + candidate.regime()
+            );
+        }
     }
 
     private void writeTradeLifecycleSummary(BacktestLifecycleStats.Summary summary) {
@@ -625,6 +697,11 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
             return "";
         }
         return String.format(Locale.US, "%.6f", value);
+    }
+
+    private static String formatDiagnosticDouble(double value) {
+        String formatted = formatDouble(value);
+        return formatted.isBlank() ? "n/a" : formatted;
     }
 
     private static double lifecycleEntryRiskPct() {

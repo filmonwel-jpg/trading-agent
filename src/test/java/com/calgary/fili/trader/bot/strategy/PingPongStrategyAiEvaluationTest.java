@@ -132,6 +132,49 @@ class PingPongStrategyAiEvaluationTest {
     }
 
     @Test
+    void aiDecisionDiagnosticsCaptureBelowThresholdEntryScores() throws Exception {
+        IBKRTrader parent = mock(IBKRTrader.class);
+        PingPongStrategy strategy = newStrategy(parent);
+        try {
+            seedFeatureState(strategy);
+            ReflectionTestUtils.setField(strategy, "allowNewEntries", true);
+            ReflectionTestUtils.setField(strategy, "positionSynced", true);
+            ReflectionTestUtils.setField(strategy, "currentPosition", 0);
+            strategy.setAiThresholds(0.68, 0.63, 0.58, 0.60);
+
+            AiPredictor longEntry = mock(AiPredictor.class);
+            AiPredictor shortEntry = mock(AiPredictor.class);
+            AiPredictor longExit = mock(AiPredictor.class);
+            AiPredictor shortExit = mock(AiPredictor.class);
+            when(longEntry.predictProbability(any(float[].class))).thenReturn(0.62);
+            when(shortEntry.predictProbability(any(float[].class))).thenReturn(0.61);
+            configureBasePredictors(strategy, longEntry, shortEntry, longExit, shortExit);
+
+            ReflectionTestUtils.invokeMethod(strategy, "askArtificialIntelligence");
+
+            PingPongStrategy.AiDecisionDiagnostics diagnostics = strategy.getAiDecisionDiagnostics();
+            assertEquals(1L, diagnostics.aiEvaluations());
+            assertEquals(1L, diagnostics.flatEntryEvaluations());
+            assertEquals(1L, diagnostics.entryGateOpen());
+            assertEquals(1L, diagnostics.longEntryModelEvaluations());
+            assertEquals(1L, diagnostics.shortEntryModelEvaluations());
+            assertEquals(0L, diagnostics.longEntryPasses());
+            assertEquals(0L, diagnostics.shortEntryPasses());
+            assertEquals(0.62, diagnostics.maxLongEntryProbability(), 1.0e-9);
+            assertEquals(0.68, diagnostics.maxLongEntryThreshold(), 1.0e-9);
+            assertEquals(-0.06, diagnostics.maxLongEntryMargin(), 1.0e-9);
+            assertEquals(0.61, diagnostics.maxShortEntryProbability(), 1.0e-9);
+            assertEquals(0.63, diagnostics.maxShortEntryThreshold(), 1.0e-9);
+            assertEquals(-0.02, diagnostics.maxShortEntryMargin(), 1.0e-9);
+            assertEquals(2, diagnostics.closestSetupEvents().size());
+            assertEquals("short", diagnostics.closestSetupEvents().get(0).side());
+            verify(parent, never()).placeTrade(anyString(), anyString(), anyDouble(), anyInt(), anyString());
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
     void watchdogKeepsInFlightLockWhileReconcilingStaleExitOrder() {
         IBKRTrader parent = mock(IBKRTrader.class);
         PingPongStrategy strategy = newStrategy(parent);
