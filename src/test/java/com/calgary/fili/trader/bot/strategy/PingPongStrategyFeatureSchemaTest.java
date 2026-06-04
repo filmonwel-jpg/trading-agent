@@ -192,6 +192,70 @@ class PingPongStrategyFeatureSchemaTest {
         }
     }
 
+    @Test
+    void lifecycleMicroProbabilityFeaturesUseStoredArmAndEntryProbabilities() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            Map<String, Float> contextFeatures = new LinkedHashMap<>();
+            contextFeatures.put("f_30s_body_pct", 0.25f);
+
+            ReflectionTestUtils.invokeMethod(strategy, "armMicroEntry", "long", contextFeatures, 1_700_000_030L, 0.73d, 0.62d);
+            assertEquals(0.73d, (Double) ReflectionTestUtils.getField(strategy, "armedSetupProbability"), 1.0e-9);
+            assertEquals(0.62d, (Double) ReflectionTestUtils.getField(strategy, "armedSetupThreshold"), 1.0e-9);
+            assertEquals(0.11d, (Double) ReflectionTestUtils.getField(strategy, "armedSetupThresholdMargin"), 1.0e-9);
+
+            ReflectionTestUtils.invokeMethod(strategy, "clearMicroEntryArms", "test-clear");
+            assertEquals(0.0d, (Double) ReflectionTestUtils.getField(strategy, "armedSetupProbability"), 1.0e-9);
+            assertEquals(0.0d, (Double) ReflectionTestUtils.getField(strategy, "armedSetupThreshold"), 1.0e-9);
+            assertEquals(0.0d, (Double) ReflectionTestUtils.getField(strategy, "armedSetupThresholdMargin"), 1.0e-9);
+
+            ReflectionTestUtils.setField(strategy, "positionEntryPrice", 100.0);
+            ReflectionTestUtils.setField(strategy, "positionEntrySide", 1);
+            ReflectionTestUtils.setField(strategy, "positionEntryProbability", 0.61d);
+            ReflectionTestUtils.setField(strategy, "positionEntryThreshold", 0.55d);
+            ReflectionTestUtils.setField(strategy, "positionEntryThresholdMargin", 0.06d);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Float> positionFeatures = ReflectionTestUtils.invokeMethod(strategy, "positionFeatureValues", 101.0, true);
+
+            assertEquals(0.61f, positionFeatures.get("f_entry_score_proxy"), 1.0e-6f);
+            assertEquals(0.61f, positionFeatures.get("f_entry_prob"), 1.0e-6f);
+            assertEquals(0.55f, positionFeatures.get("f_entry_threshold"), 1.0e-6f);
+            assertEquals(0.06f, positionFeatures.get("f_entry_threshold_margin"), 1.0e-6f);
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
+    void orderProgressTransfersPendingEntryProbabilityIntoLifecyclePositionFeatures() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            ReflectionTestUtils.setField(strategy, "pendingEntryProbability", 0.82d);
+            ReflectionTestUtils.setField(strategy, "pendingEntryThreshold", 0.64d);
+            ReflectionTestUtils.setField(strategy, "pendingEntryThresholdMargin", 0.18d);
+
+            ReflectionTestUtils.invokeMethod(strategy, "handleOrderProgress", 101, "BUY", 10, 0, 100.0d);
+
+            assertEquals(0.82d, (Double) ReflectionTestUtils.getField(strategy, "positionEntryProbability"), 1.0e-9);
+            assertEquals(0.64d, (Double) ReflectionTestUtils.getField(strategy, "positionEntryThreshold"), 1.0e-9);
+            assertEquals(0.18d, (Double) ReflectionTestUtils.getField(strategy, "positionEntryThresholdMargin"), 1.0e-9);
+            assertEquals(0.0d, (Double) ReflectionTestUtils.getField(strategy, "pendingEntryProbability"), 1.0e-9);
+            assertEquals(0.0d, (Double) ReflectionTestUtils.getField(strategy, "pendingEntryThreshold"), 1.0e-9);
+            assertEquals(0.0d, (Double) ReflectionTestUtils.getField(strategy, "pendingEntryThresholdMargin"), 1.0e-9);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Float> positionFeatures = ReflectionTestUtils.invokeMethod(strategy, "positionFeatureValues", 101.0, true);
+
+            assertEquals(0.82f, positionFeatures.get("f_entry_score_proxy"), 1.0e-6f);
+            assertEquals(0.82f, positionFeatures.get("f_entry_prob"), 1.0e-6f);
+            assertEquals(0.64f, positionFeatures.get("f_entry_threshold"), 1.0e-6f);
+            assertEquals(0.18f, positionFeatures.get("f_entry_threshold_margin"), 1.0e-6f);
+        } finally {
+            strategy.stop();
+        }
+    }
+
     private static PingPongStrategy newStrategy() {
         return new PingPongStrategy(
             mock(IBKRTrader.class),

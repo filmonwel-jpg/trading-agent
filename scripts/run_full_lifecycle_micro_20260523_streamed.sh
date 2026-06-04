@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
 RUN_ID="${RUN_ID:-full_lifecycle_micro_$(date '+%Y%m%d_%H%M%S')}"
 LOG_DIR="$ROOT/runtime/logs/lifecycle_micro_20260523/$RUN_ID"
 LOG="$LOG_DIR/train.log"

@@ -72,6 +72,7 @@ public class AiPredictor {
             || expectedFeatureCount == 34
             || expectedFeatureCount == 41
             || expectedFeatureCount == 44
+            || expectedFeatureCount == 50
             || expectedFeatureCount == 51
             || expectedFeatureCount == 57
             || expectedFeatureCount == 61

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +38,10 @@ DEFAULT_MODEL_EXPORTS_ROOT = Path(os.getenv("MODEL_EXPORTS_ROOT", "model_exports
 ENTRY_PROFIT_PCT = float(os.getenv("LIFECYCLE_ENTRY_PROFIT_PCT", "0.0035"))
 ENTRY_RISK_PCT = float(os.getenv("LIFECYCLE_ENTRY_RISK_PCT", "0.0025"))
 LIFECYCLE_HORIZON_30S = int(os.getenv("LIFECYCLE_HORIZON_30S", "20"))
-MICRO_ARM_TTL_SECONDS = int(os.getenv("MICRO_ARM_TTL_SECONDS", "60"))
+# Must match strategy.micro.armTtlSeconds Java default (currently 30).
+# Override via MICRO_ARM_TTL_SECONDS only when intentionally testing a non-standard TTL,
+# and only with a matching Java -Dstrategy.micro.armTtlSeconds= flag.
+MICRO_ARM_TTL_SECONDS = int(os.getenv("MICRO_ARM_TTL_SECONDS", "30"))
 MICRO_FUTURE_WINDOW_5S = int(os.getenv("MICRO_FUTURE_WINDOW_5S", "24"))
 MICRO_EXIT_LOOKAHEAD_5S = int(os.getenv("MICRO_EXIT_LOOKAHEAD_5S", "6"))
 EXIT_DECISION_MARGIN_R = float(os.getenv("EXIT_DECISION_MARGIN_R", "0.10"))
@@ -44,6 +49,12 @@ MICRO_EXIT_MARGIN_R = float(os.getenv("MICRO_EXIT_MARGIN_R", "0.05"))
 ENTRY_FILL_MODE = os.getenv("ENTRY_FILL_MODE", "next_open").strip().lower()
 ENTRY_SLIPPAGE_BPS = float(os.getenv("ENTRY_SLIPPAGE_BPS", "2.0"))
 EXIT_SLIPPAGE_BPS = float(os.getenv("EXIT_SLIPPAGE_BPS", "2.0"))
+ENTRY_SCORE_PROXY_BOOTSTRAP = 1.0  # Remove once walk-forward 30s setup scoring is active.
+LABEL_VERSION = os.getenv("LIFECYCLE_LABEL_VERSION", "lifecycle_micro_v20260603")
+FILL_MODEL_VERSION = os.getenv("LIFECYCLE_FILL_MODEL_VERSION", f"side_aware_bbo_slip_{ENTRY_SLIPPAGE_BPS:g}bps")
+FEATURE_SCHEMA_VERSION = os.getenv("LIFECYCLE_FEATURE_SCHEMA_VERSION", "lifecycle_micro_schema_v2")
+
+_ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED = False
 
 THRESHOLD_RANGES = {
     "lifecycle": np.arange(0.50, 0.82, 0.02),
@@ -53,6 +64,9 @@ THRESHOLD_RANGES = {
 
 NON_FEATURE_COLUMNS = {
     "Symbol", "Timestamp", "Date", "MarketRegime", "RegimeLabel", "Side", "EntryTime",
+    "SetupTime", "arm_id", "trade_path_id", "entry_decision_id", "label_version",
+    "fill_model_version", "feature_schema_version", "setup_route", "setup_cohort",
+    "setup_probability", "setup_threshold", "setup_threshold_margin",
     "Label_Long_Entry", "Label_Short_Entry", "Label_Long_Exit", "Label_Short_Exit",
     "Label_Long_MicroEntry", "Label_Short_MicroEntry", "Label_Long_MicroExitGuard", "Label_Short_MicroExitGuard",
     "Label_Long_ExitLifecycle", "Label_Short_ExitLifecycle",
@@ -151,6 +165,182 @@ def numeric_col(df: pd.DataFrame, name: str, default: float = 0.0) -> pd.Series:
     if name not in df.columns:
         return pd.Series(default, index=df.index, dtype=float)
     return pd.to_numeric(df[name], errors="coerce").fillna(default)
+
+
+def warn_bootstrap_score_proxy_once() -> None:
+    global _ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED
+    if _ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED:
+        return
+    print(
+        "WARN f_setup_score_proxy and f_entry_score_proxy are using bootstrap value 1.0. "
+        "Models trained with this placeholder must not be promoted to live trading.",
+        file=sys.stderr,
+    )
+    _ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED = True
+
+
+def setup_score_proxy(setup_prob: float | None) -> float:
+    if setup_prob is None:
+        warn_bootstrap_score_proxy_once()
+        return ENTRY_SCORE_PROXY_BOOTSTRAP
+    return float(setup_prob)
+
+
+def stable_row_id(*parts: object) -> str:
+    raw = "|".join("" if part is None else str(part) for part in parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def extract_numeric_value(row: pd.Series, candidate_columns: Iterable[str]) -> float | None:
+    for column in candidate_columns:
+        if column not in row.index:
+            continue
+        value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+        if pd.notna(value) and np.isfinite(float(value)):
+            return float(value)
+    return None
+
+
+def extract_text_value(row: pd.Series, candidate_columns: Iterable[str]) -> str:
+    for column in candidate_columns:
+        if column not in row.index:
+            continue
+        value = row[column]
+        if pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def extract_setup_probability(row: pd.Series, side: str) -> float | None:
+    side_title = "Long" if side == "long" else "Short"
+    candidate_columns = [
+        "f_setup_prob",
+        "f_entry_prob",
+        f"f_{side}_setup_prob",
+        f"f_{side}_entry_prob",
+        f"{side_title}EntryProbability",
+        f"Probability_{side_title}_Entry",
+        f"Prob_{side_title}_Entry",
+    ]
+    return extract_numeric_value(row, candidate_columns)
+
+
+def extract_setup_threshold(row: pd.Series, side: str) -> float | None:
+    side_title = "Long" if side == "long" else "Short"
+    return extract_numeric_value(row, [
+        "f_setup_threshold",
+        "f_entry_threshold",
+        f"f_{side}_setup_threshold",
+        f"f_{side}_entry_threshold",
+        f"{side_title}EntryThreshold",
+        f"Threshold_{side_title}_Entry",
+        f"ProbabilityThreshold_{side_title}_Entry",
+    ])
+
+
+def extract_setup_threshold_margin(row: pd.Series, side: str, setup_prob: float | None, threshold: float | None) -> float | None:
+    side_title = "Long" if side == "long" else "Short"
+    explicit_margin = extract_numeric_value(row, [
+        "f_setup_threshold_margin",
+        "f_entry_threshold_margin",
+        f"f_{side}_setup_threshold_margin",
+        f"f_{side}_entry_threshold_margin",
+        f"{side_title}EntryThresholdMargin",
+        f"ThresholdMargin_{side_title}_Entry",
+    ])
+    if explicit_margin is not None:
+        return explicit_margin
+    if setup_prob is not None and threshold is not None:
+        return float(setup_prob - threshold)
+    return None
+
+
+def setup_quality_features(setup_prob: float | None, threshold: float | None, threshold_margin: float | None, prefix: str) -> dict[str, float]:
+    prob = setup_score_proxy(setup_prob)
+    threshold_value = 0.0 if threshold is None else float(threshold)
+    margin_value = 0.0 if threshold_margin is None else float(threshold_margin)
+    return {
+        f"f_{prefix}_score_proxy": prob,
+        f"f_{prefix}_prob": prob,
+        f"f_{prefix}_threshold": threshold_value,
+        f"f_{prefix}_threshold_margin": margin_value,
+    }
+
+
+def setup_metadata(row: pd.Series, side: str, arm_id: str, trade_path_id: str, entry_decision_id: str, setup_prob: float | None, threshold: float | None, threshold_margin: float | None) -> dict[str, object]:
+    return {
+        "arm_id": arm_id,
+        "trade_path_id": trade_path_id,
+        "entry_decision_id": entry_decision_id,
+        "label_version": LABEL_VERSION,
+        "fill_model_version": FILL_MODEL_VERSION,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "SetupTime": row.get("Timestamp", ""),
+        "Side": side,
+        "setup_route": extract_text_value(row, ["setup_route", "entry_route", "ModelRoute", "Route", "route", "MarketRegime", "RegimeLabel"]),
+        "setup_cohort": extract_text_value(row, ["setup_cohort", "entry_cohort", "Cohort", "cohort"]),
+        "setup_probability": "" if setup_prob is None else float(setup_prob),
+        "setup_threshold": "" if threshold is None else float(threshold),
+        "setup_threshold_margin": "" if threshold_margin is None else float(threshold_margin),
+    }
+
+
+def first_available_price_array(df: pd.DataFrame, names: Iterable[str]) -> np.ndarray | None:
+    for name in names:
+        if name not in df.columns:
+            continue
+        values = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
+        if not np.isnan(values).all():
+            return values
+    return None
+
+
+def bid_ask_arrays(df: pd.DataFrame) -> tuple[np.ndarray | None, np.ndarray | None]:
+    bids = first_available_price_array(df, ["BidLast", "Bid", "bid", "BestBid", "best_bid"])
+    asks = first_available_price_array(df, ["AskLast", "Ask", "ask", "BestAsk", "best_ask"])
+    return bids, asks
+
+
+def valid_price(value: float) -> bool:
+    return np.isfinite(value) and value > 0.0
+
+
+def side_aware_entry_fill(
+    side: str,
+    closes: np.ndarray,
+    bids: np.ndarray | None,
+    asks: np.ndarray | None,
+    index: int,
+    slippage_bps: float = ENTRY_SLIPPAGE_BPS,
+) -> float:
+    close = float(closes[index])
+    slip = slippage_bps / 10_000.0
+    if side == "long":
+        raw = float(asks[index]) if asks is not None and valid_price(float(asks[index])) else close
+        return raw * (1.0 + slip)
+    raw = float(bids[index]) if bids is not None and valid_price(float(bids[index])) else close
+    return raw * (1.0 - slip)
+
+
+def timestamp_ns_array(series: pd.Series) -> np.ndarray:
+    utc = series.dt.tz_convert("UTC")
+    values = utc.astype("int64").to_numpy(dtype=np.int64)
+    if len(values) == 0:
+        return values
+    expected_first = int(utc.iloc[0].value)
+    actual_first = int(values[0])
+    if actual_first == expected_first:
+        return values
+    if actual_first * 1000 == expected_first:
+        return values * 1000
+    return np.asarray([int(ts.value) for ts in utc], dtype=np.int64)
+
+
+def feature_schema_hash(feature_columns: list[str]) -> str:
+    return hashlib.sha256("\n".join(feature_columns).encode("utf-8")).hexdigest()
 
 
 def add_common_features(df: pd.DataFrame, cadence: str) -> pd.DataFrame:
@@ -329,6 +519,7 @@ def build_lifecycle_rows(df30: pd.DataFrame, max_entry_events: int = 0, max_entr
         highs = group["High"].to_numpy(dtype=float)
         lows = group["Low"].to_numpy(dtype=float)
         closes = group["Close"].to_numpy(dtype=float)
+        bids, asks = bid_ask_arrays(group)
         for side, label_col, sink in [
             ("long", "Label_Long_Entry", long_rows),
             ("short", "Label_Short_Entry", short_rows),
@@ -341,11 +532,22 @@ def build_lifecycle_rows(df30: pd.DataFrame, max_entry_events: int = 0, max_entr
                 entry_events += 1
                 if max_entry_events and entry_events > max_entry_events:
                     break
-                entry_price = float(closes[entry_i])
+                entry_price = side_aware_entry_fill(side, closes, bids, asks, entry_i)
+                setup_prob = extract_setup_probability(group.loc[entry_i], side)
+                setup_threshold = extract_setup_threshold(group.loc[entry_i], side)
+                setup_threshold_margin = extract_setup_threshold_margin(group.loc[entry_i], side, setup_prob, setup_threshold)
+                arm_id = stable_row_id("arm", symbol, side, group.at[entry_i, "Timestamp"])
+                trade_path_id = stable_row_id("trade", arm_id, "lifecycle")
+                entry_decision_id = stable_row_id("entry_decision", arm_id, "30s", group.at[entry_i, "Timestamp"])
                 mfe = 0.0
                 mae = 0.0
                 end_i = min(entry_i + LIFECYCLE_HORIZON_30S, len(group) - 1)
-                entry_features = {"f_entry_score_proxy": 1.0, "f_entry_side_long": 1.0 if side == "long" else 0.0, "f_entry_side_short": 1.0 if side == "short" else 0.0}
+                entry_features = {
+                    **setup_quality_features(setup_prob, setup_threshold, setup_threshold_margin, "entry"),
+                    "f_entry_side_long": 1.0 if side == "long" else 0.0,
+                    "f_entry_side_short": 1.0 if side == "short" else 0.0,
+                }
+                metadata = setup_metadata(group.loc[entry_i], side, arm_id, trade_path_id, entry_decision_id, setup_prob, setup_threshold, setup_threshold_margin)
                 for t in range(entry_i + 1, end_i + 1):
                     cur_close = float(closes[t])
                     cur_r = side_pnl_r(side, entry_price, cur_close)
@@ -366,6 +568,7 @@ def build_lifecycle_rows(df30: pd.DataFrame, max_entry_events: int = 0, max_entr
                         "Timestamp": group.at[t, "Timestamp"],
                         "Date": group.at[t, "Date"],
                         "EntryTime": group.at[entry_i, "Timestamp"],
+                        **metadata,
                         "f_pos_side": 1.0 if side == "long" else -1.0,
                         "f_bars_since_entry": float(t - entry_i) / max(1.0, LIFECYCLE_HORIZON_30S),
                         "f_unrealized_pnl_r": cur_r,
@@ -401,10 +604,11 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
         # On the macOS/pyarrow-backed pandas stack used for this project, astype("int64")
         # on tz-aware datetimes yields microseconds while Timestamp.value is nanoseconds.
         # Normalize both sides to nanoseconds before searchsorted.
-        micro_ts_ns = micro["_ts"].dt.tz_convert("UTC").astype("int64").to_numpy() * 1000
+        micro_ts_ns = timestamp_ns_array(micro["_ts"])
         micro_high = micro["High"].to_numpy(dtype=float)
         micro_low = micro["Low"].to_numpy(dtype=float)
         micro_close = micro["Close"].to_numpy(dtype=float)
+        micro_bids, micro_asks = bid_ask_arrays(micro)
 
         for side, label_col, entry_sink, exit_sink in [
             ("long", "Label_Long_Entry", long_entry_rows, long_exit_rows),
@@ -417,34 +621,60 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
             for ctx_i in entry_indices:
                 ctx = ctx_group.loc[ctx_i]
                 ctx_features = {col: float(ctx[col]) for col in ctx_cols}
+                setup_prob = extract_setup_probability(ctx, side)
+                setup_threshold = extract_setup_threshold(ctx, side)
+                setup_threshold_margin = extract_setup_threshold_margin(ctx, side, setup_prob, setup_threshold)
+                setup_features = setup_quality_features(setup_prob, setup_threshold, setup_threshold_margin, "setup")
+                entry_features = setup_quality_features(setup_prob, setup_threshold, setup_threshold_margin, "entry")
+                entry_features.update({
+                    "f_entry_side_long": 1.0 if side == "long" else 0.0,
+                    "f_entry_side_short": 1.0 if side == "short" else 0.0,
+                })
+                arm_id = stable_row_id("arm", symbol, side, ctx["Timestamp"])
                 entry_events += 1
                 if max_entry_events and entry_events > max_entry_events:
                     break
-                start = ctx["_ts"]
-                start_ns = int(start.tz_convert("UTC").value)
-                end_ns = int((start + pd.Timedelta(seconds=MICRO_ARM_TTL_SECONDS)).tz_convert("UTC").value)
-                start_pos = int(np.searchsorted(micro_ts_ns, start_ns, side="right"))
+                # Arm starts at the 30-second bar close (bar_open + 30s), matching Java's
+                # current30sAiDecisionEpoch = finalizedBucketStart + 30L.
+                arm_start = ctx["_ts"] + pd.Timedelta(seconds=30)
+                start_ns = int(arm_start.tz_convert("UTC").value)
+                end_ns = int((arm_start + pd.Timedelta(seconds=MICRO_ARM_TTL_SECONDS)).tz_convert("UTC").value)
+                start_pos = int(np.searchsorted(micro_ts_ns, start_ns, side="left"))
                 end_pos = int(np.searchsorted(micro_ts_ns, end_ns, side="right"))
                 candidate_idx = range(start_pos, end_pos)
+                confirmed_entry_mi: int | None = None
+                confirmed_entry_price = 0.0
+                confirmed_entry_decision_id = ""
+                confirmed_trade_path_id = ""
                 for mi in candidate_idx:
-                    fill = float(micro_close[mi])
+                    fill = side_aware_entry_fill(side, micro_close, micro_bids, micro_asks, mi)
                     future_end = min(mi + MICRO_FUTURE_WINDOW_5S, len(micro) - 1)
                     outcome = path_outcome_r(side, fill, micro_high[mi + 1:future_end + 1], micro_low[mi + 1:future_end + 1], micro_close[mi + 1:future_end + 1]) if future_end > mi else 0.0
+                    entry_decision_id = stable_row_id("entry_decision", arm_id, "5s", micro.at[mi, "Timestamp"])
+                    trade_path_id = stable_row_id("trade", entry_decision_id)
                     row = {col: float(micro.at[mi, col]) for col in micro_cols}
                     row.update(ctx_features)
                     row.update({
                         "Symbol": symbol,
                         "Timestamp": micro.at[mi, "Timestamp"],
                         "Date": micro.at[mi, "Date"],
-                        "f_setup_score_proxy": 1.0,
-                        "f_seconds_since_arm": (micro.at[mi, "_ts"] - start).total_seconds(),
+                        **setup_metadata(ctx, side, arm_id, trade_path_id, entry_decision_id, setup_prob, setup_threshold, setup_threshold_margin),
+                        **setup_features,
+                        "f_seconds_since_arm": (micro.at[mi, "_ts"] - arm_start).total_seconds(),
                     })
-                    row[f"Label_{'Long' if side == 'long' else 'Short'}_MicroEntry"] = int(outcome >= 1.0)
+                    label = int(outcome >= 1.0)
+                    row[f"Label_{'Long' if side == 'long' else 'Short'}_MicroEntry"] = label
                     entry_sink.append(row)
+                    if label == 1 and confirmed_entry_mi is None:
+                        confirmed_entry_mi = mi
+                        confirmed_entry_price = fill
+                        confirmed_entry_decision_id = entry_decision_id
+                        confirmed_trade_path_id = trade_path_id
 
-                if candidate_idx:
-                    entry_mi = candidate_idx[0]
-                    entry_price = float(micro_close[entry_mi])
+                if confirmed_entry_mi is not None:
+                    entry_mi = confirmed_entry_mi
+                    entry_price = confirmed_entry_price
+                    exit_metadata = setup_metadata(ctx, side, arm_id, confirmed_trade_path_id, confirmed_entry_decision_id, setup_prob, setup_threshold, setup_threshold_margin)
                     trade_end = min(entry_mi + MICRO_FUTURE_WINDOW_5S, len(micro) - 1)
                     mfe = 0.0
                     mae = 0.0
@@ -465,6 +695,8 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
                             "Timestamp": micro.at[mi, "Timestamp"],
                             "Date": micro.at[mi, "Date"],
                             "EntryTime": micro.at[entry_mi, "Timestamp"],
+                            **exit_metadata,
+                            **entry_features,
                             "f_pos_side": 1.0 if side == "long" else -1.0,
                             "f_bars_since_entry_5s": float(mi - entry_mi),
                             "f_unrealized_pnl_r": cur_r,
@@ -697,7 +929,9 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     route = []
+    feature_schema = {}
     for r in results:
+        schema_hash = feature_schema_hash(r.feature_columns)
         rows.append({
             "model": r.name,
             "filename": r.filename,
@@ -709,6 +943,7 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "recall": r.recall,
             "pred_pos_rate": r.pred_pos_rate,
             "feature_count": r.feature_count,
+            "feature_schema_sha256": schema_hash,
             "exported_to": r.exported_to,
         })
         route.append({
@@ -716,10 +951,19 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "model_path": r.exported_to,
             "threshold": r.threshold,
             "feature_count": r.feature_count,
+            "feature_schema_sha256": schema_hash,
             "feature_columns": r.feature_columns,
         })
+        feature_schema[r.name] = {
+            "feature_count": r.feature_count,
+            "feature_schema_sha256": schema_hash,
+            "feature_columns": r.feature_columns,
+        }
     pd.DataFrame(rows).to_csv(output_dir / "lifecycle_micro_scorecard.csv", index=False)
     (output_dir / "lifecycle_micro_route_manifest.json").write_text(json.dumps(route, indent=2), encoding="utf-8")
+    feature_schema_json = json.dumps(feature_schema, indent=2, sort_keys=True)
+    (output_dir / "feature_schema.json").write_text(feature_schema_json, encoding="utf-8")
+    (output_dir / "feature_schema.sha256").write_text(hashlib.sha256(feature_schema_json.encode("utf-8")).hexdigest() + "\n", encoding="utf-8")
 
 
 def main() -> None:

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import os
 from pathlib import Path
 
-SRC = Path('/Users/filmonghezehey/trading-agent/worktrees/databento/training_data/databento_30s_20260523_build_chunks')
+ROOT = Path(os.environ.get('TRADING_AGENT_ROOT', Path(__file__).resolve().parents[1]))
+SRC = ROOT / 'training_data/databento_30s_20260523_build_chunks'
 DST = Path('/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_30s_20260523_build_chunks')
 
 print('=== PATHS ===')

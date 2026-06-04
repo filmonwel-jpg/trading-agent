@@ -19,6 +19,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,15 +38,19 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final LocalTime ENTRY_CUTOFF = LocalTime.of(15, 50, 0);
     private static final LocalTime EOD_FLATTEN_TIME = LocalTime.of(15, 59, 50);
+    private static final double SIMULATED_SLIPPAGE_PER_SHARE = 0.03;
 
     private final AtomicInteger simulatedOrderId = new AtomicInteger(1);
     private final AtomicInteger streamExitCode = new AtomicInteger(Integer.MIN_VALUE);
     private final CountDownLatch streamDone = new CountDownLatch(1);
+    private final BacktestLifecycleStats lifecycleStats = new BacktestLifecycleStats();
     private PingPongStrategy strategy;
     private DatabentoLiveGateway gateway;
     private String backtestSymbol = "TSLA";
+    private String backtestRunTimestamp;
     private String tradeLogFileName;
     private String orderHistoryFileName;
+    private String tradeLifecycleSummaryFileName;
     private long processedEquityBars = 0L;
     private long processedOptionBars = 0L;
     private long skippedEvents = 0L;
@@ -168,6 +173,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
             parseThreshold("trading.ai.short-exit-threshold", 0.60),
             parseThreshold("trading.ai.regime-threshold", 0.50)
         );
+        strategy.setLifecycleTelemetryListener(lifecycleStats);
         strategy.setMaxVolatilityPercent(10.0);
         strategy.setPositionSynced(true);
     }
@@ -257,6 +263,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         lastClose = event.close;
         latestMarketTime = barTs.toLocalDateTime();
         processedEquityBars++;
+        lifecycleStats.onMarketBar(event.high, event.low, event.close);
 
         strategy.setCurrentMarketTime(latestMarketTime);
         strategy.onQuoteSnapshot(latestBid, latestAsk, latestBidSize, latestAskSize, 0.0);
@@ -307,6 +314,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         System.out.println(">>> [FLOW][DATA][BACKTEST.ORDER] simulated orderId=" + orderId + " action=" + action + " qty=" + finalQty + " symbol=" + symbol + " price=" + currentPrice + " type=" + orderType);
         appendOrderHistory(orderId, "SUBMITTED", symbol, action, finalQty, orderType, currentPrice, 0.0, "Submitted", positionBefore, positionBefore, "accepted");
         appendOrderHistory(orderId, "FILLED", symbol, action, finalQty, orderType, currentPrice, currentPrice, "Filled", positionBefore, simulatedBrokerPosition, transition);
+        lifecycleStats.onSimulatedFill(action, finalQty, currentPrice, positionBefore, simulatedBrokerPosition, latestMarketTime, lifecycleEntryRiskPct());
         strategy.onOrderSubmitted(orderId, action, finalQty);
         strategy.onOrderProgress(orderId, action, finalQty, 0, currentPrice);
         strategy.onOrderClosed(orderId, "Filled");
@@ -356,18 +364,30 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     @Override
     public String getTradeLogFile() {
         if (tradeLogFileName == null) {
-            String timestamp = LocalDateTime.now(MARKET_ZONE).format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            tradeLogFileName = System.getProperty("backtest.tradeLogFile", "runtime/backtests/databento-stream-" + backtestSymbol.toLowerCase(Locale.US) + "-" + timestamp + ".csv");
+            tradeLogFileName = System.getProperty("backtest.tradeLogFile", "runtime/backtests/databento-stream-" + backtestSymbol.toLowerCase(Locale.US) + "-" + backtestRunTimestamp() + ".csv");
         }
         return tradeLogFileName;
     }
 
     public String getOrderHistoryFile() {
         if (orderHistoryFileName == null) {
-            String timestamp = LocalDateTime.now(MARKET_ZONE).format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            orderHistoryFileName = System.getProperty("backtest.orderHistoryFile", "runtime/backtests/databento-stream-" + backtestSymbol.toLowerCase(Locale.US) + "-" + timestamp + "-orders.csv");
+            orderHistoryFileName = System.getProperty("backtest.orderHistoryFile", "runtime/backtests/databento-stream-" + backtestSymbol.toLowerCase(Locale.US) + "-" + backtestRunTimestamp() + "-orders.csv");
         }
         return orderHistoryFileName;
+    }
+
+    public String getTradeLifecycleSummaryFile() {
+        if (tradeLifecycleSummaryFileName == null) {
+            tradeLifecycleSummaryFileName = System.getProperty("backtest.tradeLifecycleSummaryFile", "runtime/backtests/databento-stream-" + backtestSymbol.toLowerCase(Locale.US) + "-" + backtestRunTimestamp() + "-trade-lifecycle-summary.csv");
+        }
+        return tradeLifecycleSummaryFileName;
+    }
+
+    private String backtestRunTimestamp() {
+        if (backtestRunTimestamp == null) {
+            backtestRunTimestamp = LocalDateTime.now(MARKET_ZONE).format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        }
+        return backtestRunTimestamp;
     }
 
     private void appendOrderHistory(int orderId, String eventType, String symbol, String action, int quantity, String orderType,
@@ -472,6 +492,8 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     }
 
     private void printSummary() {
+        BacktestLifecycleStats.Summary lifecycleSummary = lifecycleStats.summary();
+        writeTradeLifecycleSummary(lifecycleSummary);
         System.out.println(">>> [FLOW][INFO][BACKTEST] ==============================================");
         System.out.println(">>> [FLOW][INFO][BACKTEST] DATABENTO HISTORICAL STREAM BACKTEST COMPLETE");
         System.out.println(">>> [FLOW][INFO][BACKTEST] Symbol: " + backtestSymbol);
@@ -482,9 +504,476 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         System.out.println(">>> [FLOW][INFO][BACKTEST] Simulated broker position: " + simulatedBrokerPosition);
         System.out.println(">>> [FLOW][INFO][BACKTEST] Total trades: " + (strategy == null ? 0 : strategy.getTradeCount()));
         System.out.println(">>> [FLOW][INFO][BACKTEST] Total PnL: " + (strategy == null ? 0.0 : strategy.getTotalNetPnL()));
+        System.out.println(">>> [FLOW][INFO][BACKTEST] arms_total: " + lifecycleSummary.armsTotal());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] arms_long: " + lifecycleSummary.armsLong());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] arms_short: " + lifecycleSummary.armsShort());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] arm_confirmations: " + lifecycleSummary.armConfirmations());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] arm_expirations: " + lifecycleSummary.armExpirations());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] arm_conversion_rate: " + formatDouble(lifecycleSummary.armConversionRate()));
+        System.out.println(">>> [FLOW][INFO][BACKTEST] guard_evaluations: " + lifecycleSummary.guardEvaluations());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] guard_fires: " + lifecycleSummary.guardFires());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] lifecycle_exits: " + lifecycleSummary.lifecycleExits());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] hard_risk_exits: " + lifecycleSummary.hardRiskExits());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] eod_exits: " + lifecycleSummary.eodExits());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] avg_setup_to_fill_s: " + formatDouble(lifecycleSummary.avgSetupToFillSeconds()));
+        System.out.println(">>> [FLOW][INFO][BACKTEST] avg_mfe_r: " + formatDouble(lifecycleSummary.avgMfeR()));
+        System.out.println(">>> [FLOW][INFO][BACKTEST] avg_mae_r: " + formatDouble(lifecycleSummary.avgMaeR()));
+        System.out.println(">>> [FLOW][INFO][BACKTEST] exit_reason_dist: " + lifecycleSummary.exitReasonDistribution());
         System.out.println(">>> [FLOW][INFO][BACKTEST] Trade log: " + getTradeLogFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] Order history: " + getOrderHistoryFile());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] Trade lifecycle summary: " + getTradeLifecycleSummaryFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] ==============================================");
+    }
+
+    private void writeTradeLifecycleSummary(BacktestLifecycleStats.Summary summary) {
+        Path path = Path.of(getTradeLifecycleSummaryFile());
+        List<BacktestLifecycleStats.ClosedTrade> closedTrades = lifecycleStats.closedTradesSnapshot();
+        String runCompletedAt = Instant.now().toString();
+        try {
+            Path parent = path.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            try (BufferedWriter writer = Files.newBufferedWriter(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                writer.write(tradeLifecycleSummaryHeader());
+                writer.newLine();
+                if (closedTrades.isEmpty()) {
+                    writer.write(tradeLifecycleSummaryRow(runCompletedAt, summary, null));
+                    writer.newLine();
+                } else {
+                    for (BacktestLifecycleStats.ClosedTrade trade : closedTrades) {
+                        writer.write(tradeLifecycleSummaryRow(runCompletedAt, summary, trade));
+                        writer.newLine();
+                    }
+                }
+            }
+        } catch (IOException exception) {
+            System.err.println(">>> [FLOW][ERROR][BACKTEST.LIFECYCLE_SUMMARY] write failed file=" + path + " reason=" + exception.getMessage());
+        }
+    }
+
+    private static String tradeLifecycleSummaryHeader() {
+        return "RunCompletedAt,Symbol,ClosedTradeIndex,TradeSide,EntryTime,ExitTime,Quantity,EntryPrice,ExitPrice,TradePnL,RealizedR,MfeR,MaeR,SetupArmTime,SetupToFillSeconds,EntryRoute,ExitReason,EntryProb,EntryThreshold,EntryThresholdMargin,ArmsTotal,ArmsLong,ArmsShort,ArmConfirmations,ArmExpirations,ArmConversionRate,GuardEvaluations,GuardFires,LifecycleExits,HardRiskExits,EodExits,AvgSetupToFillSeconds,AvgMfeR,AvgMaeR,ExitReasonDistribution";
+    }
+
+    private String tradeLifecycleSummaryRow(String runCompletedAt, BacktestLifecycleStats.Summary summary,
+                                            BacktestLifecycleStats.ClosedTrade trade) {
+        return String.join(",",
+            csv(runCompletedAt),
+            csv(backtestSymbol),
+            trade == null ? "" : Integer.toString(trade.index()),
+            csv(trade == null ? "" : trade.side()),
+            csv(trade == null ? "" : trade.entryTime()),
+            csv(trade == null ? "" : trade.exitTime()),
+            trade == null ? "" : Integer.toString(trade.quantity()),
+            formatDouble(trade == null ? Double.NaN : trade.entryPrice()),
+            formatDouble(trade == null ? Double.NaN : trade.exitPrice()),
+            formatDouble(trade == null ? Double.NaN : trade.tradePnl()),
+            formatDouble(trade == null ? Double.NaN : trade.realizedR()),
+            formatDouble(trade == null ? Double.NaN : trade.mfeR()),
+            formatDouble(trade == null ? Double.NaN : trade.maeR()),
+            csv(trade == null ? "" : trade.setupArmTime()),
+            formatDouble(trade == null ? Double.NaN : trade.setupToFillSeconds()),
+            csv(trade == null ? "" : trade.entryRoute()),
+            csv(trade == null ? "" : trade.exitReason()),
+            formatDouble(trade == null ? Double.NaN : trade.entryProbability()),
+            formatDouble(trade == null ? Double.NaN : trade.entryThreshold()),
+            formatDouble(trade == null ? Double.NaN : trade.entryThresholdMargin()),
+            Long.toString(summary.armsTotal()),
+            Long.toString(summary.armsLong()),
+            Long.toString(summary.armsShort()),
+            Long.toString(summary.armConfirmations()),
+            Long.toString(summary.armExpirations()),
+            formatDouble(summary.armConversionRate()),
+            Long.toString(summary.guardEvaluations()),
+            Long.toString(summary.guardFires()),
+            Long.toString(summary.lifecycleExits()),
+            Long.toString(summary.hardRiskExits()),
+            Long.toString(summary.eodExits()),
+            formatDouble(summary.avgSetupToFillSeconds()),
+            formatDouble(summary.avgMfeR()),
+            formatDouble(summary.avgMaeR()),
+            csv(summary.exitReasonDistribution())
+        );
+    }
+
+    private static String formatDouble(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            return "";
+        }
+        return String.format(Locale.US, "%.6f", value);
+    }
+
+    private static double lifecycleEntryRiskPct() {
+        try {
+            double parsed = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.entryRiskPct", "0.0025").trim());
+            return parsed > 0.0 && Double.isFinite(parsed) ? parsed : 0.0025;
+        } catch (Exception ignored) {
+            return 0.0025;
+        }
+    }
+
+    private static final class BacktestLifecycleStats implements PingPongStrategy.LifecycleTelemetryListener {
+        private long armsTotal;
+        private long armsLong;
+        private long armsShort;
+        private long armConfirmations;
+        private long armExpirations;
+        private long guardEvaluations;
+        private long guardFires;
+        private long lifecycleExits;
+        private long hardRiskExits;
+        private long eodExits;
+        private double setupToFillSecondsSum;
+        private long setupToFillSamples;
+        private final List<ClosedTrade> closedTrades = new ArrayList<>();
+        private final Map<String, Long> exitReasonCounts = new LinkedHashMap<>();
+        private OpenTrade openTrade;
+        private ConfirmedEntry pendingConfirmedEntry;
+        private String pendingExitReason = "";
+
+        BacktestLifecycleStats() {
+            exitReasonCounts.put("lifecycle", 0L);
+            exitReasonCounts.put("guard", 0L);
+            exitReasonCounts.put("hard_stop", 0L);
+            exitReasonCounts.put("hard_risk", 0L);
+            exitReasonCounts.put("target", 0L);
+            exitReasonCounts.put("eod", 0L);
+            exitReasonCounts.put("other", 0L);
+        }
+
+        @Override
+        public synchronized void onMicroEntryArmed(String symbol, String side, long armEpoch, double setupProbability, double setupThreshold) {
+            armsTotal++;
+            if ("long".equalsIgnoreCase(side)) {
+                armsLong++;
+            } else if ("short".equalsIgnoreCase(side)) {
+                armsShort++;
+            }
+        }
+
+        @Override
+        public synchronized void onMicroEntryArmCleared(String symbol, String side, long armEpoch, String reason) {
+            if (reason != null && reason.toLowerCase(Locale.US).startsWith("expired")) {
+                armExpirations++;
+            }
+        }
+
+        @Override
+        public synchronized void onMicroEntryConfirmed(String symbol, String side, long armEpoch, long confirmEpoch,
+                                                       double probability, double threshold, int quantity,
+                                                       double referencePrice) {
+            armConfirmations++;
+            double setupToFillSeconds = armEpoch > 0L && confirmEpoch > 0L ? Math.max(0L, confirmEpoch - armEpoch) : Double.NaN;
+            if (!Double.isNaN(setupToFillSeconds)) {
+                setupToFillSecondsSum += setupToFillSeconds;
+                setupToFillSamples++;
+            }
+            pendingConfirmedEntry = new ConfirmedEntry(
+                normalizeSide(side),
+                armEpoch,
+                confirmEpoch,
+                setupToFillSeconds,
+                probability,
+                threshold,
+                probability - threshold
+            );
+        }
+
+        @Override
+        public synchronized void onMicroExitGuardEvaluated(String symbol, String side, long epoch, double probability,
+                                                           double threshold, boolean fired) {
+            guardEvaluations++;
+            if (fired) {
+                guardFires++;
+                pendingExitReason = "guard";
+            }
+        }
+
+        @Override
+        public synchronized void onLifecycleExitEvaluated(String symbol, String side, long epoch, double probability,
+                                                          double threshold, boolean fired, double unrealizedR) {
+            if (fired) {
+                lifecycleExits++;
+                pendingExitReason = "lifecycle";
+            }
+        }
+
+        @Override
+        public synchronized void onHardRiskExit(String symbol, String side, String reason) {
+            hardRiskExits++;
+            String normalized = reason == null ? "hard_risk" : reason.toLowerCase(Locale.US);
+            pendingExitReason = normalized.startsWith("hard_stop") ? "hard_stop" : "hard_risk";
+        }
+
+        @Override
+        public synchronized void onEndOfDayExit(String symbol, String side, long epoch, double executionPrice) {
+            eodExits++;
+            pendingExitReason = "eod";
+        }
+
+        synchronized void onMarketBar(double high, double low, double close) {
+            if (openTrade == null || openTrade.entryPrice <= 0.0) {
+                return;
+            }
+            double effectiveHigh = high > 0.0 ? high : close;
+            double effectiveLow = low > 0.0 ? low : close;
+            double effectiveClose = close > 0.0 ? close : openTrade.entryPrice;
+            if (openTrade.sideSign > 0) {
+                double favR = ((Math.max(effectiveHigh, effectiveClose) - openTrade.entryPrice) / openTrade.entryPrice) / Math.max(openTrade.riskPct, 1.0e-9);
+                double advR = ((Math.min(effectiveLow, effectiveClose) - openTrade.entryPrice) / openTrade.entryPrice) / Math.max(openTrade.riskPct, 1.0e-9);
+                openTrade.mfeR = Math.max(openTrade.mfeR, favR);
+                openTrade.maeR = Math.min(openTrade.maeR, advR);
+            } else if (openTrade.sideSign < 0) {
+                double favR = ((openTrade.entryPrice - Math.min(effectiveLow, effectiveClose)) / openTrade.entryPrice) / Math.max(openTrade.riskPct, 1.0e-9);
+                double advR = ((openTrade.entryPrice - Math.max(effectiveHigh, effectiveClose)) / openTrade.entryPrice) / Math.max(openTrade.riskPct, 1.0e-9);
+                openTrade.mfeR = Math.max(openTrade.mfeR, favR);
+                openTrade.maeR = Math.min(openTrade.maeR, advR);
+            }
+        }
+
+        synchronized void onSimulatedFill(String action, int quantity, double fillPrice, int positionBefore, int positionAfter,
+                                          LocalDateTime marketTime, double riskPct) {
+            if (quantity <= 0 || fillPrice <= 0.0) {
+                return;
+            }
+            int beforeSign = Integer.signum(positionBefore);
+            int afterSign = Integer.signum(positionAfter);
+            int beforeAbs = Math.abs(positionBefore);
+            int afterAbs = Math.abs(positionAfter);
+            double adjustedFillPrice = adjustedFillPrice(action, fillPrice);
+
+            boolean reducedOrReversed = beforeAbs > 0 && (afterAbs < beforeAbs || (afterSign != 0 && afterSign != beforeSign));
+            if (reducedOrReversed) {
+                int closedQuantity = Math.min(quantity, beforeAbs);
+                closeTrade(closedQuantity, adjustedFillPrice, marketTime, riskPct);
+            }
+
+            boolean openedOrIncreased = afterAbs > 0 && (beforeAbs == 0 || afterSign != beforeSign || afterAbs > beforeAbs);
+            if (openedOrIncreased) {
+                int openedQuantity = (beforeAbs == 0 || afterSign != beforeSign) ? afterAbs : afterAbs - beforeAbs;
+                openOrIncreaseTrade(afterSign, openedQuantity, adjustedFillPrice, marketTime, riskPct);
+            }
+        }
+
+        synchronized Summary summary() {
+            long closedCount = closedTrades.size();
+            double mfeSum = 0.0;
+            double maeSum = 0.0;
+            for (ClosedTrade trade : closedTrades) {
+                mfeSum += trade.mfeR();
+                maeSum += trade.maeR();
+            }
+            return new Summary(
+                armsTotal,
+                armsLong,
+                armsShort,
+                armConfirmations,
+                armExpirations,
+                armsTotal > 0L ? (double) armConfirmations / (double) armsTotal : 0.0,
+                guardEvaluations,
+                guardFires,
+                lifecycleExits,
+                hardRiskExits,
+                eodExits,
+                setupToFillSamples > 0L ? setupToFillSecondsSum / (double) setupToFillSamples : 0.0,
+                closedCount > 0L ? mfeSum / (double) closedCount : 0.0,
+                closedCount > 0L ? maeSum / (double) closedCount : 0.0,
+                exitReasonDistribution()
+            );
+        }
+
+        synchronized List<ClosedTrade> closedTradesSnapshot() {
+            return new ArrayList<>(closedTrades);
+        }
+
+        private void openOrIncreaseTrade(int sideSign, int quantity, double adjustedEntryPrice,
+                                         LocalDateTime marketTime, double riskPct) {
+            if (quantity <= 0 || sideSign == 0) {
+                return;
+            }
+            String side = sideSign > 0 ? "long" : "short";
+            ConfirmedEntry confirmedEntry = consumePendingConfirmedEntry(side);
+            if (openTrade == null || openTrade.sideSign != sideSign) {
+                openTrade = new OpenTrade();
+                openTrade.side = side;
+                openTrade.sideSign = sideSign;
+                openTrade.quantity = quantity;
+                openTrade.entryPrice = adjustedEntryPrice;
+                openTrade.entryTime = formatMarketTime(marketTime);
+                openTrade.riskPct = riskPct > 0.0 ? riskPct : 0.0025;
+                if (confirmedEntry != null) {
+                    openTrade.entryRoute = "micro_entry";
+                    openTrade.setupArmTime = formatEpoch(confirmedEntry.armEpoch());
+                    openTrade.setupToFillSeconds = confirmedEntry.setupToFillSeconds();
+                    openTrade.entryProbability = confirmedEntry.probability();
+                    openTrade.entryThreshold = confirmedEntry.threshold();
+                    openTrade.entryThresholdMargin = confirmedEntry.thresholdMargin();
+                } else {
+                    openTrade.entryRoute = "direct_30s";
+                }
+                return;
+            }
+
+            int combinedQuantity = openTrade.quantity + quantity;
+            if (combinedQuantity > 0) {
+                openTrade.entryPrice = ((openTrade.entryPrice * openTrade.quantity) + (adjustedEntryPrice * quantity)) / combinedQuantity;
+                openTrade.quantity = combinedQuantity;
+            }
+        }
+
+        private void closeTrade(int closedQuantity, double adjustedExitPrice, LocalDateTime marketTime,
+                                double fallbackRiskPct) {
+            if (closedQuantity <= 0) {
+                return;
+            }
+            String exitReason = consumePendingExitReason();
+            incrementExitReason(exitReason);
+            if (openTrade == null || openTrade.entryPrice <= 0.0 || openTrade.sideSign == 0) {
+                closedTrades.add(new ClosedTrade(
+                    closedTrades.size() + 1,
+                    "unknown",
+                    "",
+                    formatMarketTime(marketTime),
+                    closedQuantity,
+                    Double.NaN,
+                    adjustedExitPrice,
+                    Double.NaN,
+                    Double.NaN,
+                    Double.NaN,
+                    Double.NaN,
+                    "",
+                    Double.NaN,
+                    "unknown",
+                    exitReason,
+                    Double.NaN,
+                    Double.NaN,
+                    Double.NaN
+                ));
+                return;
+            }
+
+            double riskPct = openTrade.riskPct > 0.0 ? openTrade.riskPct : Math.max(fallbackRiskPct, 0.0025);
+            double perSharePnl = openTrade.sideSign > 0
+                ? adjustedExitPrice - openTrade.entryPrice
+                : openTrade.entryPrice - adjustedExitPrice;
+            double tradePnl = perSharePnl * closedQuantity;
+            double realizedR = (perSharePnl / openTrade.entryPrice) / riskPct;
+            closedTrades.add(new ClosedTrade(
+                closedTrades.size() + 1,
+                openTrade.side,
+                openTrade.entryTime,
+                formatMarketTime(marketTime),
+                closedQuantity,
+                openTrade.entryPrice,
+                adjustedExitPrice,
+                tradePnl,
+                realizedR,
+                openTrade.mfeR,
+                openTrade.maeR,
+                openTrade.setupArmTime,
+                openTrade.setupToFillSeconds,
+                openTrade.entryRoute,
+                exitReason,
+                openTrade.entryProbability,
+                openTrade.entryThreshold,
+                openTrade.entryThresholdMargin
+            ));
+
+            openTrade.quantity -= closedQuantity;
+            if (openTrade.quantity <= 0) {
+                openTrade = null;
+            }
+        }
+
+        private ConfirmedEntry consumePendingConfirmedEntry(String side) {
+            if (pendingConfirmedEntry == null || !pendingConfirmedEntry.side().equalsIgnoreCase(side)) {
+                return null;
+            }
+            ConfirmedEntry consumed = pendingConfirmedEntry;
+            pendingConfirmedEntry = null;
+            return consumed;
+        }
+
+        private String consumePendingExitReason() {
+            String reason = pendingExitReason == null || pendingExitReason.isBlank() ? "other" : pendingExitReason;
+            pendingExitReason = "";
+            return reason;
+        }
+
+        private void incrementExitReason(String reason) {
+            String key = reason == null || reason.isBlank() ? "other" : reason;
+            exitReasonCounts.put(key, exitReasonCounts.getOrDefault(key, 0L) + 1L);
+        }
+
+        private String exitReasonDistribution() {
+            StringBuilder builder = new StringBuilder();
+            for (Map.Entry<String, Long> entry : exitReasonCounts.entrySet()) {
+                if (builder.length() > 0) {
+                    builder.append('|');
+                }
+                builder.append(entry.getKey()).append('=').append(entry.getValue());
+            }
+            return builder.toString();
+        }
+
+        private static double adjustedFillPrice(String action, double fillPrice) {
+            if ("BUY".equalsIgnoreCase(action)) {
+                return fillPrice + SIMULATED_SLIPPAGE_PER_SHARE;
+            }
+            if ("SELL".equalsIgnoreCase(action)) {
+                return fillPrice - SIMULATED_SLIPPAGE_PER_SHARE;
+            }
+            return fillPrice;
+        }
+
+        private static String normalizeSide(String side) {
+            String normalized = side == null ? "" : side.trim().toLowerCase(Locale.US);
+            return ("long".equals(normalized) || "short".equals(normalized)) ? normalized : "";
+        }
+
+        private static String formatMarketTime(LocalDateTime marketTime) {
+            return marketTime == null ? "" : marketTime.atZone(MARKET_ZONE).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+        }
+
+        private static String formatEpoch(long epoch) {
+            if (epoch <= 0L) {
+                return "";
+            }
+            return Instant.ofEpochSecond(epoch).atZone(ZoneOffset.UTC).withZoneSameInstant(MARKET_ZONE).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+        }
+
+        private static final class OpenTrade {
+            private String side = "";
+            private int sideSign;
+            private int quantity;
+            private double entryPrice;
+            private String entryTime = "";
+            private double riskPct = 0.0025;
+            private double mfeR;
+            private double maeR;
+            private String setupArmTime = "";
+            private double setupToFillSeconds = Double.NaN;
+            private String entryRoute = "direct_30s";
+            private double entryProbability = Double.NaN;
+            private double entryThreshold = Double.NaN;
+            private double entryThresholdMargin = Double.NaN;
+        }
+
+        private record ConfirmedEntry(String side, long armEpoch, long confirmEpoch, double setupToFillSeconds,
+                                      double probability, double threshold, double thresholdMargin) {}
+
+        private record ClosedTrade(int index, String side, String entryTime, String exitTime, int quantity,
+                                   double entryPrice, double exitPrice, double tradePnl, double realizedR,
+                                   double mfeR, double maeR, String setupArmTime, double setupToFillSeconds,
+                                   String entryRoute, String exitReason, double entryProbability,
+                                   double entryThreshold, double entryThresholdMargin) {}
+
+        private record Summary(long armsTotal, long armsLong, long armsShort, long armConfirmations,
+                               long armExpirations, double armConversionRate, long guardEvaluations,
+                               long guardFires, long lifecycleExits, long hardRiskExits, long eodExits,
+                               double avgSetupToFillSeconds, double avgMfeR, double avgMaeR,
+                               String exitReasonDistribution) {}
     }
 
     private static double parseThreshold(String key, double fallback) {

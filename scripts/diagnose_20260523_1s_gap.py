@@ -4,7 +4,7 @@ import csv
 import os
 import re
 
-ROOT = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+ROOT = Path(os.environ.get('TRADING_AGENT_ROOT', Path(__file__).resolve().parents[1]))
 TD = ROOT / 'training_data'
 CHUNK_ROOT = TD / 'databento_30s_20260523_build_chunks'
 DIRS = {

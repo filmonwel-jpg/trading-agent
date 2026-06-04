@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
-PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 COMPARE_ROOT="${COMPARE_ROOT:-$ROOT/training_data/compare_runs_20260523_meta_ab}"
 VERSIONED_ROUTING_CSV="${ROUTING_CSV:-$ROOT/runtime/databento/model-routing-20260523.csv}"
 CANONICAL_ROUTING_CSV="$ROOT/runtime/databento/model-routing.csv"
@@ -37,8 +38,9 @@ fi
 
 "$PYTHON_BIN" - <<'PY'
 from pathlib import Path
+import os
 import pandas as pd
-root = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+root = Path(os.environ['ROOT'])
 plan = pd.read_csv(root / 'training_data/databento_30s_20260523/symbol_model_plan.csv')
 symbols = sorted(plan['Symbol'].astype(str).str.upper().str.strip().dropna().unique())
 out = root / 'runtime/databento/applied-symbols-20260523.txt'
@@ -64,8 +66,9 @@ cp -p "$THRESHOLD_CSV" "$VERSIONED_THRESHOLD_CSV"
 
 "$PYTHON_BIN" - <<'PY'
 from pathlib import Path
+import os
 import pandas as pd
-root = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+root = Path(os.environ['ROOT'])
 routing = pd.read_csv(root / 'runtime/databento/model-routing.csv')
 thresholds = pd.read_csv(root / 'runtime/databento/bot-thresholds.csv')
 props = sorted((root / 'runtime/databento/bots').glob('trading-*.properties'))

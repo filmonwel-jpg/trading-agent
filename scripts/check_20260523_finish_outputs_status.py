@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 
-ROOT = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+ROOT = Path(os.environ.get('TRADING_AGENT_ROOT', Path(__file__).resolve().parents[1]))
 LOG_DIR = ROOT / 'runtime/logs/finish_20260523_outputs'
 PID_FILE = LOG_DIR / 'finish_from_chunks.pid'
 CAFF_FILE = LOG_DIR / 'finish_from_chunks_caffeinate.pid'
