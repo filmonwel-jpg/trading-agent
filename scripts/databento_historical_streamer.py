@@ -12,10 +12,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-try:
-    import databento as db
-except Exception as exc:  # pragma: no cover
-    raise SystemExit(f"Install databento first: {exc}")
+db: Any | None = None
 
 MARKET_TZ = "America/New_York"
 DBEQ_FILE_RE = re.compile(r".*?(\d{8})\.tbbo\.dbn\.zst$")
@@ -26,6 +23,17 @@ OPRA_SYMBOL_RE = re.compile(r"^([A-Z]+)\s+(\d{6,8})([CP])\d+$")
 def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
     sys.stdout.flush()
+
+
+def require_databento() -> Any:
+    global db
+    if db is None:
+        try:
+            import databento as databento_module
+        except Exception as exc:  # pragma: no cover
+            raise SystemExit(f"Install databento first: {exc}") from exc
+        db = databento_module
+    return db
 
 
 def split_csv(raw: str | Iterable[str]) -> list[str]:
@@ -217,7 +225,8 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
 
 
 def load_equity_events(path: Path, symbols: set[str]) -> list[tuple[int, int, str, dict]]:
-    return equity_events_from_frame(frame_from_store(db.DBNStore.from_file(path)), symbols)
+    databento = require_databento()
+    return equity_events_from_frame(frame_from_store(databento.DBNStore.from_file(path)), symbols)
 
 
 def extract_option_meta(symbol: str) -> tuple[str, str] | None:
@@ -262,7 +271,8 @@ def option_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
 
 
 def load_option_events(path: Path, symbols: set[str]) -> list[tuple[int, int, str, dict]]:
-    return option_events_from_frame(frame_from_store(db.DBNStore.from_file(path)), symbols)
+    databento = require_databento()
+    return option_events_from_frame(frame_from_store(databento.DBNStore.from_file(path)), symbols)
 
 
 def api_option_symbol(symbol: str, stype_in: str) -> str:
@@ -292,7 +302,8 @@ def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
     if args.dry_run:
         return 0
 
-    client = db.Historical(api_key)
+    databento = require_databento()
+    client = databento.Historical(api_key)
     total = 0
     for symbol in sorted(symbols):
         events: list[tuple[int, int, str, dict]] = []

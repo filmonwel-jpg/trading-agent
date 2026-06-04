@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
 DATA_DIR="$ROOT/training_data/databento_30s_20260419"
 PLAN_CSV="$DATA_DIR/symbol_model_plan.csv"
 COMPARE_ROOT="$ROOT/training_data/compare_runs_20260419_meta_ab"
-PYTHON_BIN="/Users/filmonghezehey/miniforge3/bin/python3"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 MODEL_FAMILY="random_forest"
 REGIME_MODEL_FAMILY="random_forest"
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
-PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 INPUT_30S_CSV="${INPUT_30S_CSV:-$ROOT/training_data/databento_30s_20260523}"
 INPUT_5S_CSV="${INPUT_5S_CSV:-$ROOT/training_data/databento_5s_20260523}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT/model_exports/lifecycle_micro_20260523}"

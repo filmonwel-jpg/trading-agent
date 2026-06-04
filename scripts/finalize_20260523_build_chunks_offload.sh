@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
 SRC="$ROOT/training_data/databento_30s_20260523_build_chunks"
 VAULT="/Volumes/DatabentoVault"
 DEST="$VAULT/trading-agent-offload/databento/training_data/databento_30s_20260523_build_chunks"

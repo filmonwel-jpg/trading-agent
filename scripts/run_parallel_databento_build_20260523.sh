@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
-PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 EQUS_DIR="/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9"
 OPRA_DIR="/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD"
 SYMBOLS_FILE="$ROOT/databento_ibkr_bridge/config/symbols_100.txt"
@@ -38,7 +39,8 @@ mkdir -p "$CHUNK_ROOT" "$FINAL_30S_DATA_DIR" "$FINAL_5S_DATA_DIR" "$FINAL_1S_DAT
 
 "$PYTHON_BIN" - <<'PY'
 from pathlib import Path
-root = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+import os
+root = Path(os.environ['ROOT'])
 symbols_file = root / 'databento_ibkr_bridge' / 'config' / 'symbols_100.txt'
 chunk_root = root / 'training_data' / 'databento_30s_20260523_build_chunks'
 chunk_count = int(__import__('os').environ.get('CHUNK_COUNT', '4'))
@@ -98,10 +100,11 @@ fi
 
 "$PYTHON_BIN" - <<'PY'
 from pathlib import Path
+import os
 import pandas as pd
 import shutil
 
-root = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+root = Path(os.environ['ROOT'])
 chunk_root = root / 'training_data' / 'databento_30s_20260523_build_chunks'
 final_dirs = {
     '30s': root / 'training_data' / 'databento_30s_20260523',

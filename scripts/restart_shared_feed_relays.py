@@ -13,7 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BOTS_DIR = REPO_ROOT / "runtime" / "databento" / "bots"
 DEFAULT_ENV_FILE = REPO_ROOT / "runtime" / "databento.env"
-DEFAULT_PYTHON_BIN = "/Users/filmonghezehey/miniforge3/bin/python3"
+DEFAULT_PYTHON_BIN = os.getenv("PYTHON_BIN", "python3")
 
 
 @dataclass

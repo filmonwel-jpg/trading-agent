@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
 FINISH_LOG_DIR="$ROOT/runtime/logs/finish_20260523_outputs"
 FINISH_PID_FILE="$FINISH_LOG_DIR/finish_from_chunks.pid"
 RUN_ID="$(date '+%Y%m%d_%H%M%S')"

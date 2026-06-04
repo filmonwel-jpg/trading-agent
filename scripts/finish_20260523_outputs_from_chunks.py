@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 
-ROOT = Path('/Users/filmonghezehey/trading-agent/worktrees/databento')
+ROOT = Path(os.environ.get('TRADING_AGENT_ROOT', Path(__file__).resolve().parents[1]))
 TRAINING = ROOT / 'training_data'
 CHUNK_ROOT = TRAINING / 'databento_30s_20260523_build_chunks'
 FINAL_DIRS = {

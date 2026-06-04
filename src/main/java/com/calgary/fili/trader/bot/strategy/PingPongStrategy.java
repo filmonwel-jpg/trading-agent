@@ -1,10 +1,10 @@
 package com.calgary.fili.trader.bot.strategy;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.calgary.fili.trader.bot.trader.IBKRTrader;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -13,8 +13,10 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -77,6 +79,27 @@ public class PingPongStrategy implements TradingStrategy {
     private record RegimeDecision(MarketRegime regime, Map<String, Float> probabilityFeatures) {}
 
     private record MicroBar(long epoch, double open, double high, double low, double close, long volume, double wap) {}
+
+    public interface LifecycleTelemetryListener {
+        LifecycleTelemetryListener NOOP = new LifecycleTelemetryListener() {};
+
+        default void onMicroEntryArmed(String symbol, String side, long armEpoch, double setupProbability, double setupThreshold) {}
+
+        default void onMicroEntryArmCleared(String symbol, String side, long armEpoch, String reason) {}
+
+        default void onMicroEntryConfirmed(String symbol, String side, long armEpoch, long confirmEpoch, double probability,
+                                           double threshold, int quantity, double referencePrice) {}
+
+        default void onMicroExitGuardEvaluated(String symbol, String side, long epoch, double probability, double threshold,
+                                               boolean fired) {}
+
+        default void onLifecycleExitEvaluated(String symbol, String side, long epoch, double probability, double threshold,
+                                              boolean fired, double unrealizedR) {}
+
+        default void onHardRiskExit(String symbol, String side, String reason) {}
+
+        default void onEndOfDayExit(String symbol, String side, long epoch, double executionPrice) {}
+    }
 
     public record AiThresholdConfig(
         double baseLongEntryThreshold,
@@ -297,6 +320,7 @@ public class PingPongStrategy implements TradingStrategy {
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
     private static final DateTimeFormatter MARKET_TS_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV");
     private static final Logger log = LoggerFactory.getLogger(PingPongStrategy.class);
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private static final boolean USE_RSI_PRE_GATES = Boolean.parseBoolean(System.getProperty("strategy.useRsiPreGate", "false"));
     private static final double RSI_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiLongExitThreshold", "50.0"));
     private static final double RSI_SHORT_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.rsiShortExitThreshold", "50.0"));
@@ -312,6 +336,7 @@ public class PingPongStrategy implements TradingStrategy {
     private static final boolean UPGRADED_MODEL_ROUTE_REQUIRED = Boolean.parseBoolean(System.getProperty("strategy.model.upgradedRouteRequired", "false"));
     private static final boolean LEGACY_30S_EXIT_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.exit.legacy30sEnabled", "false"));
     private static final boolean LIFECYCLE_EXIT_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.exit.lifecycleEnabled", "false"));
+    private static final boolean LIFECYCLE_DIAGNOSTIC_FALLBACK = Boolean.parseBoolean(System.getProperty("strategy.lifecycle.diagnosticFallback", "false"));
     private static final boolean MICRO_ENTRY_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.entryEnabled", "false"));
     private static final boolean MICRO_EXIT_GUARD_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.exitGuardEnabled", "false"));
     private static final String LIFECYCLE_MODEL_DIR = System.getProperty("strategy.lifecycle.modelDir", "").trim();
@@ -464,6 +489,9 @@ public class PingPongStrategy implements TradingStrategy {
         COMMON_30S_TRAINING_FEATURE_COLUMNS,
         List.of(
             "f_entry_score_proxy",
+            "f_entry_prob",
+            "f_entry_threshold",
+            "f_entry_threshold_margin",
             "f_entry_side_long",
             "f_entry_side_short",
             "f_pos_side",
@@ -478,12 +506,24 @@ public class PingPongStrategy implements TradingStrategy {
     private static final List<String> MICRO_ENTRY_FEATURE_COLUMNS = concatFeatureColumns(
         COMMON_5S_TRAINING_FEATURE_COLUMNS,
         COMMON_30S_TRAINING_FEATURE_COLUMNS,
-        List.of("f_setup_score_proxy", "f_seconds_since_arm")
+        List.of("f_setup_score_proxy", "f_setup_prob", "f_setup_threshold", "f_setup_threshold_margin", "f_seconds_since_arm")
     );
     private static final List<String> MICRO_EXIT_GUARD_FEATURE_COLUMNS = concatFeatureColumns(
         COMMON_5S_TRAINING_FEATURE_COLUMNS,
         COMMON_30S_TRAINING_FEATURE_COLUMNS,
-        List.of("f_pos_side", "f_bars_since_entry_5s", "f_unrealized_pnl_r", "f_mfe_r", "f_mae_r")
+        List.of(
+            "f_entry_score_proxy",
+            "f_entry_prob",
+            "f_entry_threshold",
+            "f_entry_threshold_margin",
+            "f_entry_side_long",
+            "f_entry_side_short",
+            "f_pos_side",
+            "f_bars_since_entry_5s",
+            "f_unrealized_pnl_r",
+            "f_mfe_r",
+            "f_mae_r"
+        )
     );
 
     public record StrategyState(double lastPrice, int tradeCount, boolean enabled, boolean isArmed, boolean isVolatile, double yesterdayClose) {}
@@ -574,6 +614,7 @@ public class PingPongStrategy implements TradingStrategy {
     private volatile double dailyNetPnL = 0.0;
     private volatile double totalNetPnL = 0.0;
     private volatile LocalDateTime currentMarketTime;
+    private volatile LifecycleTelemetryListener lifecycleTelemetryListener = LifecycleTelemetryListener.NOOP;
 
     private long lastOrderSubmitTime = 0;
     private int pendingOrderId = -1;
@@ -683,10 +724,19 @@ public class PingPongStrategy implements TradingStrategy {
     private boolean microLongEntryArmed = false;
     private boolean microShortEntryArmed = false;
     private long microArmEpoch = 0L;
+    private double armedSetupProbability = 0.0;
+    private double armedSetupThreshold = 0.0;
+    private double armedSetupThresholdMargin = 0.0;
     private Map<String, Float> armed30sFeatureValues = new HashMap<>();
 
     private long positionEntryEpoch = 0L;
     private double positionEntryPrice = 0.0;
+    private double pendingEntryProbability = 0.0;
+    private double pendingEntryThreshold = 0.0;
+    private double pendingEntryThresholdMargin = 0.0;
+    private double positionEntryProbability = 0.0;
+    private double positionEntryThreshold = 0.0;
+    private double positionEntryThresholdMargin = 0.0;
     private int positionEntrySide = 0;
     private int barsSincePositionEntry30s = 0;
     private int barsSincePositionEntry5s = 0;
@@ -920,9 +970,19 @@ public class PingPongStrategy implements TradingStrategy {
         this.shortMicroEntryAi = loadUpgradedRouteModel("short_micro_entry_5s.onnx", microModelDir, MICRO_ENTRY_ENABLED, "5s short micro entry");
         this.longMicroExitGuardAi = loadUpgradedRouteModel("long_micro_exit_guard_5s.onnx", microModelDir, MICRO_EXIT_GUARD_ENABLED, "5s long micro exit guard");
         this.shortMicroExitGuardAi = loadUpgradedRouteModel("short_micro_exit_guard_5s.onnx", microModelDir, MICRO_EXIT_GUARD_ENABLED, "5s short micro exit guard");
+        validateUpgradedRouteManifest(lifecycleModelDir, microModelDir);
 
         if (LIFECYCLE_EXIT_ENABLED && (this.longExitLifecycleAi == null || this.shortExitLifecycleAi == null)) {
-            flowError("AI.ROUTE", "Lifecycle exit enabled but lifecycle exit model is missing; forcing CHOPPY/default routing with hard risk exits symbol=" + symbol);
+            if (LIFECYCLE_DIAGNOSTIC_FALLBACK) {
+                flowWarn("AI.ROUTE", "WARNING lifecycle exit enabled but lifecycle model is missing; explicit diagnostic hard-risk-only fallback active symbol=" + symbol + " resultsNotPromotable=true");
+            } else {
+                invalidateUpgradedRoute("missing lifecycle exit model while strategy.exit.lifecycleEnabled=true and strategy.lifecycle.diagnosticFallback=false");
+            }
+        }
+
+        if (lifecycleMicroRouteActive() && !upgradedModelRouteValid) {
+            this.allowNewEntries = false;
+            flowError("AI.ROUTE", "Upgraded lifecycle/micro route invalid; new entries disabled for symbol=" + symbol);
         }
 
         if (UPGRADED_MODEL_ROUTE_REQUIRED && !upgradedModelRouteValid) {
@@ -955,20 +1015,174 @@ public class PingPongStrategy implements TradingStrategy {
         if (!activeMode && !UPGRADED_MODEL_ROUTE_REQUIRED) {
             return null;
         }
-        if (UPGRADED_MODEL_ROUTE_REQUIRED || activeMode) {
-            try {
-                LazyAiPredictor predictor = LazyAiPredictor.eager(modelName, modelDir);
-                flowInfo("AI.ROUTE", "Loaded upgraded route model symbol=" + symbol + " route=" + routeName + " model=" + modelName);
-                return predictor;
-            } catch (Exception exception) {
-                if (!routeName.startsWith("lifecycle ")) {
-                    upgradedModelRouteValid = false;
-                }
+        try {
+            LazyAiPredictor predictor = LazyAiPredictor.eager(modelName, modelDir);
+            flowInfo("AI.ROUTE", "Loaded upgraded route model symbol=" + symbol + " route=" + routeName + " model=" + modelName);
+            return predictor;
+        } catch (Exception exception) {
+            boolean lifecycleModel = routeName.startsWith("lifecycle ");
+            boolean diagnosticLifecycleFallback = lifecycleModel && activeMode && LIFECYCLE_DIAGNOSTIC_FALLBACK && !UPGRADED_MODEL_ROUTE_REQUIRED;
+            if (diagnosticLifecycleFallback) {
+                flowWarn("AI.ROUTE", "Lifecycle model unavailable under explicit diagnostic fallback symbol=" + symbol + " route=" + routeName + " model=" + modelName + " reason=" + exception.getMessage());
+            } else {
+                upgradedModelRouteValid = false;
                 flowError("AI.ROUTE", "Missing required upgraded route model symbol=" + symbol + " route=" + routeName + " model=" + modelName + " reason=" + exception.getMessage());
-                return null;
+            }
+            return null;
+        }
+    }
+
+    private boolean lifecycleMicroRouteActive() {
+        return UPGRADED_MODEL_ROUTE_REQUIRED || LIFECYCLE_EXIT_ENABLED || MICRO_ENTRY_ENABLED || MICRO_EXIT_GUARD_ENABLED;
+    }
+
+    private void validateUpgradedRouteManifest(String lifecycleModelDir, String microModelDir) {
+        if (!lifecycleMicroRouteActive()) {
+            return;
+        }
+        Map<String, List<String>> expectedSchemas = expectedUpgradedRouteSchemas();
+        if (expectedSchemas.isEmpty()) {
+            return;
+        }
+        if (sameModelDir(lifecycleModelDir, microModelDir)) {
+            validateUpgradedRouteManifestRows(lifecycleModelDir, expectedSchemas);
+            return;
+        }
+        Map<String, List<String>> lifecycleSchemas = new LinkedHashMap<>();
+        Map<String, List<String>> microSchemas = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> expected : expectedSchemas.entrySet()) {
+            if (expected.getKey().contains("Lifecycle")) {
+                lifecycleSchemas.put(expected.getKey(), expected.getValue());
+            } else {
+                microSchemas.put(expected.getKey(), expected.getValue());
             }
         }
-        return LazyAiPredictor.lazy(modelName, modelDir, "Upgraded route model unavailable route=" + routeName + ".");
+        validateUpgradedRouteManifestRows(lifecycleModelDir, lifecycleSchemas);
+        if (upgradedModelRouteValid) {
+            validateUpgradedRouteManifestRows(microModelDir, microSchemas);
+        }
+    }
+
+    private boolean sameModelDir(String left, String right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return new File(left).getAbsoluteFile().equals(new File(right).getAbsoluteFile());
+    }
+
+    private void validateUpgradedRouteManifestRows(String modelDir, Map<String, List<String>> expectedSchemas) {
+        if (expectedSchemas.isEmpty()) {
+            return;
+        }
+        if (modelDir == null || modelDir.isBlank()) {
+            invalidateUpgradedRoute("missing lifecycle/micro model directory for route manifest validation");
+            return;
+        }
+        File manifest = new File(modelDir, "lifecycle_micro_route_manifest.json");
+        if (!manifest.isFile()) {
+            invalidateUpgradedRoute("missing lifecycle_micro_route_manifest.json under " + modelDir);
+            return;
+        }
+        try {
+            List<Map<String, Object>> rows = JSON_MAPPER.readValue(manifest, new TypeReference<List<Map<String, Object>>>() {});
+            Map<String, Map<String, Object>> rowByModel = new HashMap<>();
+            for (Map<String, Object> row : rows) {
+                Object modelName = row.get("model");
+                if (modelName instanceof String name && !name.isBlank()) {
+                    rowByModel.put(name, row);
+                }
+            }
+            for (Map.Entry<String, List<String>> expected : expectedSchemas.entrySet()) {
+                validateManifestSchemaRow(rowByModel.get(expected.getKey()), expected.getKey(), expected.getValue());
+                if (!upgradedModelRouteValid) {
+                    return;
+                }
+            }
+            flowInfo("AI.ROUTE", "Validated lifecycle/micro route manifest schema symbol=" + symbol + " manifest=" + manifest.getAbsolutePath());
+        } catch (Exception exception) {
+            invalidateUpgradedRoute("failed to read/validate lifecycle_micro_route_manifest.json reason=" + exception.getMessage());
+        }
+    }
+
+    private Map<String, List<String>> expectedUpgradedRouteSchemas() {
+        Map<String, List<String>> expected = new LinkedHashMap<>();
+        if (UPGRADED_MODEL_ROUTE_REQUIRED || (LIFECYCLE_EXIT_ENABLED && !LIFECYCLE_DIAGNOSTIC_FALLBACK)) {
+            expected.put("longExitLifecycleAi", LIFECYCLE_FEATURE_COLUMNS);
+            expected.put("shortExitLifecycleAi", LIFECYCLE_FEATURE_COLUMNS);
+        }
+        if (UPGRADED_MODEL_ROUTE_REQUIRED || MICRO_ENTRY_ENABLED) {
+            expected.put("longMicroEntryAi", MICRO_ENTRY_FEATURE_COLUMNS);
+            expected.put("shortMicroEntryAi", MICRO_ENTRY_FEATURE_COLUMNS);
+        }
+        if (UPGRADED_MODEL_ROUTE_REQUIRED || MICRO_EXIT_GUARD_ENABLED) {
+            expected.put("longMicroExitGuardAi", MICRO_EXIT_GUARD_FEATURE_COLUMNS);
+            expected.put("shortMicroExitGuardAi", MICRO_EXIT_GUARD_FEATURE_COLUMNS);
+        }
+        return expected;
+    }
+
+    private void validateManifestSchemaRow(Map<String, Object> row, String modelName, List<String> expectedColumns) {
+        if (row == null) {
+            invalidateUpgradedRoute("route manifest missing model=" + modelName);
+            return;
+        }
+        Object rawColumns = row.get("feature_columns");
+        if (!(rawColumns instanceof List<?> rawColumnList)) {
+            invalidateUpgradedRoute("route manifest model=" + modelName + " missing feature_columns list");
+            return;
+        }
+        List<String> actualColumns = rawColumnList.stream().map(Object::toString).toList();
+        if (!actualColumns.equals(expectedColumns)) {
+            invalidateUpgradedRoute("route manifest feature_columns mismatch model=" + modelName + " " + firstSchemaDifference(actualColumns, expectedColumns));
+            return;
+        }
+        Object rawCount = row.get("feature_count");
+        int actualCount = rawCount instanceof Number number ? number.intValue() : actualColumns.size();
+        if (actualCount != expectedColumns.size()) {
+            invalidateUpgradedRoute("route manifest feature_count mismatch model=" + modelName + " actual=" + actualCount + " expected=" + expectedColumns.size());
+            return;
+        }
+        Object rawHash = row.get("feature_schema_sha256");
+        if (!(rawHash instanceof String actualHash) || actualHash.isBlank()) {
+            invalidateUpgradedRoute("route manifest model=" + modelName + " missing feature_schema_sha256");
+            return;
+        }
+        String expectedHash = featureSchemaHash(expectedColumns);
+        if (!expectedHash.equalsIgnoreCase(actualHash.trim())) {
+            invalidateUpgradedRoute("route manifest feature_schema_sha256 mismatch model=" + modelName + " actual=" + actualHash + " expected=" + expectedHash);
+        }
+    }
+
+    private String firstSchemaDifference(List<String> actualColumns, List<String> expectedColumns) {
+        int common = Math.min(actualColumns.size(), expectedColumns.size());
+        for (int i = 0; i < common; i++) {
+            String actual = actualColumns.get(i);
+            String expected = expectedColumns.get(i);
+            if (!actual.equals(expected)) {
+                return "index=" + i + " actual=" + actual + " expected=" + expected;
+            }
+        }
+        return "actualSize=" + actualColumns.size() + " expectedSize=" + expectedColumns.size();
+    }
+
+    private void invalidateUpgradedRoute(String reason) {
+        upgradedModelRouteValid = false;
+        allowNewEntries = false;
+        flowError("AI.ROUTE", "FATAL upgraded lifecycle/micro route invalid; new entries disabled symbol=" + symbol + " reason=" + reason);
+    }
+
+    private static String featureSchemaHash(List<String> columns) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(String.join("\n", columns).getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                out.append(String.format(Locale.ROOT, "%02x", b));
+            }
+            return out.toString();
+        } catch (Exception exception) {
+            throw new IllegalStateException("Unable to compute feature schema hash", exception);
+        }
     }
 
     private LazyAiPredictor modelForRegime(MarketRegime regime, LazyAiPredictor baseModel, LazyAiPredictor choppyModel, LazyAiPredictor trendModel, LazyAiPredictor volatileModel) {
@@ -1113,6 +1327,18 @@ public class PingPongStrategy implements TradingStrategy {
         flowData("AI.CONFIG", "symbol=" + symbol + " thresholds " + normalized.summary());
     }
 
+    public void setLifecycleTelemetryListener(LifecycleTelemetryListener listener) {
+        this.lifecycleTelemetryListener = listener == null ? LifecycleTelemetryListener.NOOP : listener;
+    }
+
+    private void emitLifecycleTelemetry(Runnable callback) {
+        try {
+            callback.run();
+        } catch (Exception exception) {
+            flowWarn("BACKTEST.TELEMETRY", "Lifecycle telemetry callback failed symbol=" + symbol + " reason=" + exception.getMessage());
+        }
+    }
+
     private double clampProbability(double threshold, double fallback) {
         if (Double.isNaN(threshold) || Double.isInfinite(threshold)) {
             return fallback;
@@ -1233,6 +1459,12 @@ public class PingPongStrategy implements TradingStrategy {
             this.avgEntryPrice = avgCost; // Official IBKR entry price for stop-loss
             if (positionEntryPrice <= 0.0 || positionEntrySide != Integer.signum(newPosition)) {
                 positionEntryPrice = avgCost;
+                positionEntryProbability = pendingEntryProbability;
+                positionEntryThreshold = pendingEntryThreshold;
+                positionEntryThresholdMargin = pendingEntryThresholdMargin;
+                pendingEntryProbability = 0.0;
+                pendingEntryThreshold = 0.0;
+                pendingEntryThresholdMargin = 0.0;
                 positionEntrySide = Integer.signum(newPosition);
                 positionEntryEpoch = currentMarketTime == null ? 0L : currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
                 barsSincePositionEntry30s = 0;
@@ -1243,6 +1475,12 @@ public class PingPongStrategy implements TradingStrategy {
         } else if (newPosition == 0) {
             this.avgEntryPrice = 0.0;
             positionEntryPrice = 0.0;
+            pendingEntryProbability = 0.0;
+            pendingEntryThreshold = 0.0;
+            pendingEntryThresholdMargin = 0.0;
+            positionEntryProbability = 0.0;
+            positionEntryThreshold = 0.0;
+            positionEntryThresholdMargin = 0.0;
             positionEntrySide = 0;
             positionEntryEpoch = 0L;
             barsSincePositionEntry30s = 0;
@@ -1404,6 +1642,8 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("STRATEGY.RISK", "DAILY_DRAWDOWN_WITHIN_LIMIT", false, "symbol=" + symbol + " source=" + source + " dailyNetPnL=" + currentDailyPnL + " limit=" + (-maxDailyDrawdown));
             String action = (position > 0) ? "SELL" : "BUY";
             double executionPrice = priceForAction(action, executionFallbackPrice);
+            String side = position > 0 ? "long" : "short";
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onHardRiskExit(symbol, side, "daily_drawdown"));
             this.inFlightOrder = true;
             parent.placeTrade(symbol, action, executionPrice, Math.abs(position), "MKT");
             return;
@@ -1421,6 +1661,7 @@ public class PingPongStrategy implements TradingStrategy {
         if (position > 0 && longStopProbePrice > 0.0 && longStopProbePrice <= longStopThreshold) {
             flowCondition("STRATEGY.STOP", "LONG_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + longStopProbePrice + " threshold=" + longStopThreshold);
             recordHardStopExit("LONG", source);
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onHardRiskExit(symbol, "long", "hard_stop_" + source));
             this.inFlightOrder = true;
             parent.placeTrade(symbol, "SELL", priceForAction("SELL", executionFallbackPrice), Math.abs(position), "MKT");
             return;
@@ -1428,6 +1669,7 @@ public class PingPongStrategy implements TradingStrategy {
         if (position < 0 && shortStopProbePrice > 0.0 && shortStopProbePrice >= shortStopThreshold) {
             flowCondition("STRATEGY.STOP", "SHORT_HARD_STOP_TRIGGER", true, "symbol=" + symbol + " source=" + source + " probePrice=" + shortStopProbePrice + " threshold=" + shortStopThreshold);
             recordHardStopExit("SHORT", source);
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onHardRiskExit(symbol, "short", "hard_stop_" + source));
             this.inFlightOrder = true;
             parent.placeTrade(symbol, "BUY", priceForAction("BUY", executionFallbackPrice), Math.abs(position), "MKT");
             return;
@@ -1619,7 +1861,10 @@ public class PingPongStrategy implements TradingStrategy {
         }
         Map<String, Float> features = new LinkedHashMap<>(microFeatures);
         features.putAll(armed30sFeatureValues);
-        features.put("f_setup_score_proxy", 1.0f);
+        features.put("f_setup_score_proxy", (float) armedSetupProbability);
+        features.put("f_setup_prob", (float) armedSetupProbability);
+        features.put("f_setup_threshold", (float) armedSetupThreshold);
+        features.put("f_setup_threshold_margin", (float) armedSetupThresholdMargin);
         features.put("f_seconds_since_arm", (float) secondsSinceArm);
 
         if (microLongEntryArmed && longMicroEntryAi != null && longMicroEntryAi.isAvailable()) {
@@ -1629,6 +1874,11 @@ public class PingPongStrategy implements TradingStrategy {
             if (pass) {
                 int qty = sharesForAmount("BUY", microBar.close());
                 if (qty > 0) {
+                    pendingEntryProbability = armedSetupProbability;
+                    pendingEntryThreshold = armedSetupThreshold;
+                    pendingEntryThresholdMargin = armedSetupThresholdMargin;
+                    long confirmedArmEpoch = microArmEpoch;
+                    emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "long", confirmedArmEpoch, microBar.epoch(), prob, MICRO_LONG_ENTRY_THRESHOLD, qty, microBar.close()));
                     clearMicroEntryArms("long-confirmed");
                     this.inFlightOrder = true;
                     parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), qty, "FAST_LMT");
@@ -1644,6 +1894,11 @@ public class PingPongStrategy implements TradingStrategy {
             if (pass) {
                 int qty = sharesForAmount("SELL", microBar.close());
                 if (qty > 0) {
+                    pendingEntryProbability = armedSetupProbability;
+                    pendingEntryThreshold = armedSetupThreshold;
+                    pendingEntryThresholdMargin = armedSetupThresholdMargin;
+                    long confirmedArmEpoch = microArmEpoch;
+                    emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "short", confirmedArmEpoch, microBar.epoch(), prob, MICRO_SHORT_ENTRY_THRESHOLD, qty, microBar.close()));
                     clearMicroEntryArms("short-confirmed");
                     this.inFlightOrder = true;
                     parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), qty, "FAST_LMT");
@@ -1665,6 +1920,7 @@ public class PingPongStrategy implements TradingStrategy {
             double prob = longMicroExitGuardAi.predictProbability(buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
             boolean shouldExit = prob >= MICRO_LONG_EXIT_GUARD_THRESHOLD;
             flowCondition("AI.MICRO.LONG.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_LONG_EXIT_GUARD_THRESHOLD));
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroExitGuardEvaluated(symbol, "long", microBar.epoch(), prob, MICRO_LONG_EXIT_GUARD_THRESHOLD, shouldExit));
             if (shouldExit) {
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), Math.abs(currentPosition), "MKT");
@@ -1673,6 +1929,7 @@ public class PingPongStrategy implements TradingStrategy {
             double prob = shortMicroExitGuardAi.predictProbability(buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
             boolean shouldExit = prob >= MICRO_SHORT_EXIT_GUARD_THRESHOLD;
             flowCondition("AI.MICRO.SHORT.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_SHORT_EXIT_GUARD_THRESHOLD));
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroExitGuardEvaluated(symbol, "short", microBar.epoch(), prob, MICRO_SHORT_EXIT_GUARD_THRESHOLD, shouldExit));
             if (shouldExit) {
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), Math.abs(currentPosition), "MKT");
@@ -1719,12 +1976,16 @@ public class PingPongStrategy implements TradingStrategy {
         return previous > 0.0 ? (current / previous) - 1.0 : 0.0;
     }
 
-    private void armMicroEntry(String side, Map<String, Float> contextFeatures, long armEpoch) {
+    private void armMicroEntry(String side, Map<String, Float> contextFeatures, long armEpoch, double setupProb, double setupThreshold) {
         armed30sFeatureValues = new HashMap<>(contextFeatures);
         microArmEpoch = armEpoch;
+        armedSetupProbability = setupProb;
+        armedSetupThreshold = setupThreshold;
+        armedSetupThresholdMargin = setupProb - setupThreshold;
         microLongEntryArmed = "long".equalsIgnoreCase(side);
         microShortEntryArmed = "short".equalsIgnoreCase(side);
-        flowInfo("AI.MICRO.ENTRY", "Armed " + side + " micro-entry symbol=" + symbol + " epoch=" + armEpoch + " ttlSeconds=" + MICRO_ARM_TTL_SECONDS);
+        flowInfo("AI.MICRO.ENTRY", "Armed " + side + " micro-entry symbol=" + symbol + " epoch=" + armEpoch + " ttlSeconds=" + MICRO_ARM_TTL_SECONDS + " setupProb=" + formatProb(setupProb));
+        emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryArmed(symbol, side == null ? "" : side.toLowerCase(Locale.US), armEpoch, setupProb, setupThreshold));
     }
 
     private long currentMicroArmEpoch() {
@@ -1741,12 +2002,20 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private void clearMicroEntryArms(String reason) {
-        if (microLongEntryArmed || microShortEntryArmed) {
+        boolean wasLongArmed = microLongEntryArmed;
+        boolean wasShortArmed = microShortEntryArmed;
+        long clearedArmEpoch = microArmEpoch;
+        if (wasLongArmed || wasShortArmed) {
             flowInfo("AI.MICRO.ENTRY", "Cleared micro-entry arms symbol=" + symbol + " reason=" + reason);
+            String side = wasLongArmed ? "long" : (wasShortArmed ? "short" : "");
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryArmCleared(symbol, side, clearedArmEpoch, reason));
         }
         microLongEntryArmed = false;
         microShortEntryArmed = false;
         microArmEpoch = 0L;
+        armedSetupProbability = 0.0;
+        armedSetupThreshold = 0.0;
+        armedSetupThresholdMargin = 0.0;
         armed30sFeatureValues = new HashMap<>();
     }
 
@@ -1780,7 +2049,7 @@ public class PingPongStrategy implements TradingStrategy {
             ">>> [30s BUCKET] epoch=%d ohlc=%.2f/%.2f/%.2f/%.2f vol=%d vwap=%.4f%n",
             finalizedBucketStart, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap
         );
-        current30sAiDecisionEpoch = latestSourceBarEpoch > 0L ? latestSourceBarEpoch : finalizedBucketStart + 30L;
+        current30sAiDecisionEpoch = finalizedBucketStart + 30L;
         process30SecondBar(finalizedBucketStart, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap);
         lastFinalizedBucketStartEpoch = finalizedBucketStart;
 
@@ -2146,13 +2415,19 @@ public class PingPongStrategy implements TradingStrategy {
             shouldExit,
             "symbol=" + symbol + " side=" + side + " prob=" + formatProb(prob) + " threshold=" + formatProb(threshold) + " unrealizedR=" + features.getOrDefault("f_unrealized_pnl_r", 0.0f)
         );
+        float unrealizedR = features.getOrDefault("f_unrealized_pnl_r", 0.0f);
+        long epoch = currentMarketTime == null ? 0L : currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
+        emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onLifecycleExitEvaluated(symbol, side, epoch, prob, threshold, shouldExit, unrealizedR));
         return shouldExit;
     }
 
     private Map<String, Float> positionFeatureValues(double referencePrice, boolean lifecycleCadence) {
         Map<String, Float> values = new HashMap<>();
         double unrealizedR = unrealizedR(referencePrice);
-        values.put("f_entry_score_proxy", 1.0f);
+        values.put("f_entry_score_proxy", (float) positionEntryProbability);
+        values.put("f_entry_prob", (float) positionEntryProbability);
+        values.put("f_entry_threshold", (float) positionEntryThreshold);
+        values.put("f_entry_threshold_margin", (float) positionEntryThresholdMargin);
         values.put("f_entry_side_long", positionEntrySide > 0 ? 1.0f : 0.0f);
         values.put("f_entry_side_short", positionEntrySide < 0 ? 1.0f : 0.0f);
         values.put("f_pos_side", positionEntrySide > 0 ? 1.0f : -1.0f);
@@ -2410,9 +2685,10 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.LONG.ENTRY", "RSI_PRE_GATE", longRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + longThreshold);
             flowCondition("AI.LONG.ENTRY", "MODEL_AVAILABLE", longModelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldEnterLong = false;
+            double longEntryProb = 0.0;
             if (longRsiGate && longModelReady) {
-                double prob = activeLongEntryAi.predictProbability(longEntryFeatures);
-                shouldEnterLong = prob >= activeLongEntryThreshold;
+                longEntryProb = activeLongEntryAi.predictProbability(longEntryFeatures);
+                shouldEnterLong = longEntryProb >= activeLongEntryThreshold;
                 flowCondition(
                     "AI.LONG.ENTRY",
                     "AI_PREDICTS_ENTRY",
@@ -2421,16 +2697,19 @@ public class PingPongStrategy implements TradingStrategy {
                         + " rsi=" + currentRsi
                             + " askOrFallback=" + buyReferencePrice
                             + " qty=" + buyQty
-                        + " prob=" + formatProb(prob)
+                        + " prob=" + formatProb(longEntryProb)
                         + " threshold=" + formatProb(activeLongEntryThreshold)
                 );
             }
             if (shouldEnterLong && buyQty > 0) {
                 if (MICRO_ENTRY_ENABLED) {
-                    armMicroEntry("long", lastTraining30sFeatureValues, currentMicroArmEpoch());
+                    armMicroEntry("long", lastTraining30sFeatureValues, currentMicroArmEpoch(), longEntryProb, activeLongEntryThreshold);
                     return;
                 }
                 flowInfo("AI.LONG.ENTRY", "Dip buyer firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
+                pendingEntryProbability = longEntryProb;
+                pendingEntryThreshold = activeLongEntryThreshold;
+                pendingEntryThresholdMargin = longEntryProb - activeLongEntryThreshold;
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "BUY", buyReferencePrice, buyQty, "FAST_LMT");
                 return;
@@ -2443,9 +2722,10 @@ public class PingPongStrategy implements TradingStrategy {
             flowCondition("AI.SHORT.ENTRY", "RSI_PRE_GATE", shortRsiGate, "symbol=" + symbol + " enabled=" + USE_RSI_PRE_GATES + " rsi=" + currentRsi + " threshold=" + shortThreshold);
             flowCondition("AI.SHORT.ENTRY", "MODEL_AVAILABLE", shortModelReady, "symbol=" + symbol + " regime=" + activeRegime);
             boolean shouldEnterShort = false;
+            double shortEntryProb = 0.0;
             if (shortRsiGate && shortModelReady) {
-                double prob = activeShortEntryAi.predictProbability(shortEntryFeatures);
-                shouldEnterShort = prob >= activeShortEntryThreshold;
+                shortEntryProb = activeShortEntryAi.predictProbability(shortEntryFeatures);
+                shouldEnterShort = shortEntryProb >= activeShortEntryThreshold;
                 flowCondition(
                     "AI.SHORT.ENTRY",
                     "AI_PREDICTS_ENTRY",
@@ -2454,16 +2734,19 @@ public class PingPongStrategy implements TradingStrategy {
                         + " rsi=" + currentRsi
                             + " bidOrFallback=" + sellReferencePrice
                             + " qty=" + sellQty
-                        + " prob=" + formatProb(prob)
+                        + " prob=" + formatProb(shortEntryProb)
                         + " threshold=" + formatProb(activeShortEntryThreshold)
                 );
             }
             if (shouldEnterShort && sellQty > 0) {
                 if (MICRO_ENTRY_ENABLED) {
-                    armMicroEntry("short", lastTraining30sFeatureValues, currentMicroArmEpoch());
+                    armMicroEntry("short", lastTraining30sFeatureValues, currentMicroArmEpoch(), shortEntryProb, activeShortEntryThreshold);
                     return;
                 }
                 flowInfo("AI.SHORT.ENTRY", "Rip seller firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
+                pendingEntryProbability = shortEntryProb;
+                pendingEntryThreshold = activeShortEntryThreshold;
+                pendingEntryThresholdMargin = shortEntryProb - activeShortEntryThreshold;
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "SELL", sellReferencePrice, sellQty, "FAST_LMT");
             }
@@ -2783,6 +3066,12 @@ public class PingPongStrategy implements TradingStrategy {
             avgEntryPrice = avgFillPrice + penalty;
             if (prevAbsPos == 0 || Integer.signum(prevPosition) != Integer.signum(newPos)) {
                 positionEntryPrice = avgEntryPrice;
+                positionEntryProbability = pendingEntryProbability;
+                positionEntryThreshold = pendingEntryThreshold;
+                positionEntryThresholdMargin = pendingEntryThresholdMargin;
+                pendingEntryProbability = 0.0;
+                pendingEntryThreshold = 0.0;
+                pendingEntryThresholdMargin = 0.0;
                 positionEntrySide = Integer.signum(newPos);
                 positionEntryEpoch = currentMarketTime == null ? 0L : currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
                 barsSincePositionEntry30s = 0;
@@ -2810,6 +3099,12 @@ public class PingPongStrategy implements TradingStrategy {
         if (newPos == 0) {
             avgEntryPrice = 0.0;
             positionEntryPrice = 0.0;
+            pendingEntryProbability = 0.0;
+            pendingEntryThreshold = 0.0;
+            pendingEntryThresholdMargin = 0.0;
+            positionEntryProbability = 0.0;
+            positionEntryThreshold = 0.0;
+            positionEntryThresholdMargin = 0.0;
             positionEntrySide = 0;
             positionEntryEpoch = 0L;
             barsSincePositionEntry30s = 0;
@@ -2894,6 +3189,9 @@ public class PingPongStrategy implements TradingStrategy {
         flowCondition("STRATEGY.EOD", "FLATTEN_GATE", flattenGate, "symbol=" + symbol + " position=" + position + " inFlight=" + inFlightOrder + " executionPrice=" + executionPrice);
         if (!flattenGate) return;
         flowInfo("STRATEGY.EOD", "Closing position size=" + Math.abs(position) + " symbol=" + symbol + " price=" + executionPrice);
+        String side = position > 0 ? "long" : "short";
+        long epoch = currentMarketTime == null ? 0L : currentMarketTime.atZone(MARKET_ZONE).toEpochSecond();
+        emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onEndOfDayExit(symbol, side, epoch, executionPrice));
         this.inFlightOrder = true;
         parent.placeTrade(symbol, action, executionPrice, Math.abs(position), "MKT");
     }
@@ -3089,6 +3387,10 @@ public class PingPongStrategy implements TradingStrategy {
 
     private void flowInfo(String stage, String message) {
         log.info(">>> [FLOW][INFO][{}] {}", stage, message);
+    }
+
+    private void flowWarn(String stage, String message) {
+        log.warn(">>> [FLOW][WARN][{}] {}", stage, message);
     }
 
     private boolean isTickerLevelStage(String stage) {

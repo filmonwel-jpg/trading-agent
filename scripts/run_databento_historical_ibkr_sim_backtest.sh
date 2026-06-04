@@ -12,14 +12,17 @@ END_DATE="${END_DATE:-}"
 OUTPUT_DIR="${BACKTEST_OUTPUT_DIR:-runtime/backtests}"
 MODEL_DIR="${MODEL_DIR:-}"
 PYTHON_BIN="${PYTHON_BIN:-${DATABENTO_PYTHON_BIN:-}}"
-DATABENTO_ENV_FILE="${BACKTEST_DATABENTO_ENV_FILE:-${TRADING_DATABENTO_ENV_FILE:-runtime/databento.env}}"
+DEFAULT_DATABENTO_ENV_FILE="runtime/databento.env"
+DATABENTO_ENV_FILE="${BACKTEST_DATABENTO_ENV_FILE:-${TRADING_DATABENTO_ENV_FILE:-}}"
+DATABENTO_API_KEY_SOURCE="environment"
+BRIDGE_DATABENTO_ENV_FILE="databento_ibkr_bridge/.env"
 DRY_RUN="${DRY_RUN:-false}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 BACKTEST_MAX_TRADES="${BACKTEST_MAX_TRADES:-2000}"
 BACKTEST_MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-500}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 ROUTING_CSV="${TRADING_DATABENTO_MODEL_ROUTING_CSV:-runtime/databento/model-routing.csv}"
-CLASSPATH_FILE="runtime/backtests/databento_ibkr_sim_backtest_cp.txt"
+CLASSPATH_FILE="${BACKTEST_CLASSPATH_FILE:-runtime/backtests/databento_ibkr_sim_backtest_cp.txt}"
 LIFECYCLE_MICRO_ENABLED="${TRADING_LIFECYCLE_MICRO_ENABLED:-true}"
 LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-model_exports/lifecycle_micro_20260523}"
 
@@ -46,6 +49,7 @@ Options:
   --max-share-cap N        Simulated broker max shares per order. Default: 500
   --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: model_exports/lifecycle_micro_20260523
   --disable-lifecycle-micro Disable lifecycle exit and 5s micro entry/exit guard routes.
+  --classpath-file FILE    Maven runtime classpath cache. Default: runtime/backtests/databento_ibkr_sim_backtest_cp.txt
   --skip-build             Reuse target/classes and the cached Maven classpath.
   --help                   Show this help.
 
@@ -151,6 +155,109 @@ load_env_file() {
   done < "$path"
 }
 
+get_prop() {
+  local key="$1" file="$2"
+  [[ -f "$file" ]] || return 0
+  awk -F= -v search_key="$key" '
+    /^[[:space:]]*#/ {next}
+    /^[[:space:]]*$/ {next}
+    $1 ~ /^[[:space:]]*[^=]+[[:space:]]*$/ {
+      current=$1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", current)
+      if (current == search_key) {
+        value=substr($0, index($0, "=") + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        found=value
+      }
+    }
+    END {if (found != "") print found}
+  ' "$file"
+}
+
+configured_databento_env_file() {
+  local symbol="$1" lower_symbol prop
+  lower_symbol="$(printf '%s' "$symbol" | tr '[:upper:]' '[:lower:]')"
+  prop="$(get_prop trading.databento.env-file "$ROOT/runtime/databento/bots/trading-${lower_symbol}.properties" || true)"
+  if [[ -n "$prop" ]]; then
+    printf '%s' "$prop"
+    return 0
+  fi
+  prop="$(get_prop trading.databento.env-file "$ROOT/src/main/resources/application.properties" || true)"
+  if [[ -n "$prop" ]]; then
+    printf '%s' "$prop"
+    return 0
+  fi
+  printf '%s' "$DEFAULT_DATABENTO_ENV_FILE"
+}
+
+load_launchctl_databento_key() {
+  local value
+  command -v launchctl >/dev/null 2>&1 || return 1
+  value="$(launchctl getenv DATABENTO_API_KEY 2>/dev/null || true)"
+  if usable_databento_key "$value"; then
+    export DATABENTO_API_KEY="$value"
+    return 0
+  fi
+  return 1
+}
+
+load_application_databento_credentials() {
+  local app_props="$ROOT/src/main/resources/application.properties"
+  local api_key api_userid trimmed_userid
+  [[ -f "$app_props" ]] || return 1
+  api_key="$(get_prop trading.databento.api.key "$app_props" || true)"
+  api_userid="$(get_prop trading.databento.api.userid "$app_props" || true)"
+  if ! usable_databento_key "$api_key"; then
+    return 1
+  fi
+  export DATABENTO_API_KEY="$api_key"
+  trimmed_userid="$(trim "$api_userid")"
+  if [[ -n "$trimmed_userid" ]]; then
+    export DATABENTO_API_USERID="$trimmed_userid"
+    export DATABENTO_USERID="$trimmed_userid"
+  fi
+  return 0
+}
+
+configure_python_ca_bundle() {
+  local existing_bundle ca_dir ca_bundle tmp_bundle certifi_bundle keychain
+  existing_bundle="${REQUESTS_CA_BUNDLE:-${SSL_CERT_FILE:-}}"
+  if [[ -n "$existing_bundle" && -f "$existing_bundle" ]]; then
+    export REQUESTS_CA_BUNDLE="$existing_bundle"
+    export SSL_CERT_FILE="$existing_bundle"
+    export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-$existing_bundle}"
+    printf '[BACKTEST] python_ca_bundle=%s\n' "$existing_bundle"
+    return 0
+  fi
+  [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]] || return 0
+  command -v security >/dev/null 2>&1 || return 0
+  ca_dir="$ROOT/runtime/databento/certs"
+  ca_bundle="$ca_dir/macos-keychain-ca-bundle.pem"
+  mkdir -p "$ca_dir"
+  tmp_bundle="$ca_bundle.tmp.$$"
+  : > "$tmp_bundle"
+  certifi_bundle="$($PYTHON_BIN -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"
+  if [[ -n "$certifi_bundle" && -f "$certifi_bundle" ]]; then
+    cat "$certifi_bundle" >> "$tmp_bundle"
+  fi
+  for keychain in \
+    /System/Library/Keychains/SystemRootCertificates.keychain \
+    /Library/Keychains/System.keychain \
+    "$HOME/Library/Keychains/login.keychain-db"; do
+    [[ -e "$keychain" ]] || continue
+    security find-certificate -a -p "$keychain" >> "$tmp_bundle" 2>/dev/null || true
+  done
+  if grep -q 'BEGIN CERTIFICATE' "$tmp_bundle"; then
+    mv "$tmp_bundle" "$ca_bundle"
+    export REQUESTS_CA_BUNDLE="$ca_bundle"
+    export SSL_CERT_FILE="$ca_bundle"
+    export CURL_CA_BUNDLE="$ca_bundle"
+    printf '[BACKTEST] python_ca_bundle=%s\n' "$ca_bundle"
+  else
+    rm -f "$tmp_bundle"
+  fi
+}
+
 usable_databento_key() {
   local value lowered
   value="$(trim "${1:-}")"
@@ -165,7 +272,7 @@ resolve_python_bin() {
   local configured="$1" candidate resolved
   local -a candidates=()
   [[ -n "$configured" ]] && candidates+=("$configured")
-  candidates+=("$HOME/miniforge3/bin/python3" python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3)
+  candidates+=("$ROOT/runtime/databento/python-venv/bin/python3" "$HOME/miniforge3/bin/python3" python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3)
   for candidate in "${candidates[@]}"; do
     if [[ -x "$candidate" ]]; then
       resolved="$candidate"
@@ -226,6 +333,8 @@ while [[ $# -gt 0 ]]; do
     --lifecycle-model-dir) LIFECYCLE_MODEL_DIR="$2"; shift 2 ;;
     --lifecycle-model-dir=*) LIFECYCLE_MODEL_DIR="${1#--lifecycle-model-dir=}"; shift ;;
     --disable-lifecycle-micro) LIFECYCLE_MICRO_ENABLED="false"; shift ;;
+    --classpath-file) CLASSPATH_FILE="$2"; shift 2 ;;
+    --classpath-file=*) CLASSPATH_FILE="${1#--classpath-file=}"; shift ;;
     --skip-build) SKIP_BUILD="true"; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "[BACKTEST][ERROR] Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -239,11 +348,20 @@ if ! truthy "$LIST_SYMBOLS_ONLY" && [[ -z "$START_DATE" || -z "$END_DATE" ]]; th
 fi
 
 [[ "$OUTPUT_DIR" != /* ]] && OUTPUT_DIR="$ROOT/$OUTPUT_DIR"
-[[ "$DATABENTO_ENV_FILE" != /* ]] && DATABENTO_ENV_FILE="$ROOT/$DATABENTO_ENV_FILE"
 [[ "$ROUTING_CSV" != /* ]] && ROUTING_CSV="$ROOT/$ROUTING_CSV"
 [[ "$SYMBOLS_FILE" != /* ]] && SYMBOLS_FILE="$ROOT/$SYMBOLS_FILE"
 [[ "$LIFECYCLE_MODEL_DIR" != /* ]] && LIFECYCLE_MODEL_DIR="$ROOT/$LIFECYCLE_MODEL_DIR"
+[[ "$CLASSPATH_FILE" != /* ]] && CLASSPATH_FILE="$ROOT/$CLASSPATH_FILE"
 mkdir -p "$OUTPUT_DIR" runtime/backtests
+
+CLASSPATH_PARENT="$(dirname "$CLASSPATH_FILE")"
+mkdir -p "$CLASSPATH_PARENT" 2>/dev/null || true
+if [[ ! -d "$CLASSPATH_PARENT" || ! -w "$CLASSPATH_PARENT" ]]; then
+  FALLBACK_CLASSPATH_FILE="$ROOT/runtime/databento_ibkr_sim_backtest_cp.txt"
+  echo "[BACKTEST][WARN] Classpath cache directory is not writable: $CLASSPATH_PARENT; using $FALLBACK_CLASSPATH_FILE" >&2
+  CLASSPATH_FILE="$FALLBACK_CLASSPATH_FILE"
+  mkdir -p "$(dirname "$CLASSPATH_FILE")"
+fi
 
 if [[ ${#symbols[@]} -eq 0 && -n "$SYMBOLS_CSV" ]]; then
   parse_symbols_csv_into "$SYMBOLS_CSV"
@@ -271,6 +389,11 @@ if [[ ${#symbols[@]} -eq 0 ]]; then
   exit 2
 fi
 
+if [[ -z "$DATABENTO_ENV_FILE" ]]; then
+  DATABENTO_ENV_FILE="$(configured_databento_env_file "${symbols[0]}")"
+fi
+[[ "$DATABENTO_ENV_FILE" != /* ]] && DATABENTO_ENV_FILE="$ROOT/$DATABENTO_ENV_FILE"
+
 if truthy "$LIST_SYMBOLS_ONLY"; then
   printf '[BACKTEST] symbols=%s\n' "$(printf '%s,' "${symbols[@]}" | sed 's/,$//')" >&2
   printf '[BACKTEST] symbols_count=%s symbols_file=%s\n' "${#symbols[@]}" "$SYMBOLS_FILE" >&2
@@ -279,12 +402,28 @@ if truthy "$LIST_SYMBOLS_ONLY"; then
 fi
 printf '[BACKTEST] symbols=%s\n' "$(printf '%s,' "${symbols[@]}" | sed 's/,$//')"
 printf '[BACKTEST] symbols_count=%s symbols_file=%s\n' "${#symbols[@]}" "$SYMBOLS_FILE"
+printf '[BACKTEST] classpath_file=%s\n' "$CLASSPATH_FILE"
 
-if ! usable_databento_key "${DATABENTO_API_KEY:-}"; then
+if usable_databento_key "${DATABENTO_API_KEY:-}"; then
+  DATABENTO_API_KEY_SOURCE="environment"
+elif load_launchctl_databento_key; then
+  DATABENTO_API_KEY_SOURCE="launchctl:DATABENTO_API_KEY"
+else
   load_env_file "$DATABENTO_ENV_FILE" || true
+  if usable_databento_key "${DATABENTO_API_KEY:-}"; then
+    DATABENTO_API_KEY_SOURCE="env-file:$DATABENTO_ENV_FILE"
+  elif [[ -f "$ROOT/$BRIDGE_DATABENTO_ENV_FILE" ]] && load_env_file "$ROOT/$BRIDGE_DATABENTO_ENV_FILE" && usable_databento_key "${DATABENTO_API_KEY:-}"; then
+    DATABENTO_API_KEY_SOURCE="env-file:$ROOT/$BRIDGE_DATABENTO_ENV_FILE"
+  elif load_application_databento_credentials; then
+    DATABENTO_API_KEY_SOURCE="application.properties:trading.databento.api.key"
+  else
+    DATABENTO_API_KEY_SOURCE="missing"
+  fi
 fi
+printf '[BACKTEST] databento_api_key_source=%s\n' "$DATABENTO_API_KEY_SOURCE"
 if ! truthy "$DRY_RUN" && ! usable_databento_key "${DATABENTO_API_KEY:-}"; then
-  echo "[BACKTEST][ERROR] Missing valid DATABENTO_API_KEY. Export it or put it in $DATABENTO_ENV_FILE." >&2
+  echo "[BACKTEST][ERROR] Missing valid DATABENTO_API_KEY for non-dry-run historical API streaming." >&2
+  echo "[BACKTEST][ERROR] Set it in the parent environment or in $DATABENTO_ENV_FILE, matching the live Databento sidecar path." >&2
   exit 1
 fi
 
@@ -294,6 +433,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
   echo "[BACKTEST][ERROR] Try: python3 -m pip install -r requirements.txt" >&2
   exit 1
 fi
+configure_python_ca_bundle
 
 CONFIG_MODEL_DIR="$MODEL_DIR"
 if [[ -n "$CONFIG_MODEL_DIR" && "$CONFIG_MODEL_DIR" != /* ]]; then
@@ -343,17 +483,29 @@ for SYMBOL in "${symbols[@]}"; do
   if [[ -n "$MODEL_DIR" && "$MODEL_DIR" != /* ]]; then
     MODEL_DIR="$ROOT/$MODEL_DIR"
   fi
+  LOCAL_MODEL_DIR="$ROOT/runtime/models/$SYMBOL"
   if [[ -n "$MODEL_DIR" && ! -d "$MODEL_DIR" ]]; then
-    echo "[BACKTEST][ERROR] symbol=$SYMBOL model directory not found: $MODEL_DIR" >&2
-    failures=$((failures + 1))
-    continue
+    if [[ -d "$LOCAL_MODEL_DIR" ]]; then
+      echo "[BACKTEST][WARN] symbol=$SYMBOL model directory not found: $MODEL_DIR; using local fallback $LOCAL_MODEL_DIR" >&2
+      MODEL_DIR="$LOCAL_MODEL_DIR"
+    else
+      echo "[BACKTEST][ERROR] symbol=$SYMBOL model directory not found: $MODEL_DIR" >&2
+      failures=$((failures + 1))
+      continue
+    fi
   fi
   if [[ -z "$MODEL_DIR" ]]; then
-    echo "[BACKTEST][WARN] symbol=$SYMBOL no model directory resolved; strategy will initialize with AI disabled/fallback behavior." >&2
+    if [[ -d "$LOCAL_MODEL_DIR" ]]; then
+      echo "[BACKTEST][WARN] symbol=$SYMBOL no model directory resolved; using local fallback $LOCAL_MODEL_DIR" >&2
+      MODEL_DIR="$LOCAL_MODEL_DIR"
+    else
+      echo "[BACKTEST][WARN] symbol=$SYMBOL no model directory resolved; strategy will initialize with AI disabled/fallback behavior." >&2
+    fi
   fi
 
   TRADE_LOG="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-trades.csv"
   ORDER_HISTORY="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-orders.csv"
+  TRADE_LIFECYCLE_SUMMARY="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-trade-lifecycle-summary.csv"
   JAVA_PROPS=(
     "-Dbacktest.symbol=$SYMBOL"
     "-Dbacktest.ibkrSimulation=true"
@@ -373,6 +525,7 @@ for SYMBOL in "${symbols[@]}"; do
     "-Dbacktest.strategy.maxShareCap=$BACKTEST_MAX_SHARE_CAP"
     "-Dbacktest.tradeLogFile=$TRADE_LOG"
     "-Dbacktest.orderHistoryFile=$ORDER_HISTORY"
+    "-Dbacktest.tradeLifecycleSummaryFile=$TRADE_LIFECYCLE_SUMMARY"
   )
   [[ -n "$MODEL_DIR" ]] && JAVA_PROPS+=("-Dtrading.model.dir=$MODEL_DIR")
   if truthy "$LIFECYCLE_MICRO_ENABLED"; then
@@ -408,6 +561,7 @@ for SYMBOL in "${symbols[@]}"; do
 [BACKTEST] lifecycle_micro_enabled=$LIFECYCLE_MICRO_ENABLED lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
 [BACKTEST] trade_log=$TRADE_LOG
 [BACKTEST] order_history=$ORDER_HISTORY
+[BACKTEST] trade_lifecycle_summary=$TRADE_LIFECYCLE_SUMMARY
 SUMMARY
 
   if java -cp "$CLASSPATH" \

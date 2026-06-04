@@ -45,7 +45,7 @@ DEFAULT_TEMPLATE = {
     "server.port": str(BASE_SERVER_PORT),
     "trading.market-data.provider": "databento",
     "trading.market-data-request-id": str(BASE_MARKET_DATA_REQUEST_ID),
-    "trading.databento.python-bin": "/Users/filmonghezehey/miniforge3/bin/python3",
+    "trading.databento.python-bin": "python3",
     "trading.databento.startup-delay-seconds": str(DATABENTO_STARTUP_DELAY_SECONDS),
     "trading.databento.startup-history-seconds": "360",
     "trading.databento.shared-feed.startup-history-seconds": "0",

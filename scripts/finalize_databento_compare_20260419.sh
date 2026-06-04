@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+export ROOT
 COMPARE_ROOT="$ROOT/training_data/compare_runs_20260419_meta_ab"
-PYTHON_BIN="/Users/filmonghezehey/miniforge3/bin/python3"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 ROUTING_CSV="$ROOT/runtime/databento/model-routing-20260419.csv"
 
 cd "$ROOT"

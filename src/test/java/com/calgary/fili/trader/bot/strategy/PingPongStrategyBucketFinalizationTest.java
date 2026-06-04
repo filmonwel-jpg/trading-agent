@@ -29,6 +29,7 @@ class PingPongStrategyBucketFinalizationTest {
 
             assertEquals(-1L, ReflectionTestUtils.getField(strategy, "bucketStartEpoch"));
             assertEquals(bucketStart, ReflectionTestUtils.getField(strategy, "lastFinalizedBucketStartEpoch"));
+            assertEquals(bucketStart + 30L, ReflectionTestUtils.getField(strategy, "current30sAiDecisionEpoch"));
             Double barClose = (Double) ReflectionTestUtils.getField(strategy, "barClose");
             assertNotNull(barClose);
             assertEquals(101.2, barClose, 1e-9);
