@@ -24,6 +24,8 @@ public class DatabentoEvent {
     public long askSize = 0L;
     public long atBidVol = 0L;
     public long atAskVol = 0L;
+    public double previousClose = 0.0;
+    public String sessionDate = "";
     public String message = "";
 
     public boolean isEquityBar() {
@@ -32,6 +34,10 @@ public class DatabentoEvent {
 
     public boolean isOptionBar() {
         return "option_bar".equalsIgnoreCase(event);
+    }
+
+    public boolean isPreviousClose() {
+        return "previous_close".equalsIgnoreCase(event);
     }
 
     public boolean isStatus() {

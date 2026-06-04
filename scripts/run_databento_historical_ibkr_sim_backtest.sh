@@ -25,6 +25,7 @@ ROUTING_CSV="${TRADING_DATABENTO_MODEL_ROUTING_CSV:-runtime/databento/model-rout
 CLASSPATH_FILE="${BACKTEST_CLASSPATH_FILE:-runtime/backtests/databento_ibkr_sim_backtest_cp.txt}"
 LIFECYCLE_MICRO_ENABLED="${TRADING_LIFECYCLE_MICRO_ENABLED:-true}"
 LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-model_exports/lifecycle_micro_20260523}"
+BACKTEST_PREVIOUS_CLOSE="${BACKTEST_PREVIOUS_CLOSE:-}"
 
 usage() {
   cat <<'USAGE'
@@ -49,6 +50,7 @@ Options:
   --max-share-cap N        Simulated broker max shares per order. Default: 500
   --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: model_exports/lifecycle_micro_20260523
   --disable-lifecycle-micro Disable lifecycle exit and 5s micro entry/exit guard routes.
+  --previous-close PRICE  Override previous close injected into the strategy before replay bars.
   --classpath-file FILE    Maven runtime classpath cache. Default: runtime/backtests/databento_ibkr_sim_backtest_cp.txt
   --skip-build             Reuse target/classes and the cached Maven classpath.
   --help                   Show this help.
@@ -333,6 +335,8 @@ while [[ $# -gt 0 ]]; do
     --lifecycle-model-dir) LIFECYCLE_MODEL_DIR="$2"; shift 2 ;;
     --lifecycle-model-dir=*) LIFECYCLE_MODEL_DIR="${1#--lifecycle-model-dir=}"; shift ;;
     --disable-lifecycle-micro) LIFECYCLE_MICRO_ENABLED="false"; shift ;;
+    --previous-close) BACKTEST_PREVIOUS_CLOSE="$2"; shift 2 ;;
+    --previous-close=*) BACKTEST_PREVIOUS_CLOSE="${1#--previous-close=}"; shift ;;
     --classpath-file) CLASSPATH_FILE="$2"; shift 2 ;;
     --classpath-file=*) CLASSPATH_FILE="${1#--classpath-file=}"; shift ;;
     --skip-build) SKIP_BUILD="true"; shift ;;
@@ -528,6 +532,7 @@ for SYMBOL in "${symbols[@]}"; do
     "-Dbacktest.tradeLifecycleSummaryFile=$TRADE_LIFECYCLE_SUMMARY"
   )
   [[ -n "$MODEL_DIR" ]] && JAVA_PROPS+=("-Dtrading.model.dir=$MODEL_DIR")
+  [[ -n "$BACKTEST_PREVIOUS_CLOSE" ]] && JAVA_PROPS+=("-Dbacktest.previousClose=$BACKTEST_PREVIOUS_CLOSE")
   if truthy "$LIFECYCLE_MICRO_ENABLED"; then
     LIFECYCLE_SCORECARD="$LIFECYCLE_MODEL_DIR/lifecycle_micro_scorecard.csv"
     JAVA_PROPS+=(

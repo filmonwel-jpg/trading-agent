@@ -282,6 +282,67 @@ def api_option_symbol(symbol: str, stype_in: str) -> str:
     return token
 
 
+def previous_close_from_frame(raw: pd.DataFrame, symbols: set[str], before_utc: datetime) -> dict[str, float]:
+    if raw.empty:
+        return {}
+    if "symbol" not in raw.columns:
+        raw["symbol"] = next(iter(symbols)) if len(symbols) == 1 else ""
+    raw = raw.copy()
+    raw["symbol"] = raw["symbol"].astype(str).str.strip().str.upper()
+    raw = raw[raw["symbol"].isin(symbols)].copy()
+    if raw.empty or "ts_event" not in raw.columns:
+        return {}
+    local_ts = normalize_ts(raw["ts_event"])
+    before_local = pd.Timestamp(before_utc).tz_convert(MARKET_TZ)
+    raw = raw.loc[rth_filter(local_ts) & local_ts.lt(before_local)].copy()
+    local_ts = local_ts.loc[raw.index]
+    if raw.empty:
+        return {}
+    close_source = "close" if "close" in raw.columns else "price" if "price" in raw.columns else ""
+    if not close_source:
+        return {}
+    raw["local_ts_for_previous_close"] = local_ts
+    raw["previous_close_value"] = pd.to_numeric(raw[close_source], errors="coerce").fillna(0.0)
+    raw = raw[raw["previous_close_value"].gt(0)].copy()
+    if raw.empty:
+        return {}
+    latest = raw.sort_values(["symbol", "local_ts_for_previous_close"]).groupby("symbol", sort=False).tail(1)
+    return {str(row.symbol): round(float(row.previous_close_value), 6) for row in latest.itertuples(index=False)}
+
+
+def emit_previous_close_context(client: Any, args: argparse.Namespace, symbol: str, start: datetime) -> None:
+    lookback_days = max(0, int(args.previous_close_lookback_days or 0))
+    if lookback_days <= 0:
+        emit({"event": "status", "message": f"historical-api-previous-close-disabled symbol={symbol}"})
+        return
+    previous_start = (pd.Timestamp(start) - pd.Timedelta(days=lookback_days)).to_pydatetime()
+    try:
+        store = client.timeseries.get_range(
+            dataset=args.equity_dataset,
+            schema=args.equity_schema,
+            stype_in=args.equity_stype_in,
+            symbols=[symbol],
+            start=previous_start,
+            end=start,
+        )
+        closes = previous_close_from_frame(frame_from_store(store), {symbol}, start)
+    except Exception as exc:
+        emit({"event": "status", "message": f"historical-api-previous-close-skip symbol={symbol} error={exc}"})
+        return
+    previous_close = closes.get(symbol)
+    if previous_close and previous_close > 0:
+        emit({
+            "event": "previous_close",
+            "symbol": symbol,
+            "sessionDate": pd.Timestamp(start).tz_convert(MARKET_TZ).date().isoformat(),
+            "previousClose": previous_close,
+            "close": previous_close,
+            "historical": True,
+        })
+    else:
+        emit({"event": "status", "message": f"historical-api-previous-close-unavailable symbol={symbol}"})
+
+
 def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
     api_key = (args.api_key or os.getenv("DATABENTO_API_KEY", "")).strip()
     if not api_key and not args.dry_run:
@@ -308,6 +369,7 @@ def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
     for symbol in sorted(symbols):
         events: list[tuple[int, int, str, dict]] = []
         emit({"event": "status", "message": f"historical-api-symbol-begin symbol={symbol}"})
+        emit_previous_close_context(client, args, symbol, start)
         equity = client.timeseries.get_range(
             dataset=args.equity_dataset,
             schema=args.equity_schema,
@@ -356,6 +418,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--options-dataset", default=os.getenv("DATABENTO_OPTIONS_DATASET", "OPRA.PILLAR"))
     parser.add_argument("--options-schema", default=os.getenv("DATABENTO_OPTIONS_SCHEMA", "ohlcv-1s"))
     parser.add_argument("--options-stype-in", default=os.getenv("DATABENTO_OPTIONS_STYPE_IN", "parent"))
+    parser.add_argument("--previous-close-lookback-days", type=int, default=int(os.getenv("DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS", "10")), help="API mode calendar-day lookback used to emit a previous_close context event. Set 0 to disable.")
     parser.add_argument("--max-days", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()

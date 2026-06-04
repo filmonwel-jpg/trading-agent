@@ -176,6 +176,12 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         strategy.setLifecycleTelemetryListener(lifecycleStats);
         strategy.setMaxVolatilityPercent(10.0);
         strategy.setPositionSynced(true);
+        double configuredPreviousClose = parsePositiveDouble(System.getProperty("backtest.previousClose", "0"), 0.0);
+        if (configuredPreviousClose > 0.0) {
+            previousSessionClose = configuredPreviousClose;
+            strategy.setYesterdayClose(configuredPreviousClose);
+            System.out.println(">>> [FLOW][CONDITION][BACKTEST.CONTEXT] PREVIOUS_CLOSE_OVERRIDE=PASS | symbol=" + backtestSymbol + " previousClose=" + configuredPreviousClose);
+        }
     }
 
     private List<String> buildHistoricalStreamCommand(String symbol) {
@@ -217,6 +223,10 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
                 System.out.println(">>> [FLOW][INFO][DATABENTO] " + (event.message == null ? "status" : event.message));
                 return;
             }
+            if (event.isPreviousClose()) {
+                handlePreviousClose(event);
+                return;
+            }
             if (event.isOptionBar()) {
                 handleOptionBar(event);
                 return;
@@ -230,6 +240,19 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
             skippedEvents++;
             System.err.println(">>> [FLOW][ERROR][BACKTEST.EVENT] skipped event reason=" + exception.getMessage());
         }
+    }
+
+    private void handlePreviousClose(DatabentoEvent event) {
+        String symbol = normalizeSymbol(event.symbol);
+        double close = event.previousClose > 0.0 ? event.previousClose : event.close;
+        if (!backtestSymbol.equals(symbol) || close <= 0.0 || strategy == null) {
+            skippedEvents++;
+            return;
+        }
+        previousSessionClose = close;
+        strategy.setYesterdayClose(close);
+        System.out.println(">>> [FLOW][CONDITION][BACKTEST.CONTEXT] PREVIOUS_CLOSE_AVAILABLE=PASS | symbol=" + backtestSymbol + " previousClose=" + close + " sessionDate=" + nullToEmpty(event.sessionDate));
+        drainQueue();
     }
 
     private void handleOptionBar(DatabentoEvent event) {
@@ -613,6 +636,10 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         }
     }
 
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+
     private static final class BacktestLifecycleStats implements PingPongStrategy.LifecycleTelemetryListener {
         private long armsTotal;
         private long armsLong;
@@ -979,6 +1006,15 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     private static double parseThreshold(String key, double fallback) {
         try {
             return Math.max(0.0, Math.min(1.0, Double.parseDouble(System.getProperty(key, Double.toString(fallback)).trim())));
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private static double parsePositiveDouble(String raw, double fallback) {
+        try {
+            double parsed = Double.parseDouble(raw == null ? "" : raw.trim());
+            return parsed > 0.0 && Double.isFinite(parsed) ? parsed : fallback;
         } catch (Exception ignored) {
             return fallback;
         }

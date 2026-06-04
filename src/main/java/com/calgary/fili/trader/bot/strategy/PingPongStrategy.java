@@ -2495,6 +2495,7 @@ public class PingPongStrategy implements TradingStrategy {
         if (yesterdayClose > 0) {
             double variance = Math.abs(barClose - yesterdayClose) / yesterdayClose;
             boolean varianceAllowed = variance <= 0.05;
+            flowCondition("AI.GATE", "YESTERDAY_CLOSE_AVAILABLE", true, "symbol=" + symbol + " yesterdayClose=" + yesterdayClose);
             flowCondition("AI.GATE", "PRICE_VARIANCE_LE_5PCT", varianceAllowed, "symbol=" + symbol + " variance=" + variance + " close=" + barClose + " yesterdayClose=" + yesterdayClose);
             if (!varianceAllowed) return;
         } else {
