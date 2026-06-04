@@ -1,1 +1,0 @@
-/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/avgo_live_trade_logs.txt
