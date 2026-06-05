@@ -26,6 +26,8 @@ CLASSPATH_FILE="${BACKTEST_CLASSPATH_FILE:-runtime/backtests/databento_ibkr_sim_
 LIFECYCLE_MICRO_ENABLED="${TRADING_LIFECYCLE_MICRO_ENABLED:-true}"
 LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-model_exports/lifecycle_micro_20260523}"
 BACKTEST_PREVIOUS_CLOSE="${BACKTEST_PREVIOUS_CLOSE:-}"
+MICRO_LONG_ENTRY_THRESHOLD="${MICRO_LONG_ENTRY_THRESHOLD:-${STRATEGY_MICRO_LONG_ENTRY_THRESHOLD:-}}"
+MICRO_SHORT_ENTRY_THRESHOLD="${MICRO_SHORT_ENTRY_THRESHOLD:-${STRATEGY_MICRO_SHORT_ENTRY_THRESHOLD:-}}"
 
 usage() {
   cat <<'USAGE'
@@ -49,6 +51,8 @@ Options:
   --max-trades N           Strategy max trades during replay. Default: 2000
   --max-share-cap N        Simulated broker max shares per order. Default: 500
   --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: model_exports/lifecycle_micro_20260523
+  --micro-long-entry-threshold P   Override 5s long micro-entry threshold from lifecycle scorecard.
+  --micro-short-entry-threshold P  Override 5s short micro-entry threshold from lifecycle scorecard.
   --disable-lifecycle-micro Disable lifecycle exit and 5s micro entry/exit guard routes.
   --previous-close PRICE  Override previous close injected into the strategy before replay bars.
   --classpath-file FILE    Maven runtime classpath cache. Default: runtime/backtests/databento_ibkr_sim_backtest_cp.txt
@@ -334,6 +338,10 @@ while [[ $# -gt 0 ]]; do
     --max-share-cap) BACKTEST_MAX_SHARE_CAP="$2"; shift 2 ;;
     --lifecycle-model-dir) LIFECYCLE_MODEL_DIR="$2"; shift 2 ;;
     --lifecycle-model-dir=*) LIFECYCLE_MODEL_DIR="${1#--lifecycle-model-dir=}"; shift ;;
+    --micro-long-entry-threshold) MICRO_LONG_ENTRY_THRESHOLD="$2"; shift 2 ;;
+    --micro-long-entry-threshold=*) MICRO_LONG_ENTRY_THRESHOLD="${1#--micro-long-entry-threshold=}"; shift ;;
+    --micro-short-entry-threshold) MICRO_SHORT_ENTRY_THRESHOLD="$2"; shift 2 ;;
+    --micro-short-entry-threshold=*) MICRO_SHORT_ENTRY_THRESHOLD="${1#--micro-short-entry-threshold=}"; shift ;;
     --disable-lifecycle-micro) LIFECYCLE_MICRO_ENABLED="false"; shift ;;
     --previous-close) BACKTEST_PREVIOUS_CLOSE="$2"; shift 2 ;;
     --previous-close=*) BACKTEST_PREVIOUS_CLOSE="${1#--previous-close=}"; shift ;;
@@ -533,8 +541,12 @@ for SYMBOL in "${symbols[@]}"; do
   )
   [[ -n "$MODEL_DIR" ]] && JAVA_PROPS+=("-Dtrading.model.dir=$MODEL_DIR")
   [[ -n "$BACKTEST_PREVIOUS_CLOSE" ]] && JAVA_PROPS+=("-Dbacktest.previousClose=$BACKTEST_PREVIOUS_CLOSE")
+  MICRO_LONG_ENTRY_THRESHOLD_RESOLVED=""
+  MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED=""
   if truthy "$LIFECYCLE_MICRO_ENABLED"; then
     LIFECYCLE_SCORECARD="$LIFECYCLE_MODEL_DIR/lifecycle_micro_scorecard.csv"
+    MICRO_LONG_ENTRY_THRESHOLD_RESOLVED="${MICRO_LONG_ENTRY_THRESHOLD:-$(csv_threshold longMicroEntryAi 0.58 "$LIFECYCLE_SCORECARD")}"
+    MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED="${MICRO_SHORT_ENTRY_THRESHOLD:-$(csv_threshold shortMicroEntryAi 0.58 "$LIFECYCLE_SCORECARD")}"
     JAVA_PROPS+=(
       "-Dstrategy.model.upgradedRouteRequired=true"
       "-Dstrategy.exit.legacy30sEnabled=false"
@@ -545,8 +557,8 @@ for SYMBOL in "${symbols[@]}"; do
       "-Dstrategy.micro.modelDir=$LIFECYCLE_MODEL_DIR"
       "-Dstrategy.exit.lifecycle.longThreshold=$(csv_threshold longExitLifecycleAi 0.60 "$LIFECYCLE_SCORECARD")"
       "-Dstrategy.exit.lifecycle.shortThreshold=$(csv_threshold shortExitLifecycleAi 0.60 "$LIFECYCLE_SCORECARD")"
-      "-Dstrategy.micro.longEntryThreshold=$(csv_threshold longMicroEntryAi 0.58 "$LIFECYCLE_SCORECARD")"
-      "-Dstrategy.micro.shortEntryThreshold=$(csv_threshold shortMicroEntryAi 0.58 "$LIFECYCLE_SCORECARD")"
+      "-Dstrategy.micro.longEntryThreshold=$MICRO_LONG_ENTRY_THRESHOLD_RESOLVED"
+      "-Dstrategy.micro.shortEntryThreshold=$MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED"
       "-Dstrategy.micro.longExitGuardThreshold=$(csv_threshold longMicroExitGuardAi 0.70 "$LIFECYCLE_SCORECARD")"
       "-Dstrategy.micro.shortExitGuardThreshold=$(csv_threshold shortMicroExitGuardAi 0.70 "$LIFECYCLE_SCORECARD")"
     )
@@ -564,6 +576,7 @@ for SYMBOL in "${symbols[@]}"; do
 [BACKTEST] python_bin=$PYTHON_BIN
 [BACKTEST] model_dir=${MODEL_DIR:-<none>}
 [BACKTEST] lifecycle_micro_enabled=$LIFECYCLE_MICRO_ENABLED lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
+[BACKTEST] micro_entry_thresholds long=${MICRO_LONG_ENTRY_THRESHOLD_RESOLVED:-<disabled>} short=${MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED:-<disabled>}
 [BACKTEST] trade_log=$TRADE_LOG
 [BACKTEST] order_history=$ORDER_HISTORY
 [BACKTEST] trade_lifecycle_summary=$TRADE_LIFECYCLE_SUMMARY

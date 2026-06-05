@@ -19,6 +19,8 @@ MODE="both"
 DRY_RUN="false"
 SKIP_BUILD="false"
 PREVIOUS_CLOSE_LOOKBACK_DAYS="14"
+MICRO_LONG_ENTRY_THRESHOLD=""
+MICRO_SHORT_ENTRY_THRESHOLD=""
 
 usage() {
   cat <<'USAGE'
@@ -43,6 +45,8 @@ Options:
   --start-batch N            1-based batch number to start/resume from. Default: 1
   --max-batches N            Stop after N batches from --start-batch. Default: 0 (all)
   --previous-close-lookback-days N  Export DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS. Default: 14
+  --micro-long-entry-threshold P    Override 5s long micro-entry threshold for enabled legs.
+  --micro-short-entry-threshold P   Override 5s short micro-entry threshold for enabled legs.
   --dry-run                  Validate wiring without downloading Databento data.
   --skip-build               Pass --skip-build to the launcher.
   --help                     Show this help.
@@ -172,9 +176,13 @@ run_leg() {
   )
   [[ "$DRY_RUN" == "true" ]] && launcher_args+=(--dry-run)
   [[ "$SKIP_BUILD" == "true" ]] && launcher_args+=(--skip-build)
+  if [[ "$leg" != "disabled" ]]; then
+    [[ -n "$MICRO_LONG_ENTRY_THRESHOLD" ]] && launcher_args+=(--micro-long-entry-threshold "$MICRO_LONG_ENTRY_THRESHOLD")
+    [[ -n "$MICRO_SHORT_ENTRY_THRESHOLD" ]] && launcher_args+=(--micro-short-entry-threshold "$MICRO_SHORT_ENTRY_THRESHOLD")
+  fi
   [[ "$leg" == "disabled" ]] && launcher_args+=(--disable-lifecycle-micro)
 
-  local filter='\[BACKTEST\] symbol=|historical-api-symbol-begin|historical-api-symbol-complete|databento_api_key_source|model_dir=|YESTERDAY_CLOSE_AVAILABLE=FAIL|YESTERDAY_CLOSE_AVAILABLE=PASS|PREVIOUS_CLOSE_AVAILABLE=FAIL|PREVIOUS_CLOSE_AVAILABLE=PASS|AI_PREDICTS_ENTRY=PASS|Armed long micro-entry|Armed short micro-entry|MICRO_ENTRY_CONFIRMS=PASS|MICRO_ENTRY_CONFIRMS=FAIL|reason=expired|simulated orderId|submitted orderId|Total trades|Total PnL|arms_total|arm_confirmations|arm_expirations|BACKTEST.NO_TRADE_DIAG|closest_setup rank=1|completed=|failed=|model directory not found|Traceback|401|CERTIFICATE_VERIFY_FAILED|ERROR|timed out'
+  local filter='\[BACKTEST\] symbol=|historical-api-symbol-begin|historical-api-symbol-complete|databento_api_key_source|model_dir=|micro_entry_thresholds|YESTERDAY_CLOSE_AVAILABLE=FAIL|YESTERDAY_CLOSE_AVAILABLE=PASS|PREVIOUS_CLOSE_AVAILABLE=FAIL|PREVIOUS_CLOSE_AVAILABLE=PASS|AI_PREDICTS_ENTRY=PASS|Armed long micro-entry|Armed short micro-entry|MICRO_ENTRY_CONFIRMS=PASS|MICRO_ENTRY_CONFIRMS=FAIL|reason=expired|simulated orderId|submitted orderId|Total trades|Total PnL|arms_total|arm_confirmations|arm_expirations|BACKTEST.NO_TRADE_DIAG|closest_setup rank=1|completed=|failed=|model directory not found|Traceback|401|CERTIFICATE_VERIFY_FAILED|ERROR|timed out'
 
   set +e
   DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS="$PREVIOUS_CLOSE_LOOKBACK_DAYS" \
@@ -215,6 +223,10 @@ while [[ $# -gt 0 ]]; do
     --max-batches=*) MAX_BATCHES="${1#--max-batches=}"; shift ;;
     --previous-close-lookback-days) PREVIOUS_CLOSE_LOOKBACK_DAYS="$2"; shift 2 ;;
     --previous-close-lookback-days=*) PREVIOUS_CLOSE_LOOKBACK_DAYS="${1#--previous-close-lookback-days=}"; shift ;;
+    --micro-long-entry-threshold) MICRO_LONG_ENTRY_THRESHOLD="$2"; shift 2 ;;
+    --micro-long-entry-threshold=*) MICRO_LONG_ENTRY_THRESHOLD="${1#--micro-long-entry-threshold=}"; shift ;;
+    --micro-short-entry-threshold) MICRO_SHORT_ENTRY_THRESHOLD="$2"; shift 2 ;;
+    --micro-short-entry-threshold=*) MICRO_SHORT_ENTRY_THRESHOLD="${1#--micro-short-entry-threshold=}"; shift ;;
     --enabled-only) MODE="enabled"; shift ;;
     --disabled-only) MODE="disabled"; shift ;;
     --dry-run) DRY_RUN="true"; shift ;;
