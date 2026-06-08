@@ -364,7 +364,7 @@ fi
 [[ "$SYMBOLS_FILE" != /* ]] && SYMBOLS_FILE="$ROOT/$SYMBOLS_FILE"
 [[ "$LIFECYCLE_MODEL_DIR" != /* ]] && LIFECYCLE_MODEL_DIR="$ROOT/$LIFECYCLE_MODEL_DIR"
 [[ "$CLASSPATH_FILE" != /* ]] && CLASSPATH_FILE="$ROOT/$CLASSPATH_FILE"
-mkdir -p "$OUTPUT_DIR" runtime/backtests
+mkdir -p "$OUTPUT_DIR"
 
 CLASSPATH_PARENT="$(dirname "$CLASSPATH_FILE")"
 mkdir -p "$CLASSPATH_PARENT" 2>/dev/null || true
