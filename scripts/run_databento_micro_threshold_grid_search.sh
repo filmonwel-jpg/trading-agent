@@ -34,7 +34,7 @@ SCALE_START_BATCH="1"
 SCALE_MAX_BATCHES="0"
 MIN_PNL_TO_SCALE="0.0"
 MIN_TRADES_TO_SCALE="1"
-CLASSPATH_FILE=""
+CLASSPATH_FILE="${CLASSPATH_FILE:-}"
 
 usage() {
   cat <<'USAGE'
@@ -60,6 +60,7 @@ Core options:
   --lifecycle-model-dir DIR       Lifecycle/micro model dir. Default: model_exports/lifecycle_micro_20260523
   --python-bin PATH               Python with databento+pandas. Default: /tmp/trading-agent-databento-venv/bin/python3
   --databento-env-file FILE       Env file containing DATABENTO_API_KEY, passed to the launcher.
+  --classpath-file FILE           Shared Java classpath cache. Default: <output-base>/databento_ibkr_sim_backtest_cp.txt
   --timeout-seconds N             Per-run Databento timeout. Default: 3600
   --previous-close-lookback-days N Export DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS. Default: 14
   --max-trades N                  Strategy max trades during replay. Default: 2000
@@ -153,6 +154,8 @@ while [[ $# -gt 0 ]]; do
     --python-bin=*) PYTHON_BIN="${1#--python-bin=}"; shift ;;
     --databento-env-file) DATABENTO_ENV_FILE="$2"; shift 2 ;;
     --databento-env-file=*) DATABENTO_ENV_FILE="${1#--databento-env-file=}"; shift ;;
+    --classpath-file) CLASSPATH_FILE="$2"; shift 2 ;;
+    --classpath-file=*) CLASSPATH_FILE="${1#--classpath-file=}"; shift ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --timeout-seconds=*) TIMEOUT_SECONDS="${1#--timeout-seconds=}"; shift ;;
     --previous-close-lookback-days) PREVIOUS_CLOSE_LOOKBACK_DAYS="$2"; shift 2 ;;
@@ -227,6 +230,7 @@ SYMBOL="$(printf '%s' "$SYMBOL" | tr '[:lower:]' '[:upper:]')"
 [[ -d "$LIFECYCLE_MODEL_DIR" ]] || die "Lifecycle/micro model directory not found: $LIFECYCLE_MODEL_DIR"
 mkdir -p "$OUTPUT_BASE"
 CLASSPATH_FILE="${CLASSPATH_FILE:-$OUTPUT_BASE/databento_ibkr_sim_backtest_cp.txt}"
+[[ "$CLASSPATH_FILE" != /* ]] && CLASSPATH_FILE="$ROOT/$CLASSPATH_FILE"
 
 if [[ -z "$SCALE_TIMEOUT_SECONDS" ]]; then
   SCALE_TIMEOUT_SECONDS="$TIMEOUT_SECONDS"
