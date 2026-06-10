@@ -35,6 +35,7 @@ build/
 ### Python cache ###
 __pycache__/
 *.py[cod]
+.venv/
 
 ### OS metadata ###
 .DS_Store
@@ -54,13 +55,16 @@ runtime/*.log
 runtime/*.log.*
 runtime/**/*_live_trade_logs.txt
 runtime/backtests/
+runtime/local-backtests/
 runtime/logs/
 runtime/databento/snapshots/
 runtime/databento/promotions/
+runtime/databento/certs/
 runtime/lifecycle_micro_*/
 runtime/tmp_*/
 runtime/**/*.csv
 runtime/**/*.json
+runtime/databento_ibkr_sim_backtest_cp.txt
 hs_err_pid*.log
 
 ### Generated logs and backtests ###

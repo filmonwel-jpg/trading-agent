@@ -21,6 +21,10 @@ SKIP_BUILD="false"
 PREVIOUS_CLOSE_LOOKBACK_DAYS="14"
 MICRO_LONG_ENTRY_THRESHOLD=""
 MICRO_SHORT_ENTRY_THRESHOLD=""
+LIFECYCLE_LONG_EXIT_THRESHOLD=""
+LIFECYCLE_SHORT_EXIT_THRESHOLD=""
+MICRO_LONG_EXIT_GUARD_THRESHOLD=""
+MICRO_SHORT_EXIT_GUARD_THRESHOLD=""
 
 usage() {
   cat <<'USAGE'
@@ -47,6 +51,12 @@ Options:
   --previous-close-lookback-days N  Export DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS. Default: 14
   --micro-long-entry-threshold P    Override 5s long micro-entry threshold for enabled legs.
   --micro-short-entry-threshold P   Override 5s short micro-entry threshold for enabled legs.
+  --lifecycle-exit-threshold P         Override both long/short lifecycle-exit thresholds for enabled legs.
+  --lifecycle-long-exit-threshold P    Override 30s long lifecycle-exit threshold for enabled legs.
+  --lifecycle-short-exit-threshold P   Override 30s short lifecycle-exit threshold for enabled legs.
+  --micro-exit-guard-threshold P       Override both long/short 5s micro-exit guard thresholds for enabled legs.
+  --micro-long-exit-guard-threshold P  Override 5s long micro-exit guard threshold for enabled legs.
+  --micro-short-exit-guard-threshold P Override 5s short micro-exit guard threshold for enabled legs.
   --dry-run                  Validate wiring without downloading Databento data.
   --skip-build               Pass --skip-build to the launcher.
   --help                     Show this help.
@@ -179,10 +189,14 @@ run_leg() {
   if [[ "$leg" != "disabled" ]]; then
     [[ -n "$MICRO_LONG_ENTRY_THRESHOLD" ]] && launcher_args+=(--micro-long-entry-threshold "$MICRO_LONG_ENTRY_THRESHOLD")
     [[ -n "$MICRO_SHORT_ENTRY_THRESHOLD" ]] && launcher_args+=(--micro-short-entry-threshold "$MICRO_SHORT_ENTRY_THRESHOLD")
+    [[ -n "$LIFECYCLE_LONG_EXIT_THRESHOLD" ]] && launcher_args+=(--lifecycle-long-exit-threshold "$LIFECYCLE_LONG_EXIT_THRESHOLD")
+    [[ -n "$LIFECYCLE_SHORT_EXIT_THRESHOLD" ]] && launcher_args+=(--lifecycle-short-exit-threshold "$LIFECYCLE_SHORT_EXIT_THRESHOLD")
+    [[ -n "$MICRO_LONG_EXIT_GUARD_THRESHOLD" ]] && launcher_args+=(--micro-long-exit-guard-threshold "$MICRO_LONG_EXIT_GUARD_THRESHOLD")
+    [[ -n "$MICRO_SHORT_EXIT_GUARD_THRESHOLD" ]] && launcher_args+=(--micro-short-exit-guard-threshold "$MICRO_SHORT_EXIT_GUARD_THRESHOLD")
   fi
   [[ "$leg" == "disabled" ]] && launcher_args+=(--disable-lifecycle-micro)
 
-  local filter='\[BACKTEST\] symbol=|historical-api-symbol-begin|historical-api-symbol-complete|databento_api_key_source|model_dir=|micro_entry_thresholds|YESTERDAY_CLOSE_AVAILABLE=FAIL|YESTERDAY_CLOSE_AVAILABLE=PASS|PREVIOUS_CLOSE_AVAILABLE=FAIL|PREVIOUS_CLOSE_AVAILABLE=PASS|AI_PREDICTS_ENTRY=PASS|Armed long micro-entry|Armed short micro-entry|MICRO_ENTRY_CONFIRMS=PASS|MICRO_ENTRY_CONFIRMS=FAIL|reason=expired|simulated orderId|submitted orderId|Total trades|Total PnL|arms_total|arm_confirmations|arm_expirations|BACKTEST.NO_TRADE_DIAG|closest_setup rank=1|completed=|failed=|model directory not found|Traceback|401|CERTIFICATE_VERIFY_FAILED|ERROR|timed out'
+  local filter='\[BACKTEST\] symbol=|historical-api-symbol-begin|historical-api-symbol-complete|databento_api_key_source|model_dir=|micro_entry_thresholds|lifecycle_exit_thresholds|micro_exit_guard_thresholds|YESTERDAY_CLOSE_AVAILABLE=FAIL|YESTERDAY_CLOSE_AVAILABLE=PASS|PREVIOUS_CLOSE_AVAILABLE=FAIL|PREVIOUS_CLOSE_AVAILABLE=PASS|AI_PREDICTS_ENTRY=PASS|Armed long micro-entry|Armed short micro-entry|MICRO_ENTRY_CONFIRMS=PASS|MICRO_ENTRY_CONFIRMS=FAIL|reason=expired|simulated orderId|submitted orderId|Total trades|Total PnL|arms_total|arm_confirmations|arm_expirations|BACKTEST.NO_TRADE_DIAG|closest_setup rank=1|completed=|failed=|model directory not found|Traceback|401|CERTIFICATE_VERIFY_FAILED|ERROR|timed out'
 
   set +e
   DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS="$PREVIOUS_CLOSE_LOOKBACK_DAYS" \
@@ -227,6 +241,18 @@ while [[ $# -gt 0 ]]; do
     --micro-long-entry-threshold=*) MICRO_LONG_ENTRY_THRESHOLD="${1#--micro-long-entry-threshold=}"; shift ;;
     --micro-short-entry-threshold) MICRO_SHORT_ENTRY_THRESHOLD="$2"; shift 2 ;;
     --micro-short-entry-threshold=*) MICRO_SHORT_ENTRY_THRESHOLD="${1#--micro-short-entry-threshold=}"; shift ;;
+    --lifecycle-exit-threshold) LIFECYCLE_LONG_EXIT_THRESHOLD="$2"; LIFECYCLE_SHORT_EXIT_THRESHOLD="$2"; shift 2 ;;
+    --lifecycle-exit-threshold=*) LIFECYCLE_LONG_EXIT_THRESHOLD="${1#--lifecycle-exit-threshold=}"; LIFECYCLE_SHORT_EXIT_THRESHOLD="${1#--lifecycle-exit-threshold=}"; shift ;;
+    --lifecycle-long-exit-threshold) LIFECYCLE_LONG_EXIT_THRESHOLD="$2"; shift 2 ;;
+    --lifecycle-long-exit-threshold=*) LIFECYCLE_LONG_EXIT_THRESHOLD="${1#--lifecycle-long-exit-threshold=}"; shift ;;
+    --lifecycle-short-exit-threshold) LIFECYCLE_SHORT_EXIT_THRESHOLD="$2"; shift 2 ;;
+    --lifecycle-short-exit-threshold=*) LIFECYCLE_SHORT_EXIT_THRESHOLD="${1#--lifecycle-short-exit-threshold=}"; shift ;;
+    --micro-exit-guard-threshold) MICRO_LONG_EXIT_GUARD_THRESHOLD="$2"; MICRO_SHORT_EXIT_GUARD_THRESHOLD="$2"; shift 2 ;;
+    --micro-exit-guard-threshold=*) MICRO_LONG_EXIT_GUARD_THRESHOLD="${1#--micro-exit-guard-threshold=}"; MICRO_SHORT_EXIT_GUARD_THRESHOLD="${1#--micro-exit-guard-threshold=}"; shift ;;
+    --micro-long-exit-guard-threshold) MICRO_LONG_EXIT_GUARD_THRESHOLD="$2"; shift 2 ;;
+    --micro-long-exit-guard-threshold=*) MICRO_LONG_EXIT_GUARD_THRESHOLD="${1#--micro-long-exit-guard-threshold=}"; shift ;;
+    --micro-short-exit-guard-threshold) MICRO_SHORT_EXIT_GUARD_THRESHOLD="$2"; shift 2 ;;
+    --micro-short-exit-guard-threshold=*) MICRO_SHORT_EXIT_GUARD_THRESHOLD="${1#--micro-short-exit-guard-threshold=}"; shift ;;
     --enabled-only) MODE="enabled"; shift ;;
     --disabled-only) MODE="disabled"; shift ;;
     --dry-run) DRY_RUN="true"; shift ;;
