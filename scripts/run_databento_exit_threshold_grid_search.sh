@@ -36,6 +36,7 @@ SCALE_MAX_BATCHES="0"
 MIN_PNL_TO_SCALE="0.0"
 MIN_TRADES_TO_SCALE="1"
 CLASSPATH_FILE="${CLASSPATH_FILE:-}"
+GRID_JOBS="${EXIT_GRID_JOBS:-${GRID_JOBS:-1}}"
 
 usage() {
   cat <<'USAGE'
@@ -76,6 +77,7 @@ Fixed entry thresholds:
 Exit grid options:
   --lifecycle-exit-thresholds "LIST"    Space/comma-separated symmetric lifecycle-exit thresholds.
   --micro-exit-guard-thresholds "LIST"  Space/comma-separated symmetric micro-exit-guard thresholds.
+  --jobs N                              Parallel grid combos per symbol. Default: 1.
   --resume                              Skip combo dirs with completed successful logs.
   --default-baseline                    Also run lifecycle/micro enabled once with scorecard/default exit thresholds. Default: on.
   --no-default-baseline                 Disable the default baseline run.
@@ -182,6 +184,8 @@ while [[ $# -gt 0 ]]; do
     --lifecycle-exit-thresholds=*) LIFECYCLE_EXIT_THRESHOLDS="$(normalize_list "${1#--lifecycle-exit-thresholds=}")"; shift ;;
     --micro-exit-guard-thresholds) MICRO_EXIT_GUARD_THRESHOLDS="$(normalize_list "$2")"; shift 2 ;;
     --micro-exit-guard-thresholds=*) MICRO_EXIT_GUARD_THRESHOLDS="$(normalize_list "${1#--micro-exit-guard-thresholds=}")"; shift ;;
+    --jobs) GRID_JOBS="$2"; shift 2 ;;
+    --jobs=*) GRID_JOBS="${1#--jobs=}"; shift ;;
     --default-baseline) RUN_DEFAULT_BASELINE="true"; shift ;;
     --no-default-baseline) RUN_DEFAULT_BASELINE="false"; shift ;;
     --dry-run) DRY_RUN="true"; shift ;;
@@ -216,6 +220,7 @@ done
 [[ -n "$END_DATE" ]] || die "--end is required, or export END_DATE/CAL_END"
 [[ -n "$LIFECYCLE_EXIT_THRESHOLDS" ]] || die "at least one lifecycle exit threshold is required"
 [[ -n "$MICRO_EXIT_GUARD_THRESHOLDS" ]] || die "at least one micro exit guard threshold is required"
+[[ "$GRID_JOBS" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive integer"
 
 python3 - "$START_DATE" "$END_DATE" "$MIN_PNL_TO_SCALE" "$MIN_TRADES_TO_SCALE" <<'PY'
 import datetime as dt
@@ -263,7 +268,7 @@ cat <<SUMMARY
 [EXIT-GRID] lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
 [EXIT-GRID] python_bin=$PYTHON_BIN
 [EXIT-GRID] fixed_micro_entry_thresholds long=${MICRO_LONG_ENTRY_THRESHOLD:-<scorecard/default>} short=${MICRO_SHORT_ENTRY_THRESHOLD:-<scorecard/default>}
-[EXIT-GRID] lifecycle_exit_thresholds=[$LIFECYCLE_EXIT_THRESHOLDS] micro_exit_guard_thresholds=[$MICRO_EXIT_GUARD_THRESHOLDS] combos=$TOTAL_COMBOS
+[EXIT-GRID] lifecycle_exit_thresholds=[$LIFECYCLE_EXIT_THRESHOLDS] micro_exit_guard_thresholds=[$MICRO_EXIT_GUARD_THRESHOLDS] combos=$TOTAL_COMBOS jobs=$GRID_JOBS
 SUMMARY
 
 if [[ -z "$MICRO_LONG_ENTRY_THRESHOLD" || -z "$MICRO_SHORT_ENTRY_THRESHOLD" ]]; then
@@ -328,6 +333,40 @@ run_launcher() {
   return 0
 }
 
+ACTIVE_PIDS=()
+
+wait_for_parallel_jobs() {
+  local pid failed=0
+  for pid in "${ACTIVE_PIDS[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+    fi
+  done
+  ACTIVE_PIDS=()
+  return "$failed"
+}
+
+throttle_parallel_jobs() {
+  if (( GRID_JOBS <= 1 )); then
+    return 0
+  fi
+  if (( ${#ACTIVE_PIDS[@]} >= GRID_JOBS )); then
+    if ! wait_for_parallel_jobs; then
+      echo "[EXIT-GRID][WARN] one or more parallel grid jobs returned non-zero; inspect per-combo logs" >&2
+    fi
+  fi
+}
+
+schedule_launcher() {
+  if (( GRID_JOBS <= 1 )); then
+    run_launcher "$@"
+  else
+    throttle_parallel_jobs
+    run_launcher "$@" &
+    ACTIVE_PIDS+=("$!")
+  fi
+}
+
 if truthy "$RUN_DEFAULT_BASELINE"; then
   BASE_DIR="$OUTPUT_BASE/baseline-default"
   if truthy "$RESUME" && completed_successfully "$BASE_DIR"; then
@@ -348,9 +387,13 @@ for LE in $LIFECYCLE_EXIT_THRESHOLDS; do
       echo "[EXIT-GRID] resume=true; skipping completed combo=$combo_index/$TOTAL_COMBOS lifecycle_exit=$LE micro_exit_guard=$GE"
       continue
     fi
-    run_launcher "combo-$combo_index-of-$TOTAL_COMBOS" "$LE" "$GE" "grid" "$COMBO_DIR" "$COMBO_DIR/${SAFE_SYMBOL}-${START_DATE}-to-${END_DATE}-LE${LE_SLUG}-GE${GE_SLUG}-${RUN_STAMP}.log"
+    schedule_launcher "combo-$combo_index-of-$TOTAL_COMBOS" "$LE" "$GE" "grid" "$COMBO_DIR" "$COMBO_DIR/${SAFE_SYMBOL}-${START_DATE}-to-${END_DATE}-LE${LE_SLUG}-GE${GE_SLUG}-${RUN_STAMP}.log"
   done
 done
+
+if ! wait_for_parallel_jobs; then
+  echo "[EXIT-GRID][WARN] one or more parallel grid jobs returned non-zero; summarizing available results anyway" >&2
+fi
 
 echo "[EXIT-GRID] summarizing grid results"
 python3 - "$OUTPUT_BASE" "$SYMBOL" "$MIN_PNL_TO_SCALE" "$MIN_TRADES_TO_SCALE" <<'PY'
