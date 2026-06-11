@@ -155,7 +155,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.market-data-request-id:1001}") private int marketDataRequestId;
     @Value("${trading.risk.max-order-notional:25000}") private double maxOrderNotional;
     @Value("${trading.risk.max-daily-orders:40}") private int maxDailyOrders;
-    @Value("${trading.risk.max-share-cap:500}") private int maxShareCap;
+    @Value("${trading.risk.max-share-cap:10,000}") private int maxShareCap = 10000;
     @Value("${trading.shared-capital.enabled:false}") private boolean sharedCapitalEnabled;
     @Value("${trading.shared-capital.file:runtime/shared-capital.properties}") private String sharedCapitalFile;
     @Value("${trading.shared-capital.total-notional:0}") private double sharedCapitalTotalNotional;
@@ -634,7 +634,8 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
         // Resolve the best executable reference from the live quote book before notional and share-cap checks.
         double executionReferencePrice = resolveExecutionReferencePrice(action, currentPrice, enforcedOrderType);
-        int finalQty = Math.min(quantity, getMaxShareCap());
+        int shareCap = getMaxShareCap();
+        int finalQty = Math.min(quantity, shareCap);
         int orderIdToUse = currentOrderId;
 
         if (quantity <= 0 || executionReferencePrice <= 0.0) {
@@ -643,6 +644,11 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             return;
         }
         flowCondition("ORDER.GATE", "VALID_QTY_PRICE", true, "qty=" + quantity + " price=" + executionReferencePrice + " requestedPrice=" + currentPrice + " lastAsk=" + currentAskPrice);
+        if (quantity > shareCap) {
+            flowInfo("RISK", "Order quantity clamped by max share cap requested=" + quantity + " cap=" + shareCap + " finalQty=" + finalQty);
+        } else {
+            flowCondition("ORDER.GATE", "QTY_WITHIN_MAX_SHARE_CAP", true, "requested=" + quantity + " cap=" + shareCap + " finalQty=" + finalQty);
+        }
 
         if (!isClosingTrade && (executionReferencePrice * finalQty) > maxOrderNotional) {
             flowError("RISK", "Order blocked: notional exceeds limit");
@@ -822,7 +828,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     }
 
     protected int getMaxShareCap() {
-        return Math.max(500, maxShareCap);
+        return Math.max(1, maxShareCap);
     }
 
     protected void rollRiskCountersIfNeeded() {

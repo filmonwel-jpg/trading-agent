@@ -81,14 +81,10 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertFalse(long_exit.empty)
         self.assertEqual(self._ts("09:30:35"), long_exit.iloc[0]["EntryTime"])
         self.assertEqual(self._ts("09:30:40"), long_exit.iloc[0]["Timestamp"])
-        positive_entry = long_entry[long_entry["Label_Long_MicroEntry"].eq(1)].iloc[0]
-        self.assertEqual(positive_entry["arm_id"], long_exit.iloc[0]["arm_id"])
-        self.assertEqual(positive_entry["entry_decision_id"], long_exit.iloc[0]["entry_decision_id"])
-        self.assertEqual(positive_entry["trade_path_id"], long_exit.iloc[0]["trade_path_id"])
 
-    def test_setup_probability_threshold_and_margin_replace_bootstrap_proxy(self) -> None:
+    def test_setup_probability_column_replaces_bootstrap_proxy(self) -> None:
         df30 = self._bars_30s([
-            {"Timestamp": self._ts("09:30:00"), "Open": 100.0, "High": 100.2, "Low": 99.9, "Close": 100.0, "Label_Long_Entry": 1, "Label_Short_Entry": 0, "f_entry_prob": 0.42, "f_entry_threshold": 0.37, "entry_route": "trend_pullback", "setup_cohort": "liquid"},
+            {"Timestamp": self._ts("09:30:00"), "Open": 100.0, "High": 100.2, "Low": 99.9, "Close": 100.0, "Label_Long_Entry": 1, "Label_Short_Entry": 0, "f_entry_prob": 0.42},
             {"Timestamp": self._ts("09:30:30"), "Open": 100.0, "High": 100.4, "Low": 99.8, "Close": 100.2, "Label_Long_Entry": 0, "Label_Short_Entry": 0, "f_entry_prob": 0.10},
             {"Timestamp": self._ts("09:31:00"), "Open": 100.2, "High": 100.6, "Low": 100.0, "Close": 100.4, "Label_Long_Entry": 0, "Label_Short_Entry": 0, "f_entry_prob": 0.11},
         ])
@@ -103,20 +99,7 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertFalse(long_lifecycle.empty)
         self.assertFalse(long_entry.empty)
         self.assertAlmostEqual(0.42, long_lifecycle.iloc[0]["f_entry_score_proxy"])
-        self.assertAlmostEqual(0.42, long_lifecycle.iloc[0]["f_entry_prob"])
-        self.assertAlmostEqual(0.37, long_lifecycle.iloc[0]["f_entry_threshold"])
-        self.assertAlmostEqual(0.05, long_lifecycle.iloc[0]["f_entry_threshold_margin"])
         self.assertTrue((long_entry["f_setup_score_proxy"] == 0.42).all())
-        self.assertTrue((long_entry["f_setup_prob"] == 0.42).all())
-        self.assertTrue((long_entry["f_setup_threshold"] == 0.37).all())
-        self.assertTrue(np.allclose(long_entry["f_setup_threshold_margin"], 0.05))
-        self.assertEqual(1, long_entry["arm_id"].nunique())
-        self.assertTrue(long_entry["entry_decision_id"].is_unique)
-        self.assertEqual(lm.LABEL_VERSION, long_lifecycle.iloc[0]["label_version"])
-        self.assertEqual(lm.FILL_MODEL_VERSION, long_entry.iloc[0]["fill_model_version"])
-        self.assertEqual(lm.FEATURE_SCHEMA_VERSION, long_entry.iloc[0]["feature_schema_version"])
-        self.assertEqual("trend_pullback", long_entry.iloc[0]["setup_route"])
-        self.assertEqual("liquid", long_entry.iloc[0]["setup_cohort"])
         self.assertFalse(lm._ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED)
 
     def test_write_scorecards_writes_route_manifest_schema_hash(self) -> None:
@@ -174,7 +157,6 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
 
 

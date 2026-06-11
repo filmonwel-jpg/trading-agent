@@ -1,0 +1,3 @@
+symbol,micro_long_entry_threshold,micro_short_entry_threshold,decision,updated_at,notes
+TSLA,0.15,0.10,advance,2026-06-10,Final micro-entry survivor from calibration; use for paper TSLA/TQQQ launch.
+TQQQ,0.11,0.13,advance,2026-06-10,Final micro-entry survivor from calibration; use for paper TSLA/TQQQ launch.

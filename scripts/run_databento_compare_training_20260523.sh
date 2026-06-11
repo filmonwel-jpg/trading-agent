@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 export ROOT
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
 DATA_DIR="${DATA_DIR:-$ROOT/training_data/databento_30s_20260523}"
 PLAN_CSV="${PLAN_CSV:-$DATA_DIR/symbol_model_plan.csv}"
 COMPARE_ROOT="${COMPARE_ROOT:-$ROOT/training_data/compare_runs_20260523_meta_ab}"

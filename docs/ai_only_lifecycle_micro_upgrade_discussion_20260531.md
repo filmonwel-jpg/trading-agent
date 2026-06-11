@@ -4,6 +4,8 @@ Date: 2026-05-31
 Enhanced: 2026-06-02
 Decisions recorded: 2026-06-02
 Implementation updated: 2026-06-03
+Exit calibration updated: 2026-06-10
+Micro-entry outcome updated: 2026-06-10
 
 Status: living design/review note after inspecting the current Databento/IBKR training, runtime, launch, and backtest code paths. See the 2026-06-03 implementation ledger below for what has now been implemented from this document, including the completed bootstrap lifecycle/micro model training and export snapshot. The exported bundle is a schema-valid bootstrap artifact, not yet a live-promotable artifact, because the completed run still used bootstrap setup/entry score proxies.
 
@@ -243,12 +245,376 @@ The credential, TLS, Databento API, ONNX loading, manifest validation, and `trad
 
 Recommended immediate action: parse the successful `TSLA` non-dry log to explain the zero-trade/zero-arm result, then run a two-day `TSLA` replay including the prior session. If it still produces zero trades, add no-trade gate diagnostics before expanding to the full multi-symbol validation matrix.
 
+## 0A. Entry/exit threshold calibration ledger — 2026-06-10
+
+This section records the follow-up work performed after the lifecycle/micro integration became runnable with non-dry Databento data. The workflow first calibrated micro-entry thresholds, then held those entries fixed while testing whether explicit lifecycle-exit and micro-exit-guard threshold tuning improved the surviving symbols.
+
+### Micro-entry threshold calibration outcomes
+
+Micro-entry calibration established the fixed entry thresholds used by the later exit-threshold sweeps. The relevant result sets discussed here were:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/trading-agent-all-symbol-micro-threshold-grid-low-parallel-20260609_114711
+/Volumes/DatabentoVault/trading-agent-offload/databento/trading-agent-candidate-micro-threshold-holdout-parallel-20260610_015813
+/Volumes/DatabentoVault/trading-agent-offload/databento/trading-agent-survivor-micro-threshold-recent-validation-20260610_021833
+```
+
+The first broad low-threshold grid produced several attractive in-sample candidates, but the holdout and recent-survivor checks narrowed the live candidate set sharply:
+
+| Symbol | Selected micro-entry thresholds | Broad low-grid result | Candidate holdout result | Recent survivor validation | Decision |
+|---|---:|---:|---:|---:|---|
+| `TSLA` | `long=0.15`, `short=0.10` | `+261.17`, `3` trades | `+691.90`, `2` trades | `+143.24`, `7` trades | **Keep** |
+| `TQQQ` | `long=0.11`, `short=0.13` | `+870.00`, `12` trades | `+120.00`, `4` trades | `+255.00`, `11` trades | **Keep** |
+| `SMH` | `long=0.10`, `short=0.12` | `+2008.87`, `11` trades | `+687.30`, `4` trades | `-124.61`, `4` trades | Reject/defer for this promotion cycle |
+| `NVDA` | `long=0.17`, `short=0.09` | `+2171.22`, `9` trades | `-848.65`, `2` trades | Not advanced | Reject/defer for this promotion cycle |
+| `TSM` | `long=0.16`, `short=0.10` | `+1284.18`, `4` trades | `-850.71`, `2` trades | Not advanced | Reject/defer for this promotion cycle |
+| `WFC` | `long=0.11`, `short=0.08` | `+250.00`, `2` trades | `-40.00`, `2` trades | Not advanced | Reject/defer; too small/weak |
+
+Additional symbols that looked acceptable in the initial broad grid did not produce holdout trades and therefore were not useful for exit calibration:
+
+```text
+ARKK  long=0.17 short=0.12  holdout PnL=0.00 trades=0
+GILD  long=0.12 short=0.08  holdout PnL=0.00 trades=0
+NFLX  long=0.10 short=0.09  holdout PnL=0.00 trades=0
+OXY   long=0.14 short=0.14  holdout PnL=0.00 trades=0
+XOM   long=0.11 short=0.14  holdout PnL=0.00 trades=0
+```
+
+Final micro-entry decision:
+
+```text
+Advance only TSLA and TQQQ from micro-entry calibration.
+
+TSLA  strategy.micro.longEntryThreshold=0.15
+TSLA  strategy.micro.shortEntryThreshold=0.10
+
+TQQQ  strategy.micro.longEntryThreshold=0.11
+TQQQ  strategy.micro.shortEntryThreshold=0.13
+```
+
+Rationale:
+
+- `TSLA` stayed profitable across the broad low-grid, candidate holdout, and recent-survivor validation.
+- `TQQQ` stayed profitable across the same three checks and provided the largest recent-survivor trade count among the final survivors.
+- `SMH`, `NVDA`, and `TSM` were no longer advanced despite initially strong grid results because later validation exposed instability or hard-stop loss behavior.
+- No-trade holdout symbols were removed because no entry means there is no exit behavior to optimize.
+- The final active candidate list for the next production-style validation path is therefore **only `TSLA` and `TQQQ`**.
+
+### Launcher and grid-runner changes completed
+
+- Added explicit CLI/property pass-through for exit thresholds so calibration no longer depends on `JAVA_TOOL_OPTIONS` or environment-property precedence:
+  - `--lifecycle-exit-threshold P`
+  - `--lifecycle-long-exit-threshold P`
+  - `--lifecycle-short-exit-threshold P`
+  - `--micro-exit-guard-threshold P`
+  - `--micro-long-exit-guard-threshold P`
+  - `--micro-short-exit-guard-threshold P`
+- Updated `scripts/run_databento_historical_ibkr_sim_backtest.sh` to resolve and print:
+  - `strategy.exit.lifecycle.longThreshold`
+  - `strategy.exit.lifecycle.shortThreshold`
+  - `strategy.micro.longExitGuardThreshold`
+  - `strategy.micro.shortExitGuardThreshold`
+- Updated `scripts/run_databento_micro_threshold_grid_search.sh` so entry-threshold sweeps can hold exit thresholds fixed.
+- Updated `scripts/run_databento_calibration_batches.sh` so batch validations can carry explicit exit-threshold overrides.
+- Added `scripts/run_databento_exit_threshold_grid_search.sh`, a one-symbol exit-calibration runner that:
+  - keeps micro-entry thresholds fixed,
+  - sweeps symmetric lifecycle-exit and micro-exit-guard threshold grids,
+  - writes `exit_grid_results.csv`, `top_exit_thresholds.tsv`, and `best_exit_threshold.env`,
+  - supports `--resume`, `--default-baseline`, and `--jobs N` for controlled parallelism.
+- Added ignore rules for local virtualenv/runtime artifacts so generated `.venv`, local backtest folders, Databento cert bundles, and classpath caches are not accidentally staged.
+- Validation performed before push:
+  - `bash -n` on the modified shell scripts.
+  - Help-output checks for all new flags.
+  - Dry-run threshold passthrough checks for the low-level launcher and exit-grid runner.
+  - Dry-run one-combo check for the micro-entry grid runner with fixed exit overrides.
+  - Staged whitespace and Databento API-key pattern checks.
+- Pushed commits:
+  - `3cdcb1e Add Databento exit threshold calibration flags`
+  - `91262d8 Parallelize Databento exit threshold grid combos`
+
+### Successful-candidate exit calibration runs
+
+The first exit-calibration target set was intentionally limited to the already-surviving symbols:
+
+```text
+TSLA  fixed micro-entry thresholds: long=0.15 short=0.10
+TQQQ  fixed micro-entry thresholds: long=0.11 short=0.13
+```
+
+Threshold grid used in both runs:
+
+```text
+lifecycle exit:     0.50 0.55 0.60 0.65 0.68 0.74
+micro exit guard:   0.50 0.55 0.60 0.65 0.68 0.74
+```
+
+Each symbol run therefore covered:
+
+```text
+36 grid combinations + 1 default baseline = 37 runs per symbol
+```
+
+#### Short holdout window: 2026-05-18 through 2026-05-22
+
+Copied result folder:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/local-backtests/exit-calibration-successful
+```
+
+Findings:
+
+- `TSLA`:
+  - Baseline/default PnL: `261.17` across `3` trades.
+  - Every completed grid combination produced the same `261.17` PnL, `3` trades, `2` guard exits, `1` hard stop, and `0` lifecycle exits.
+  - The generated `best_exit_threshold.env` selected `lifecycle=0.74`, `micro_guard=0.60`, but this was only a tie, not an improvement.
+- `TQQQ`:
+  - Baseline/default PnL: `870.00` across `12` trades.
+  - Many grid combinations tied baseline exactly.
+  - Lower lifecycle thresholds degraded performance:
+    - lifecycle `0.55`: `815.00` PnL, `15` trades, more lifecycle exits/churn.
+    - lifecycle `0.50`: `765.00` PnL, `16` trades, worse win rate.
+  - The generated `best_exit_threshold.env` selected `lifecycle=0.60`, `micro_guard=0.74`, but this tied baseline and did not improve hard stops or PnL.
+
+Decision from the short window:
+
+```text
+No exit-threshold change is justified for TSLA or TQQQ.
+```
+
+#### Broad validation window: 2026-05-18 through 2026-06-09
+
+Copied result folder:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/local-backtests/exit-calibration-successful-broad-2026-05-18-to-2026-06-09
+```
+
+Findings:
+
+- `TSLA` baseline/default:
+  - PnL: `674.09`
+  - Trades: `13`
+  - Win rate: `61.54%`
+  - Guard exits: `7`
+  - Lifecycle exits: `1`
+  - Hard stops: `5`
+- `TSLA` grid:
+  - `17` grid combinations tied baseline exactly.
+  - `0` completed combinations beat baseline.
+  - Lower lifecycle thresholds degraded results; lifecycle `0.60` dropped PnL to about `484`, and some lifecycle `0.50` completed rows were negative.
+  - Several low-threshold rows failed due Databento transport/server errors, not strategy logic.
+- `TQQQ` baseline/default:
+  - PnL: `1240.00`
+  - Trades: `29`
+  - Win rate: `68.97%`
+  - Guard exits: `19`
+  - Lifecycle exits: `1`
+  - Hard stops: `9`
+- `TQQQ` grid:
+  - `17` grid combinations tied baseline exactly.
+  - `0` completed combinations beat baseline.
+  - Lower lifecycle thresholds generally increased churn and reduced PnL.
+  - Example degraded rows included lifecycle `0.55` groups around `890`, `750`, or `30` PnL, lifecycle `0.50` groups around `470`, and one lifecycle `0.60` / guard `0.55` row at `-35` PnL.
+  - Several rows failed due Databento `500`, `504`, or premature-response streaming errors.
+
+Decision from the broad window:
+
+```text
+Keep default exits for TSLA and TQQQ.
+Do not promote any grid-selected exit threshold from this calibration.
+```
+
+Default exits to keep:
+
+```text
+strategy.exit.lifecycle.longThreshold=0.68
+strategy.exit.lifecycle.shortThreshold=0.68
+strategy.micro.longExitGuardThreshold=0.68
+strategy.micro.shortExitGuardThreshold=0.74
+```
+
+### Capital usage, daily trade distribution, and overlap findings
+
+The broad-window `baseline-default` lifecycle summary was also used to answer portfolio/risk questions.
+
+Sizing logic confirmed from code:
+
+```text
+strategy target trade amount = $100,000
+shares = floor(100000 / entry_price)
+absolute share cap = 500
+backtest.strategy.maxShareCap = 500
+effective shares = min(floor(100000 / entry_price), 500)
+```
+
+Implications:
+
+- `TSLA` did not hit the 500-share cap, so it traded near `$100,000` per position.
+- `TQQQ` hit the 500-share cap every time, so it traded around `$37,000` to `$43,500` per position, not `$100,000`.
+
+Broad-window totals:
+
+| Symbol | Trades | Gross entry amount | Avg entry amount | Total PnL | Avg PnL/trade |
+|---|---:|---:|---:|---:|---:|
+| `TQQQ` | 29 | `$1,142,410.00` | `$39,393.45` | `$1,240.00` | `$42.76` |
+| `TSLA` | 13 | `$1,296,794.52` | `$99,753.42` | `$674.09` | `$51.85` |
+| **Total** | **42** | **$2,439,204.52** | **$58,076.30** | **$1,914.09** | **$45.57** |
+
+Daily coverage:
+
+```text
+Calendar window: 2026-05-18..2026-06-09
+Weekdays in window: 17
+Known market holiday: 2026-05-25 Memorial Day
+Market days excluding holiday: 16
+Days with at least one trade: 15
+No-trade market day: 2026-05-29
+```
+
+Days where both symbols traded on the same date:
+
+```text
+2026-05-18
+2026-05-27
+2026-06-03
+2026-06-08
+2026-06-09
+```
+
+Actual overlapping open positions occurred only on `2026-06-03`:
+
+| Date | Overlap start | Overlap end | Duration | TSLA trade | TQQQ trade | Combined entry notional |
+|---|---:|---:|---:|---|---|---:|
+| 2026-06-03 | 11:12:35 | 11:13:59 | 1m 24s | `TSLA #7 short` | `TQQQ #19 short` | `$143,099.60` |
+| 2026-06-03 | 11:14:31 | 11:20:42 | 6m 11s | `TSLA #8 short` | `TQQQ #19 short` | `$143,243.87` |
+
+Peak simultaneous exposure observed:
+
+```text
+2 open positions
+$143,243.87 combined entry notional
+```
+
+Risk implication:
+
+```text
+Portfolio-level validation should account for overlapping symbol exposure and unequal symbol notionals caused by the 500-share cap.
+```
+
+### Current decision after 2026-06-10 validation
+
+The exit models and micro guards are active, but threshold calibration did not add value for the two symbols that survived entry calibration. The promotion path should now stay narrow rather than reopening the rescue list.
+
+Operational decision:
+
+1. Advance **only `TSLA` and `TQQQ`** from the entry-threshold calibration.
+2. Keep default lifecycle/micro-exit thresholds.
+3. Do not use the tie-selected `best_exit_threshold.env` values as production overrides.
+4. Treat lower lifecycle thresholds, especially `0.50` and `0.55`, as risky for these symbols until proven otherwise in a separate validation window.
+5. Do not run the planned rescue/probation path for this promotion cycle; `SMH`, `NVDA`, `TSM`, `WFC`, and the no-trade holdout symbols remain research-only.
+
+### Next steps after successful-candidate exit calibration
+
+1. **Do not spend more calibration budget on TSLA/TQQQ exits yet**
+   - Two windows showed no PnL/hard-stop improvement from exit-threshold sweeps.
+   - If revisited, use a different independent validation window rather than the same holdout/broad period.
+
+2. **Do not proceed with rescue/probation exit calibration for this promotion cycle**
+   - Earlier analysis identified possible rescue symbols where hard stops were the failure mode:
+
+     ```text
+     SMH   fixed micro-entry thresholds: long=0.10 short=0.12
+     NVDA  fixed micro-entry thresholds: long=0.17 short=0.09
+     TSM   fixed micro-entry thresholds: long=0.16 short=0.10
+     ```
+
+   - Final decision after the entry/holdout/recent validation discussion: do **not** advance these names now.
+   - Reasons:
+     - `SMH` failed recent-survivor validation with `-124.61` PnL across `4` trades.
+     - `NVDA` and `TSM` failed candidate holdout with large negative PnL and `0%` win rate across `2` trades each.
+     - `WFC` was a weak lower-priority holdout result: `-40.00` PnL across `2` trades.
+     - `ARKK`, `GILD`, `NFLX`, `OXY`, and `XOM` had `0` holdout trades, so exit tuning cannot help them.
+   - If rescue research is reopened later, use a separate research branch/run folder and an independent validation window rather than mixing those symbols into the current TSLA/TQQQ promotion path.
+
+3. **Use the broad TSLA/TQQQ window as the active validation baseline**
+   - Current active symbols:
+
+     ```text
+     TSLA  micro entry long=0.15 short=0.10
+     TQQQ  micro entry long=0.11 short=0.13
+     ```
+
+   - Current exit-threshold decision:
+
+     ```text
+     Keep default lifecycle and micro-exit thresholds.
+     ```
+
+4. **Add a reusable analysis utility**
+   - The ad hoc analyses performed here should become a committed helper script that can summarize:
+     - `exit_grid_results.csv` vs baseline,
+     - daily trade PnL and entry notional,
+     - no-trade days,
+     - overlapping open-position intervals,
+     - peak simultaneous notional exposure.
+   - Suggested path: `scripts/summarize_databento_backtest_results.py`.
+
+5. **Decide whether calibration should use equal-notional or live-cap sizing**
+   - Current backtests use `$100,000` target notional but cap all symbols at `500` shares.
+   - This makes low-priced symbols such as `TQQQ` materially smaller than higher-priced symbols such as `TSLA`.
+   - Before comparing symbols by raw PnL, choose whether the validation objective is:
+     - live-realistic capped shares, or
+     - equal-notional research comparison.
+
+6. **Portfolio-level promotion gate**
+   - Before paper/live promotion, require a portfolio-level validation table showing:
+     - daily total PnL,
+     - gross entry notional,
+     - peak simultaneous notional,
+     - overlap count/duration,
+     - per-symbol hard-stop contribution,
+     - trade count by day.
+
+6. **Retry incomplete Databento rows only when needed**
+   - Broad-window incomplete rows were Databento transport/server failures (`500`, `504`, premature response), not strategy failures.
+   - Rerun with `--resume` only if a complete grid is needed for a final report; the current conclusion for TSLA/TQQQ does not depend on those failed rows because no completed combo beat baseline.
+
 ### Important follow-up after this implementation and bootstrap export
 
 - The lifecycle/micro feature schema changed and has now been retrained/exported into the bootstrap `lifecycle_micro_20260523` bundle above. Stale lifecycle/micro bundles should fail manifest validation once `strategy.model.upgradedRouteRequired=true` or lifecycle/micro flags are enabled.
 - The completed bundle should be treated as schema/integration validation only until a live-shaped walk-forward training distribution replaces the bootstrap `1.0` setup/entry score proxy population.
 - The training distribution is still a bootstrap distribution based on label-positive 30-second setup rows. The live-shaped walk-forward model-armed distribution remains the next major P1 item.
 - Non-dry historical backtests with real Databento bars and the new `trade_lifecycle_summary.csv` remain required P2 validation before paper/live promotion.
+
+## 0B. Micro-entry (`microentry`) threshold outcome — 2026-06-10
+
+This section records only the micro-entry outcome that is explicitly available from the current chat/documentation context. It does **not** infer missing grid metrics, unexplained symbol rankings, or promotion readiness beyond the thresholds and follow-up decisions already stated above.
+
+### Fixed micro-entry thresholds currently carried forward
+
+The exit-calibration work intentionally held the already-selected micro-entry thresholds fixed. Those fixed values are the current documented micro-entry overlay inputs for follow-on validation:
+
+| Symbol | Status in follow-on validation | Long micro-entry threshold | Short micro-entry threshold |
+|---|---|---:|---:|
+| `TSLA` | Successful-candidate validation | `0.15` | `0.10` |
+| `TQQQ` | Successful-candidate validation | `0.11` | `0.13` |
+| `SMH` | Rescue/probation validation candidate | `0.10` | `0.12` |
+| `NVDA` | Rescue/probation validation candidate | `0.17` | `0.09` |
+| `TSM` | Rescue/probation validation candidate | `0.16` | `0.10` |
+
+### Operational decision
+
+1. Keep the `TSLA` and `TQQQ` micro-entry thresholds fixed while validating exit behavior; no exit-threshold grid result justified changing these entry overlays.
+2. Use the listed `SMH`, `NVDA`, and `TSM` micro-entry thresholds as fixed inputs for the next rescue/probation exit-calibration pass.
+3. Do not treat the bootstrap lifecycle/micro bundle as live-promotable merely because symbol-level micro-entry overlays exist. Promotion still requires a non-bootstrap, live-shaped lifecycle/micro bundle and multi-day non-dry validation with real trades.
+4. Keep micro-entry model scope pooled/global for now. Symbol-specific thresholds are acceptable as overlays, but the document’s earlier promotion gates still apply before creating per-symbol micro-entry ONNX models.
+
+### How to read this outcome
+
+- These thresholds are execution-confirmation overlays for the 5-second `long_micro_entry_5s.onnx` and `short_micro_entry_5s.onnx` routes; they do not replace the 30-second setup model.
+- During exit-threshold calibration, micro-entry thresholds should remain fixed so the experiment isolates lifecycle-exit and micro-exit-guard behavior.
+- Future documentation updates should add artifact paths, date windows, baseline-vs-overlay metrics, and failure counts before any of these thresholds are described as promotion-ready.
 
 ## Project Understanding Snapshot
 

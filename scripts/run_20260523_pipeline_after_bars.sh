@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 export ROOT
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
 CHECK_INTERVAL_SECONDS="${CHECK_INTERVAL_SECONDS:-300}"
 MIN_30S_SYMBOL_CSVS="${MIN_30S_SYMBOL_CSVS:-99}"
 MIN_5S_SYMBOL_CSVS="${MIN_5S_SYMBOL_CSVS:-99}"

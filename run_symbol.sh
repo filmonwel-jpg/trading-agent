@@ -4,12 +4,13 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_symbol.sh <SYMBOL> [--start] [--max-trades=N] [--tee[=FILE]] [--tee-db] [--skip-ibkr-preflight] [--require-prebuilt-jar] [-- <extra java args...>]
+  ./run_symbol.sh <SYMBOL> [--start] [--max-trades=N] [--max-share-cap=N] [--trade-amount=N] [--max-order-notional=N] [--per-trade-notional=N] [--tee[=FILE]] [--tee-db] [--skip-ibkr-preflight] [--require-prebuilt-jar] [-- <extra java args...>]
 
 Examples:
   ./run_symbol.sh TSLA
   ./run_symbol.sh NVDA --start
   ./run_symbol.sh AMD --start --max-trades=0
+  ./run_symbol.sh TSLA --start --max-trades=2 --per-trade-notional=5000 --max-share-cap=25
   ./run_symbol.sh TSLA --start --tee
   ./run_symbol.sh NVDA --start --tee=runtime/nvda_live_trade_logs.txt -- --trading.risk.max-order-notional=90000
   ./run_symbol.sh AMD --start --tee --tee-db
@@ -21,7 +22,12 @@ Behavior:
   - With --require-prebuilt-jar, preview/start both fail if the packaged jar is missing or stale.
   - In --start mode, the script automatically waits for the configured IBKR API endpoint before launching unless you pass --skip-ibkr-preflight.
   - For Databento market data, the script validates the configured Python interpreter and automatically falls back to a local interpreter that has databento/databento_dbn installed.
+  - Calibrated per-symbol micro-entry thresholds are loaded from config/databento_calibrated_micro_entry_thresholds.csv when present.
   - Use --max-trades=0 for a safe startup verification that blocks new entries.
+  - Use --max-share-cap=N to set the final broker-side maximum shares per order before an order is sent.
+  - Use --trade-amount=N to set the dollar amount used by the strategy to calculate share quantity.
+  - Use --max-order-notional=N to set the risk cap checked before opening orders.
+  - Use --per-trade-notional=N to set both --trade-amount and --max-order-notional to the same value.
   - Use --tee or --tee=FILE to append combined output to a log file.
   - Use --tee-db to persist the combined live process log stream to PostgreSQL.
 EOF
@@ -44,6 +50,9 @@ tee_mode=0
 tee_db_mode=0
 tee_path=""
 max_trades_override=""
+trade_amount_cli_override=""
+max_notional_cli_override=""
+max_share_cap_cli_override=""
 skip_ibkr_preflight=0
 require_prebuilt_jar=0
 extra_args=()
@@ -75,6 +84,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     --max-trades=*)
       max_trades_override="${1#--max-trades=}"
+      ;;
+    --trade-amount=*)
+      trade_amount_cli_override="${1#--trade-amount=}"
+      ;;
+    --max-order-notional=*)
+      max_notional_cli_override="${1#--max-order-notional=}"
+      ;;
+    --max-share-cap=*)
+      max_share_cap_cli_override="${1#--max-share-cap=}"
+      ;;
+    --per-trade-notional=*|--trade-notional=*)
+      trade_amount_cli_override="${1#*=}"
+      max_notional_cli_override="${1#*=}"
       ;;
     --skip-ibkr-preflight|--no-ensure-ibkr)
       skip_ibkr_preflight=1
@@ -111,6 +133,21 @@ fi
 
 symbol_upper="$(printf '%s' "$symbol_input" | tr '[:lower:]' '[:upper:]')"
 symbol_lower="$(printf '%s' "$symbol_input" | tr '[:upper:]' '[:lower:]')"
+
+if [[ -n "$trade_amount_cli_override" && ! "$trade_amount_cli_override" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[RUN][ERROR] --trade-amount/--per-trade-notional must be a positive whole-dollar amount." >&2
+  exit 1
+fi
+
+if [[ -n "$max_notional_cli_override" ]] && ! awk -v value="$max_notional_cli_override" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value + 0 > 0) }'; then
+  echo "[RUN][ERROR] --max-order-notional/--per-trade-notional must be a positive number." >&2
+  exit 1
+fi
+
+if [[ -n "$max_share_cap_cli_override" && ! "$max_share_cap_cli_override" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[RUN][ERROR] --max-share-cap must be a positive whole-share quantity." >&2
+  exit 1
+fi
 
 resolve_properties_file() {
   local symbol_lower_local="$1"
@@ -255,6 +292,7 @@ extra_arg_is_managed_override() {
     --trading.market-data-request-id=*|\
     --trading.trade-amount=*|\
     --trading.risk.max-order-notional=*|\
+    --trading.risk.max-share-cap=*|\
     --trading.model.dir=*|\
     --trading.state.file=*|\
     --trading.log.file=*|\
@@ -265,6 +303,8 @@ extra_arg_is_managed_override() {
     --trading.ai.short-exit-threshold=*|\
     --trading.ai.regime-threshold=*|\
     --trading.ai.entry-threshold-raise-percent=*|\
+    --trading.micro.long-entry-threshold=*|\
+    --trading.micro.short-entry-threshold=*|\
     --trading.shared-capital.enabled=*|\
     --trading.shared-capital.file=*|\
     --trading.shared-capital.total-notional=*|\
@@ -316,6 +356,7 @@ resolve_databento_python_bin() {
     candidates+=("$DATABENTO_PYTHON_BIN")
   fi
   candidates+=(
+    "$repo_root/.venv/bin/python"
     "$HOME/miniforge3/bin/python3"
     python3
     /opt/homebrew/bin/python3
@@ -441,6 +482,7 @@ client_id="$(get_prop trading.client-id)"
 market_data_request_id="$(get_prop trading.market-data-request-id)"
 trade_amount="$(get_prop trading.trade-amount)"
 max_notional="$(get_prop trading.risk.max-order-notional)"
+max_share_cap="$(get_prop trading.risk.max-share-cap)"
 ai_long_entry_threshold="$(get_prop trading.ai.long-entry-threshold)"
 ai_short_entry_threshold="$(get_prop trading.ai.short-entry-threshold)"
 ai_long_exit_threshold="$(get_prop trading.ai.long-exit-threshold)"
@@ -462,6 +504,18 @@ app_log_file="$(get_prop logging.file.name)"
 model_dir="${model_dir_prop:-$runtime_dir/models/$symbol_upper}"
 lifecycle_model_dir="${TRADING_LIFECYCLE_MODEL_DIR:-$repo_root/model_exports/lifecycle_micro_20260523}"
 lifecycle_scorecard="$lifecycle_model_dir/lifecycle_micro_scorecard.csv"
+calibrated_micro_thresholds_file="${TRADING_CALIBRATED_MICRO_THRESHOLDS_FILE:-$repo_root/config/databento_calibrated_micro_entry_thresholds.csv}"
+[[ "$calibrated_micro_thresholds_file" != /* ]] && calibrated_micro_thresholds_file="$repo_root/$calibrated_micro_thresholds_file"
+micro_long_entry_threshold="$(get_prop trading.micro.long-entry-threshold)"
+micro_short_entry_threshold="$(get_prop trading.micro.short-entry-threshold)"
+micro_long_entry_threshold_source=""
+micro_short_entry_threshold_source=""
+if [[ -n "$micro_long_entry_threshold" ]]; then
+  micro_long_entry_threshold_source="properties:$properties_file"
+fi
+if [[ -n "$micro_short_entry_threshold" ]]; then
+  micro_short_entry_threshold_source="properties:$properties_file"
+fi
 
 truthy_env() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -483,11 +537,42 @@ csv_threshold() {
   fi
 }
 
+csv_symbol_value() {
+  local file_path="$1"
+  local target_symbol="$2"
+  local target_key="$3"
+  [[ -f "$file_path" ]] || return 0
+  awk -F, -v target_symbol="$target_symbol" -v target_key="$target_key" '
+    function trim(s) { gsub(/^[[:space:]\r\n]+|[[:space:]\r\n]+$/, "", s); return s }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        key = trim($i)
+        idx[key] = i
+      }
+      symbol_idx = idx["symbol"]
+      value_idx = idx[target_key]
+      if (!symbol_idx || !value_idx) exit 0
+      next
+    }
+    symbol_idx && value_idx {
+      current_symbol = toupper(trim($(symbol_idx)))
+      if (current_symbol == toupper(target_symbol)) {
+        print trim($(value_idx))
+        exit 0
+      }
+    }
+  ' "$file_path"
+}
+
 server_port_override="$(resolve_extra_arg_override server.port)"
 client_id_override="$(resolve_extra_arg_override trading.client-id)"
 market_data_request_id_override="$(resolve_extra_arg_override trading.market-data-request-id)"
-trade_amount_override="$(resolve_extra_arg_override trading.trade-amount)"
-max_notional_override="$(resolve_extra_arg_override trading.risk.max-order-notional)"
+trade_amount_extra_override="$(resolve_extra_arg_override trading.trade-amount)"
+max_notional_extra_override="$(resolve_extra_arg_override trading.risk.max-order-notional)"
+max_share_cap_extra_override="$(resolve_extra_arg_override trading.risk.max-share-cap)"
+trade_amount_override="${trade_amount_extra_override:-$trade_amount_cli_override}"
+max_notional_override="${max_notional_extra_override:-$max_notional_cli_override}"
+max_share_cap_override="${max_share_cap_extra_override:-$max_share_cap_cli_override}"
 model_dir_prop_override="$(resolve_extra_arg_override trading.model.dir)"
 state_file_override="$(resolve_extra_arg_override trading.state.file)"
 trade_log_file_override="$(resolve_extra_arg_override trading.log.file)"
@@ -498,6 +583,8 @@ ai_long_exit_threshold_override="$(resolve_extra_arg_override trading.ai.long-ex
 ai_short_exit_threshold_override="$(resolve_extra_arg_override trading.ai.short-exit-threshold)"
 ai_regime_threshold_override="$(resolve_extra_arg_override trading.ai.regime-threshold)"
 ai_entry_threshold_raise_percent_override="$(resolve_extra_arg_override trading.ai.entry-threshold-raise-percent)"
+micro_long_entry_threshold_override="$(resolve_extra_arg_override trading.micro.long-entry-threshold)"
+micro_short_entry_threshold_override="$(resolve_extra_arg_override trading.micro.short-entry-threshold)"
 shared_capital_enabled_override="$(resolve_extra_arg_override trading.shared-capital.enabled)"
 shared_capital_file_override="$(resolve_extra_arg_override trading.shared-capital.file)"
 shared_capital_total_notional_override="$(resolve_extra_arg_override trading.shared-capital.total-notional)"
@@ -519,6 +606,13 @@ if [[ -n "$trade_amount_override" ]]; then
 fi
 if [[ -n "$max_notional_override" ]]; then
   max_notional="$max_notional_override"
+fi
+if [[ -n "$max_share_cap_override" ]]; then
+  max_share_cap="$max_share_cap_override"
+fi
+if [[ -n "$max_share_cap" && ! "$max_share_cap" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[RUN][ERROR] Effective trading.risk.max-share-cap must be a positive whole-share quantity." >&2
+  exit 1
 fi
 if [[ -n "$model_dir_prop_override" ]]; then
   model_dir_prop="$model_dir_prop_override"
@@ -552,6 +646,36 @@ if [[ -n "$ai_entry_threshold_raise_percent_override" ]]; then
   ai_entry_threshold_raise_percent="$ai_entry_threshold_raise_percent_override"
 fi
 ai_entry_threshold_raise_percent="${ai_entry_threshold_raise_percent:-${TRADING_AI_ENTRY_THRESHOLD_RAISE_PERCENT:-10.0}}"
+if [[ -n "${TRADING_MICRO_LONG_ENTRY_THRESHOLD:-}" ]]; then
+  micro_long_entry_threshold="$TRADING_MICRO_LONG_ENTRY_THRESHOLD"
+  micro_long_entry_threshold_source="env:TRADING_MICRO_LONG_ENTRY_THRESHOLD"
+fi
+if [[ -n "${TRADING_MICRO_SHORT_ENTRY_THRESHOLD:-}" ]]; then
+  micro_short_entry_threshold="$TRADING_MICRO_SHORT_ENTRY_THRESHOLD"
+  micro_short_entry_threshold_source="env:TRADING_MICRO_SHORT_ENTRY_THRESHOLD"
+fi
+if [[ -n "$micro_long_entry_threshold_override" ]]; then
+  micro_long_entry_threshold="$micro_long_entry_threshold_override"
+  micro_long_entry_threshold_source="extra-arg:trading.micro.long-entry-threshold"
+fi
+if [[ -n "$micro_short_entry_threshold_override" ]]; then
+  micro_short_entry_threshold="$micro_short_entry_threshold_override"
+  micro_short_entry_threshold_source="extra-arg:trading.micro.short-entry-threshold"
+fi
+if [[ -z "$micro_long_entry_threshold" ]]; then
+  csv_micro_long_entry_threshold="$(csv_symbol_value "$calibrated_micro_thresholds_file" "$symbol_upper" micro_long_entry_threshold || true)"
+  if [[ -n "$csv_micro_long_entry_threshold" ]]; then
+    micro_long_entry_threshold="$csv_micro_long_entry_threshold"
+    micro_long_entry_threshold_source="csv:$calibrated_micro_thresholds_file"
+  fi
+fi
+if [[ -z "$micro_short_entry_threshold" ]]; then
+  csv_micro_short_entry_threshold="$(csv_symbol_value "$calibrated_micro_thresholds_file" "$symbol_upper" micro_short_entry_threshold || true)"
+  if [[ -n "$csv_micro_short_entry_threshold" ]]; then
+    micro_short_entry_threshold="$csv_micro_short_entry_threshold"
+    micro_short_entry_threshold_source="csv:$calibrated_micro_thresholds_file"
+  fi
+fi
 if [[ -n "$shared_capital_enabled_override" ]]; then
   shared_capital_enabled="$shared_capital_enabled_override"
 fi
@@ -638,6 +762,15 @@ else
   read -r -a java_opts <<< "$java_opts_raw"
 fi
 
+lifecycle_long_exit_threshold_resolved="$(csv_threshold longExitLifecycleAi 0.60)"
+lifecycle_short_exit_threshold_resolved="$(csv_threshold shortExitLifecycleAi 0.60)"
+micro_long_entry_threshold_resolved="${micro_long_entry_threshold:-$(csv_threshold longMicroEntryAi 0.58)}"
+micro_short_entry_threshold_resolved="${micro_short_entry_threshold:-$(csv_threshold shortMicroEntryAi 0.58)}"
+micro_long_exit_guard_threshold_resolved="$(csv_threshold longMicroExitGuardAi 0.70)"
+micro_short_exit_guard_threshold_resolved="$(csv_threshold shortMicroExitGuardAi 0.70)"
+micro_long_entry_threshold_source="${micro_long_entry_threshold_source:-scorecard:$lifecycle_scorecard}"
+micro_short_entry_threshold_source="${micro_short_entry_threshold_source:-scorecard:$lifecycle_scorecard}"
+
 if truthy_env "$lifecycle_micro_enabled"; then
   java_opts+=(
     -Dstrategy.model.upgradedRouteRequired=true
@@ -647,12 +780,12 @@ if truthy_env "$lifecycle_micro_enabled"; then
     -Dstrategy.micro.exitGuardEnabled=true
     "-Dstrategy.lifecycle.modelDir=$lifecycle_model_dir"
     "-Dstrategy.micro.modelDir=$lifecycle_model_dir"
-    "-Dstrategy.exit.lifecycle.longThreshold=$(csv_threshold longExitLifecycleAi 0.60)"
-    "-Dstrategy.exit.lifecycle.shortThreshold=$(csv_threshold shortExitLifecycleAi 0.60)"
-    "-Dstrategy.micro.longEntryThreshold=$(csv_threshold longMicroEntryAi 0.58)"
-    "-Dstrategy.micro.shortEntryThreshold=$(csv_threshold shortMicroEntryAi 0.58)"
-    "-Dstrategy.micro.longExitGuardThreshold=$(csv_threshold longMicroExitGuardAi 0.70)"
-    "-Dstrategy.micro.shortExitGuardThreshold=$(csv_threshold shortMicroExitGuardAi 0.70)"
+    "-Dstrategy.exit.lifecycle.longThreshold=$lifecycle_long_exit_threshold_resolved"
+    "-Dstrategy.exit.lifecycle.shortThreshold=$lifecycle_short_exit_threshold_resolved"
+    "-Dstrategy.micro.longEntryThreshold=$micro_long_entry_threshold_resolved"
+    "-Dstrategy.micro.shortEntryThreshold=$micro_short_entry_threshold_resolved"
+    "-Dstrategy.micro.longExitGuardThreshold=$micro_long_exit_guard_threshold_resolved"
+    "-Dstrategy.micro.shortExitGuardThreshold=$micro_short_exit_guard_threshold_resolved"
   )
 fi
 
@@ -711,6 +844,9 @@ if [[ -n "$trade_amount" ]]; then
 fi
 if [[ -n "$max_notional" ]]; then
   cmd+=("--trading.risk.max-order-notional=$max_notional")
+fi
+if [[ -n "$max_share_cap" ]]; then
+  cmd+=("--trading.risk.max-share-cap=$max_share_cap")
 fi
 if [[ -n "$model_dir_prop" ]]; then
   cmd+=("--trading.model.dir=$model_dir_prop")
@@ -783,8 +919,17 @@ printf '[RUN] model_dir=%s\n' "$model_dir"
 printf '[RUN] configured_model_dir=%s\n' "$model_dir_prop"
 printf '[RUN] onnx_count=%s\n' "$onnx_count"
 printf '[RUN] lifecycle_micro_enabled=%s lifecycle_model_dir=%s\n' "$lifecycle_micro_enabled" "$lifecycle_model_dir"
+if truthy_env "$lifecycle_micro_enabled"; then
+  printf '[RUN] lifecycle_exit_thresholds long=%s short=%s\n' "$lifecycle_long_exit_threshold_resolved" "$lifecycle_short_exit_threshold_resolved"
+  printf '[RUN] micro_entry_thresholds long=%s source=%s short=%s source=%s\n' \
+    "$micro_long_entry_threshold_resolved" \
+    "$micro_long_entry_threshold_source" \
+    "$micro_short_entry_threshold_resolved" \
+    "$micro_short_entry_threshold_source"
+  printf '[RUN] micro_exit_guard_thresholds long=%s short=%s\n' "$micro_long_exit_guard_threshold_resolved" "$micro_short_exit_guard_threshold_resolved"
+fi
 printf '[RUN] server_port=%s client_id=%s market_data_request_id=%s\n' "$server_port" "$client_id" "$market_data_request_id"
-printf '[RUN] trade_amount=%s max_order_notional=%s\n' "$trade_amount" "$max_notional"
+printf '[RUN] trade_amount=%s max_order_notional=%s max_share_cap=%s\n' "$trade_amount" "$max_notional" "${max_share_cap:-500}"
 printf '[RUN] ibkr_host=%s ibkr_port=%s\n' "$ib_host" "$ib_port"
 printf '[RUN] ai_thresholds longEntry=%s shortEntry=%s longExit=%s shortExit=%s regime=%s\n' \
   "${ai_long_entry_threshold:-default}" \

@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./start_all_databento_bots.sh [--start] [--symbols=CSV] [--exclude=CSV] [--max-trades=N] [--tee] [--tee-db] [--stagger-seconds=N] [--ibkr-client-cap=N] [--allow-over-ibkr-client-cap] [--ensure-ibkr] [--skip-ibkr-preflight] [--skip-local-data-preflight] [--ibkr-shared-gateway] [--no-ibkr-shared-gateway] [--ibkr-shared-gateway-host=HOST] [--ibkr-shared-gateway-port=PORT] [--ibkr-shared-gateway-skip-direct-connection] [--ibkr-shared-gateway-allow-direct-fallback] [--startup-history-seconds=N] [--startup-history-schema=SCHEMA] [--list] [-- <extra run_symbol args...>]
+  ./start_all_databento_bots.sh [--start] [--symbols=CSV] [--exclude=CSV] [--max-trades=N] [--max-share-cap=N] [--trade-amount=N] [--max-order-notional=N] [--per-trade-notional=N] [--tee] [--tee-db] [--stagger-seconds=N] [--ibkr-client-cap=N] [--allow-over-ibkr-client-cap] [--ensure-ibkr] [--skip-ibkr-preflight] [--skip-local-data-preflight] [--ibkr-shared-gateway] [--no-ibkr-shared-gateway] [--ibkr-shared-gateway-host=HOST] [--ibkr-shared-gateway-port=PORT] [--ibkr-shared-gateway-skip-direct-connection] [--ibkr-shared-gateway-allow-direct-fallback] [--startup-history-seconds=N] [--startup-history-schema=SCHEMA] [--list] [-- <extra run_symbol args...>]
 
 Behavior:
   - Discovers Databento bot configs from runtime/databento/bots/trading-*.properties.
@@ -25,6 +25,7 @@ Examples:
   ./start_all_databento_bots.sh --list
   ./start_all_databento_bots.sh --symbols=SPY,AAPL,NVDA
   ./start_all_databento_bots.sh --start --max-trades=0
+  ./start_all_databento_bots.sh --start --symbols=TSLA,TQQQ --tee --startup-history-seconds=0 --max-trades=2 --per-trade-notional=5000 --max-share-cap=25
   ./start_all_databento_bots.sh --start --symbols=SPY,AAPL,NVDA --tee --stagger-seconds=1
   ./start_all_databento_bots.sh --start --exclude=SPY,QQQ --tee-db
   ./start_all_databento_bots.sh --start --tee --tee-db --startup-history-seconds=0
@@ -56,6 +57,9 @@ list_mode=0
 symbols_csv=""
 exclude_csv=""
 max_trades_override=""
+trade_amount_override=""
+max_notional_override=""
+max_share_cap_override=""
 stagger_seconds="0"
 startup_history_seconds_override=""
 startup_history_schema_override=""
@@ -306,6 +310,15 @@ build_symbol_cmd() {
   if [[ -n "$max_trades_override" ]]; then
     cmd+=("--max-trades=$max_trades_override")
   fi
+  if [[ -n "$trade_amount_override" ]]; then
+    cmd+=("--trade-amount=$trade_amount_override")
+  fi
+  if [[ -n "$max_notional_override" ]]; then
+    cmd+=("--max-order-notional=$max_notional_override")
+  fi
+  if [[ -n "$max_share_cap_override" ]]; then
+    cmd+=("--max-share-cap=$max_share_cap_override")
+  fi
   if [[ $tee_mode -eq 1 ]]; then
     cmd+=(--tee)
   fi
@@ -435,6 +448,19 @@ while [[ $# -gt 0 ]]; do
     --max-trades=*)
       max_trades_override="${1#--max-trades=}"
       ;;
+    --trade-amount=*)
+      trade_amount_override="${1#--trade-amount=}"
+      ;;
+    --max-order-notional=*)
+      max_notional_override="${1#--max-order-notional=}"
+      ;;
+    --max-share-cap=*)
+      max_share_cap_override="${1#--max-share-cap=}"
+      ;;
+    --per-trade-notional=*|--trade-notional=*)
+      trade_amount_override="${1#*=}"
+      max_notional_override="${1#*=}"
+      ;;
     --stagger-seconds=*)
       stagger_seconds="${1#--stagger-seconds=}"
       ;;
@@ -504,6 +530,21 @@ case "$stagger_seconds" in
     exit 1
     ;;
 esac
+
+if [[ -n "$trade_amount_override" && ! "$trade_amount_override" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[BULK-LAUNCH][ERROR] --trade-amount/--per-trade-notional must be a positive whole-dollar amount." >&2
+  exit 1
+fi
+
+if [[ -n "$max_notional_override" ]] && ! awk -v value="$max_notional_override" 'BEGIN { exit !(value ~ /^[0-9]+([.][0-9]+)?$/ && value + 0 > 0) }'; then
+  echo "[BULK-LAUNCH][ERROR] --max-order-notional/--per-trade-notional must be a positive number." >&2
+  exit 1
+fi
+
+if [[ -n "$max_share_cap_override" && ! "$max_share_cap_override" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[BULK-LAUNCH][ERROR] --max-share-cap must be a positive whole-share quantity." >&2
+  exit 1
+fi
 
 if [[ -n "$startup_history_seconds_override" ]]; then
   case "$startup_history_seconds_override" in
@@ -691,11 +732,14 @@ done
 
 log "discovered ${#all_symbols[@]} bot configs; selected ${#selected_symbols[@]} symbols"
 printf '[BULK-LAUNCH] symbols=%s\n' "$(printf '%s,' "${selected_symbols[@]}" | sed 's/,$//')"
-printf '[BULK-LAUNCH] mode=%s tee=%s tee_db=%s max_trades=%s stagger_seconds=%s\n' \
+printf '[BULK-LAUNCH] mode=%s tee=%s tee_db=%s max_trades=%s trade_amount=%s max_order_notional=%s max_share_cap=%s stagger_seconds=%s\n' \
   "$([[ $start_mode -eq 1 ]] && printf 'START' || printf 'PREVIEW')" \
   "$tee_mode" \
   "$tee_db_mode" \
   "${max_trades_override:-<default>}" \
+  "${trade_amount_override:-<properties>}" \
+  "${max_notional_override:-<properties>}" \
+  "${max_share_cap_override:-<properties/default>}" \
   "$stagger_seconds"
 printf '[BULK-LAUNCH] ibkr_client_cap=%s allow_over_cap=%s\n' "$ibkr_client_cap" "$allow_over_ibkr_client_cap"
 printf '[BULK-LAUNCH] ibkr_shared_gateway enabled=%s host=%s port=%s skip_direct_connection=%s connect_timeout_ms=%s ack_timeout_ms=%s\n' \

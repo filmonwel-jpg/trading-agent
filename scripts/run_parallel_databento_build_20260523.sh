@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 export ROOT
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
 EQUS_DIR="/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9"
 OPRA_DIR="/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD"
 SYMBOLS_FILE="$ROOT/databento_ibkr_bridge/config/symbols_100.txt"

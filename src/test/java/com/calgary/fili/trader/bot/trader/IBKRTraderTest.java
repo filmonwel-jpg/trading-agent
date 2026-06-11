@@ -28,6 +28,7 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyDouble;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.eq;
 
 class IBKRTraderTest {
 
@@ -69,6 +70,52 @@ class IBKRTraderTest {
         ReflectionTestUtils.setField(trader, "databentoSharedFeedStartupHistorySeconds", 12.5);
         Double enabled = ReflectionTestUtils.invokeMethod(trader, "effectiveSharedRelayStartupHistorySeconds");
         assertEquals(12.5, enabled == null ? -1.0 : enabled.doubleValue());
+    }
+
+    @Test
+    void maxShareCapHonorsStartupOverrideBelowAndAboveDefault() {
+        IBKRTrader trader = new IBKRTrader(new SimpleMeterRegistry());
+
+        ReflectionTestUtils.setField(trader, "maxShareCap", 25);
+        assertEquals(25, trader.getMaxShareCap());
+
+        ReflectionTestUtils.setField(trader, "maxShareCap", 750);
+        assertEquals(750, trader.getMaxShareCap());
+
+        ReflectionTestUtils.setField(trader, "maxShareCap", 0);
+        assertEquals(1, trader.getMaxShareCap());
+    }
+
+    @Test
+    void placeTradeClampsSubmittedQuantityToConfiguredMaxShareCap() throws Exception {
+        IBKRTrader trader = new IBKRTrader(new SimpleMeterRegistry());
+        PingPongStrategy strategy = mock(PingPongStrategy.class);
+        SharedIbkrGatewayClient gatewayClient = mock(SharedIbkrGatewayClient.class);
+        trader.setShopStrategy(strategy);
+        ReflectionTestUtils.setField(trader, "symbol", "AAPL");
+        ReflectionTestUtils.setField(trader, "currentLastPrice", 101.0);
+        ReflectionTestUtils.setField(trader, "currentAskPrice", 101.0);
+        ReflectionTestUtils.setField(trader, "maxOrderNotional", 25_000.0);
+        ReflectionTestUtils.setField(trader, "maxDailyOrders", 40);
+        ReflectionTestUtils.setField(trader, "maxShareCap", 3);
+        ReflectionTestUtils.setField(trader, "sharedIbkrGatewayClient", gatewayClient);
+        ReflectionTestUtils.setField(trader, "ibkrSharedGatewaySkipDirectConnection", true);
+        when(strategy.getCurrentPosition()).thenReturn(0);
+        when(gatewayClient.isConnected()).thenReturn(true);
+        SharedIbkrGatewayMessage ack = new SharedIbkrGatewayMessage();
+        ack.ok = true;
+        ack.payload = Map.of("gatewayOrderId", 123, "status", "submitted", "symbol", "AAPL", "action", "BUY", "quantity", 3);
+        when(gatewayClient.submitOrder(anyString(), anyString(), anyInt(), anyString(), anyDouble(), any(), anyString(), any())).thenReturn(ack);
+        SharedIbkrGatewayMessage syncAck = new SharedIbkrGatewayMessage();
+        syncAck.ok = true;
+        syncAck.detail = "position-sync-requested";
+        syncAck.payload = Map.of("reqId", 456);
+        when(gatewayClient.requestPositionSync("post-order-position-validation-AAPL-123-shared-gateway-submit")).thenReturn(syncAck);
+
+        trader.placeTrade("AAPL", "BUY", 101.0, 5, "FAST_LMT");
+
+        verify(gatewayClient).submitOrder(anyString(), anyString(), eq(3), anyString(), anyDouble(), any(), anyString(), any());
+        verify(strategy).onOrderSubmitted(123, "BUY", 3);
     }
 
     @Test

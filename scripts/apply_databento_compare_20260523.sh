@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${TRADING_AGENT_ROOT:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 export ROOT
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-/Users/filmonghezehey/miniforge3/bin/python3}"
 COMPARE_ROOT="${COMPARE_ROOT:-$ROOT/training_data/compare_runs_20260523_meta_ab}"
 VERSIONED_ROUTING_CSV="${ROUTING_CSV:-$ROOT/runtime/databento/model-routing-20260523.csv}"
 CANONICAL_ROUTING_CSV="$ROOT/runtime/databento/model-routing.csv"
