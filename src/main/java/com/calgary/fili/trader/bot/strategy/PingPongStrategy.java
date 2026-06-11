@@ -379,6 +379,8 @@ public class PingPongStrategy implements TradingStrategy {
     private static final int REGULAR_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.regularMinBars", "60"));
     private static final int AI_DIAGNOSTIC_TOP_SETUP_EVENTS = Integer.parseInt(System.getProperty("strategy.ai.diagnosticTopSetups", "5"));
     private static final double AI_DIAGNOSTIC_NEAR_MISS_MARGIN = Double.parseDouble(System.getProperty("strategy.ai.nearMissMargin", "0.05"));
+    private static final long AI_BUCKET_SECONDS = 30L;
+    private static final long MICRO_BUCKET_SECONDS = 5L;
     private static final List<String> LEGACY_FEATURE_COLUMNS = List.of(
         "f_dist_vwap", "f_bb_lower_dist", "f_bb_upper_dist", "f_macd_diff",
         "f_body_size", "f_lower_wick", "f_upper_wick", "f_atr_norm",
@@ -757,6 +759,7 @@ public class PingPongStrategy implements TradingStrategy {
     private final Deque<Double> micro5sVolumeWindow20 = new ArrayDeque<>();
     private final Deque<Double> micro5sOptionFlowWindow20 = new ArrayDeque<>();
     private long micro5sBucketStartEpoch = -1L;
+    private long lastAlignedMicro5sWaitLogTargetEpoch = -1L;
     private double micro5sOpen = 0.0;
     private double micro5sHigh = 0.0;
     private double micro5sLow = Double.MAX_VALUE;
@@ -770,6 +773,7 @@ public class PingPongStrategy implements TradingStrategy {
     // --- 30-SECOND AGGREGATION BUCKET ---
     private long bucketStartEpoch = -1L;
     private long lastFinalizedBucketStartEpoch = -1L;
+    private long lastAligned30sWaitLogTargetEpoch = -1L;
     private double bucketOpen = 0.0;
     private double bucketHigh = 0.0;
     private double bucketLow = Double.MAX_VALUE;
@@ -1845,13 +1849,17 @@ public class PingPongStrategy implements TradingStrategy {
         // order routing still uses close/quotes as the execution reference for the market order.
         evaluateHardRiskExit("bar", low, high, close);
 
-        long nextBucketStart = time - Math.floorMod(time, 30L);
+        long nextBucketStart = aligned30SecondBucketStart(time);
         if (bucketStartEpoch < 0L && nextBucketStart <= lastFinalizedBucketStartEpoch) {
             flowCondition("STRATEGY.BAR", "LATE_FINALIZED_BUCKET_BAR_DROPPED", false,
                 "symbol=" + symbol + " epoch=" + time + " bucketStart=" + nextBucketStart + " lastFinalizedBucketStart=" + lastFinalizedBucketStartEpoch);
             return;
         }
         if (bucketStartEpoch < 0L) {
+            if (shouldWaitForAligned30SecondBucketStart(time)) {
+                waitForAligned30SecondBucketStart(time, nextBucketStart);
+                return;
+            }
             startNew30SecondBucket(nextBucketStart, open, high, low, close, volume, wap);
             if (time >= bucketStartEpoch + 29L) {
                 finalizeCurrent30SecondBucket();
@@ -1867,6 +1875,10 @@ public class PingPongStrategy implements TradingStrategy {
 
         if (nextBucketStart != bucketStartEpoch) {
             finalizeCurrent30SecondBucket();
+            if (shouldWaitForAligned30SecondBucketStart(time)) {
+                waitForAligned30SecondBucketStart(time, nextBucketStart);
+                return;
+            }
             startNew30SecondBucket(nextBucketStart, open, high, low, close, volume, wap);
             if (time >= bucketStartEpoch + 29L) {
                 finalizeCurrent30SecondBucket();
@@ -1880,6 +1892,52 @@ public class PingPongStrategy implements TradingStrategy {
         }
     }
 
+    private long alignedBucketStart(long epochSec, long bucketSeconds) {
+        return epochSec - Math.floorMod(epochSec, bucketSeconds);
+    }
+
+    private boolean isAlignedBucketStart(long epochSec, long bucketSeconds) {
+        return Math.floorMod(epochSec, bucketSeconds) == 0L;
+    }
+
+    private long aligned30SecondBucketStart(long epochSec) {
+        return alignedBucketStart(epochSec, AI_BUCKET_SECONDS);
+    }
+
+    private boolean isAligned30SecondBucketStart(long epochSec) {
+        return isAlignedBucketStart(epochSec, AI_BUCKET_SECONDS);
+    }
+
+    private boolean shouldWaitForAligned30SecondBucketStart(long epochSec) {
+        return !isAligned30SecondBucketStart(epochSec);
+    }
+
+    private void waitForAligned30SecondBucketStart(long epochSec, long currentBucketStart) {
+        long nextAlignedStart = currentBucketStart + AI_BUCKET_SECONDS;
+        if (lastAligned30sWaitLogTargetEpoch != nextAlignedStart) {
+            flowCondition("STRATEGY.BAR", "WAIT_FOR_ALIGNED_30S_BUCKET_START", false,
+                "symbol=" + symbol + " epoch=" + epochSec + " secondOffset=" + Math.floorMod(epochSec, AI_BUCKET_SECONDS) + " nextAlignedBucketStart=" + nextAlignedStart);
+            lastAligned30sWaitLogTargetEpoch = nextAlignedStart;
+        }
+    }
+
+    private long aligned5SecondMicroBucketStart(long epochSec) {
+        return alignedBucketStart(epochSec, MICRO_BUCKET_SECONDS);
+    }
+
+    private boolean shouldWaitForAligned5SecondMicroBucketStart(long epochSec) {
+        return !isAlignedBucketStart(epochSec, MICRO_BUCKET_SECONDS);
+    }
+
+    private void waitForAligned5SecondMicroBucketStart(long epochSec, long currentBucketStart) {
+        long nextAlignedStart = currentBucketStart + MICRO_BUCKET_SECONDS;
+        if (lastAlignedMicro5sWaitLogTargetEpoch != nextAlignedStart) {
+            flowCondition("STRATEGY.MICRO", "WAIT_FOR_ALIGNED_5S_MICRO_BUCKET_START", false,
+                "symbol=" + symbol + " epoch=" + epochSec + " secondOffset=" + Math.floorMod(epochSec, MICRO_BUCKET_SECONDS) + " nextAlignedMicroBucketStart=" + nextAlignedStart);
+            lastAlignedMicro5sWaitLogTargetEpoch = nextAlignedStart;
+        }
+    }
+
     private void updateIndependentMicroBarState(long time, double open, double high, double low, double close, long volume, double wap) {
         MicroBar sourceBar = new MicroBar(time, open, high, low, close, Math.max(0L, volume), wap > 0.0 ? wap : close);
         sourceBarWindow.addLast(sourceBar);
@@ -1890,8 +1948,12 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private void accumulateIndependent5SecondMicroBucket(MicroBar sourceBar) {
-        long nextBucketStart = sourceBar.epoch() - Math.floorMod(sourceBar.epoch(), 5L);
+        long nextBucketStart = aligned5SecondMicroBucketStart(sourceBar.epoch());
         if (micro5sBucketStartEpoch < 0L) {
+            if (shouldWaitForAligned5SecondMicroBucketStart(sourceBar.epoch())) {
+                waitForAligned5SecondMicroBucketStart(sourceBar.epoch(), nextBucketStart);
+                return;
+            }
             startIndependent5SecondMicroBucket(nextBucketStart, sourceBar);
             return;
         }
@@ -1902,6 +1964,10 @@ public class PingPongStrategy implements TradingStrategy {
         }
         if (nextBucketStart != micro5sBucketStartEpoch) {
             finalizeIndependent5SecondMicroBucket();
+            if (shouldWaitForAligned5SecondMicroBucketStart(sourceBar.epoch())) {
+                waitForAligned5SecondMicroBucketStart(sourceBar.epoch(), nextBucketStart);
+                return;
+            }
             startIndependent5SecondMicroBucket(nextBucketStart, sourceBar);
             return;
         }
@@ -1914,6 +1980,7 @@ public class PingPongStrategy implements TradingStrategy {
 
     private void startIndependent5SecondMicroBucket(long bucketStart, MicroBar sourceBar) {
         micro5sBucketStartEpoch = bucketStart;
+        lastAlignedMicro5sWaitLogTargetEpoch = -1L;
         micro5sOpen = sourceBar.open();
         micro5sHigh = sourceBar.high();
         micro5sLow = sourceBar.low();
@@ -1955,6 +2022,7 @@ public class PingPongStrategy implements TradingStrategy {
         micro5sClose = 0.0;
         micro5sVolume = 0L;
         micro5sWapSum = 0.0;
+        lastAlignedMicro5sWaitLogTargetEpoch = -1L;
         microPrevPutVolume = latestPutVolume;
         microPrevCallVolume = latestCallVolume;
         latestSourceBarEpoch = 0L;
@@ -2144,6 +2212,7 @@ public class PingPongStrategy implements TradingStrategy {
 
     private void startNew30SecondBucket(long bucketEpoch, double open, double high, double low, double close, long volume, double wap) {
         bucketStartEpoch = bucketEpoch;
+        lastAligned30sWaitLogTargetEpoch = -1L;
         bucketOpen = open;
         bucketHigh = high;
         bucketLow = low;
@@ -2168,15 +2237,29 @@ public class PingPongStrategy implements TradingStrategy {
         }
         long finalizedBucketStart = bucketStartEpoch;
         double finalWap = bucketVolume > 0 ? (bucketWapSum / bucketVolume) : bucketClose;
+        if (!isAligned30SecondBucketStart(finalizedBucketStart)) {
+            flowCondition("STRATEGY.BAR", "UNALIGNED_30S_AI_LIFECYCLE_BUCKET_DROPPED", false,
+                "symbol=" + symbol + " bucketStart=" + finalizedBucketStart + " secondOffset=" + Math.floorMod(finalizedBucketStart, AI_BUCKET_SECONDS));
+            clearCurrent30SecondBucket(false);
+            return;
+        }
         System.out.printf(
             ">>> [30s BUCKET] epoch=%d ohlc=%.2f/%.2f/%.2f/%.2f vol=%d vwap=%.4f%n",
             finalizedBucketStart, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap
         );
-        current30sAiDecisionEpoch = finalizedBucketStart + 30L;
+        current30sAiDecisionEpoch = finalizedBucketStart + AI_BUCKET_SECONDS;
         process30SecondBar(finalizedBucketStart, bucketOpen, bucketHigh, bucketLow, bucketClose, bucketVolume, finalWap);
         lastFinalizedBucketStartEpoch = finalizedBucketStart;
 
+        clearCurrent30SecondBucket(false);
+    }
+
+    private void clearCurrent30SecondBucket(boolean resetFinalizedState) {
         bucketStartEpoch = -1L;
+        if (resetFinalizedState) {
+            lastFinalizedBucketStartEpoch = -1L;
+        }
+        lastAligned30sWaitLogTargetEpoch = -1L;
         bucketOpen = 0.0;
         bucketHigh = 0.0;
         bucketLow = Double.MAX_VALUE;
@@ -3407,6 +3490,7 @@ public class PingPongStrategy implements TradingStrategy {
             prevPutVolume = 0L;
             prevCallVolume = 0L;
             optionVolumeWarningLogged = false;
+            clearCurrent30SecondBucket(true);
             clearIndependentMicroBarState();
             training30sReturnWindow20.clear();
             training30sVolumeWindow20.clear();
