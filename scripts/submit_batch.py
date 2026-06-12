@@ -31,9 +31,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schema", default=DEFAULT_SCHEMA, help="Databento options schema to request.")
     parser.add_argument("--stype-in", default=DEFAULT_STYPE_IN, help="Databento symbol type, e.g. parent or raw_symbol.")
     parser.add_argument("--symbols-file", default=str(DEFAULT_SYMBOLS_FILE), help="Path to newline-delimited symbol file.")
+    parser.add_argument("--start", help="Exact request start, e.g. 2025-07-21 or 2025-07-21T00:00:00Z.")
+    parser.add_argument("--end", help="Exact request end as an exclusive boundary, e.g. 2026-05-23 or 2026-05-23T00:00:00Z.")
     parser.add_argument("--months", type=int, default=DEFAULT_MONTHS, help="Approximate history window in 30-day months.")
     parser.add_argument("--days-back", type=int, default=DEFAULT_DAYS_BACK, help="How many full UTC days back to stop the request window.")
     parser.add_argument("--encoding", default="dbn", help="Databento batch encoding.")
+    api_key_group = parser.add_mutually_exclusive_group()
+    api_key_group.add_argument("--api-key", help="Databento API key. Prefer DATABENTO_API_KEY or --api-key-file to avoid exposing secrets in shell history/process lists.")
+    api_key_group.add_argument("--api-key-file", help="Path to a file containing the Databento API key.")
     parser.add_argument("--dry-run", action="store_true", help="Print the request that would be submitted without calling Databento.")
     return parser.parse_args()
 
@@ -70,11 +75,60 @@ def load_symbols(symbols_file_path: Path, stype_in: str) -> list[str]:
     return symbols
 
 
-def resolve_window(months: int, days_back: int) -> tuple[datetime, datetime]:
+def _parse_datetime_utc(raw: str, field_name: str) -> datetime:
+    value = raw.strip()
+    if not value:
+        raise ValueError(f"--{field_name} cannot be empty")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    else:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid --{field_name} value {raw!r}. Use YYYY-MM-DD or an ISO timestamp."
+            ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def resolve_window(months: int, days_back: int, start: str | None = None, end: str | None = None) -> tuple[datetime, datetime]:
+    if (start is None) != (end is None):
+        raise ValueError("Provide both --start and --end, or neither.")
+    if start is not None and end is not None:
+        start_date = _parse_datetime_utc(start, "start")
+        end_date = _parse_datetime_utc(end, "end")
+        if start_date >= end_date:
+            raise ValueError(f"--start must be before --end, got {start_date.isoformat()} >= {end_date.isoformat()}")
+        return start_date, end_date
+
     now = datetime.now(timezone.utc)
     end_date = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back)
     start_date = end_date - timedelta(days=max(1, months) * 30)
     return start_date, end_date
+
+
+def resolve_api_key(api_key_arg: str | None, api_key_file: str | None) -> str:
+    if api_key_arg is not None:
+        value = api_key_arg.strip()
+        if not value:
+            raise ValueError("--api-key cannot be empty")
+        return value
+
+    if api_key_file is not None:
+        key_path = Path(api_key_file).expanduser()
+        if not key_path.is_absolute():
+            key_path = (REPO_ROOT / key_path).resolve()
+        try:
+            value = key_path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(f"Unable to read --api-key-file {key_path}: {exc}") from exc
+        if not value:
+            raise ValueError(f"--api-key-file {key_path} is empty")
+        return value
+
+    return os.getenv("DATABENTO_API_KEY", "").strip()
 
 
 def _parse_job_timestamp(raw: str | None) -> datetime | None:
@@ -158,12 +212,14 @@ def main() -> int:
     if not symbols_file_path.is_absolute():
         symbols_file_path = (REPO_ROOT / symbols_file_path).resolve()
 
-    api_key = os.getenv("DATABENTO_API_KEY", "").strip()
     try:
         symbols = load_symbols(symbols_file_path, args.stype_in)
     except (FileNotFoundError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
-    start_date, end_date = resolve_window(args.months, args.days_back)
+    try:
+        start_date, end_date = resolve_window(args.months, args.days_back, args.start, args.end)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     print(f"Loaded {len(symbols)} symbols from {symbols_file_path}. Example formatted symbol: {symbols[0]}")
     print(
@@ -176,8 +232,13 @@ def main() -> int:
         print("\nDry run only. No Databento job was submitted.")
         return 0
 
+    try:
+        api_key = resolve_api_key(args.api_key, args.api_key_file)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     if not api_key:
-        raise SystemExit("Set DATABENTO_API_KEY before submitting a live Databento batch job.")
+        raise SystemExit("Set DATABENTO_API_KEY, pass --api-key-file, or pass --api-key before submitting a live Databento batch job.")
 
     client = db.Historical(api_key)
     request = {

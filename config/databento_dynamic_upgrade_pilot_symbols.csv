@@ -1,0 +1,6 @@
+symbol,opra_parent,cohort,role,train_target,context_source,priority
+TSLA,TSLA.OPT,pilot_core_5,primary_trade_target,true,true,1
+TQQQ,TQQQ.OPT,pilot_core_5,primary_trade_target,true,true,2
+NVDA,NVDA.OPT,pilot_core_5,primary_trade_target,true,true,3
+SPY,SPY.OPT,pilot_core_5,market_context_optional_target,false,true,4
+QQQ,QQQ.OPT,pilot_core_5,tech_context_optional_target,false,true,5
