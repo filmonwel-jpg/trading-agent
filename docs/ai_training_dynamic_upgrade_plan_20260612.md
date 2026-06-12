@@ -558,6 +558,16 @@ Direct command-line API key passing is also supported, but it is less safe becau
 --api-key 'PASTE_DATABENTO_API_KEY_HERE'
 ```
 
+If passing `--api-key`, pass the exact Databento key token only. Do not include labels, words, spaces, quotes copied from a password manager, or a `Bearer ` prefix. If the key contains whitespace, the scripts fail before submitting.
+
+If a live submission prints `401 auth_authentication_failed`, the request reached Databento but the key was rejected. Fixes to check:
+
+1. Copy a fresh active key from the Databento portal.
+2. Prefer `--api-key-file ~/.databento_api_key` to avoid shell quoting/history issues.
+3. Ensure the key file contains only the key token and no trailing explanation text.
+4. Ensure the Databento account/key has access to the requested dataset.
+5. Re-run with the explicit aligned dates, not empty `START`/`END` variables.
+
 Then define common variables:
 
 ```zsh

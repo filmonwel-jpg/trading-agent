@@ -114,6 +114,8 @@ def resolve_api_key(api_key_arg: str | None, api_key_file: str | None) -> str:
         value = api_key_arg.strip()
         if not value:
             raise ValueError("--api-key cannot be empty")
+        if re.search(r"\s", value):
+            raise ValueError("--api-key contains whitespace. Paste the exact Databento key token only, or use --api-key-file.")
         return value
 
     if api_key_file is not None:
@@ -126,6 +128,8 @@ def resolve_api_key(api_key_arg: str | None, api_key_file: str | None) -> str:
             raise ValueError(f"Unable to read --api-key-file {key_path}: {exc}") from exc
         if not value:
             raise ValueError(f"--api-key-file {key_path} is empty")
+        if re.search(r"\s", value):
+            raise ValueError(f"--api-key-file {key_path} contains whitespace. Store only the exact Databento key token.")
         return value
 
     return os.getenv("DATABENTO_API_KEY", "").strip()
@@ -188,11 +192,28 @@ def _is_ambiguous_submit_error(exc: Exception) -> bool:
     return any(marker in message for marker in ("timeout", "timed out", "connection reset", "bad gateway", "gateway timed out"))
 
 
+def _is_authentication_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    status = getattr(exc, "http_status", None) or getattr(exc, "status", None)
+    return status == 401 or "auth_authentication_failed" in message or ("401" in message and "auth" in message)
+
+
+def _authentication_failure_message() -> str:
+    return (
+        "Databento authentication failed with 401. The API key was not accepted.\n"
+        "Check that you copied an active key from the Databento portal, pasted only the key token "
+        "without labels/spaces/quotes, and are using the correct account. Prefer storing it in a file "
+        "and passing --api-key-file ~/.databento_api_key."
+    )
+
+
 def _submit_job_with_recovery(client: db.Historical, request: dict) -> tuple[dict, bool]:
     submit_started_at = datetime.now(timezone.utc)
     try:
         return client.batch.submit_job(**request), False
     except Exception as exc:
+        if _is_authentication_error(exc):
+            raise SystemExit(_authentication_failure_message()) from exc
         if not _is_ambiguous_submit_error(exc):
             raise
         recovered = _recover_recent_job(client, request, submit_started_at)
