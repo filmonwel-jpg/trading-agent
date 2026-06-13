@@ -1065,6 +1065,380 @@ Recommended first pull requests on this branch:
 8. Add walk-forward setup-score generation for lifecycle/micro training.
 9. Add calibration scorecard fields: raw score, calibrated probability, Brier score, ECE, net R, drawdown, trade count, and threshold stability.
 
+## Next execution plan while new downloads are in progress
+
+This section turns the current-code investigation into the next concrete plan for organizing the incoming data, selecting model families, using new feature families, and evolving the live strategy route.
+
+### Current latest training/runtime stack found in this branch
+
+Latest model/training path to build on:
+
+1. `train_30s_models.py`
+   - Role: 30-second setup/context and market-regime layer.
+   - Current model families: RandomForest baseline, LightGBM if installed, CatBoost if installed.
+   - Current exports: `long_entry.onnx`, `short_entry.onnx`, `regime_classifier.onnx`, optional open30/regime-specific models, and optional legacy 30s exits.
+   - Recommended role going forward: setup arm generator only. Do not rely on legacy 30s exit models as the primary exit route.
+   - Important live contract: Java dynamically handles feature-count families such as base 30 features, news/regime/meta extensions, and exact runtime vector construction in `PingPongStrategy`.
+
+2. `train_lifecycle_micro_models.py`
+   - Role: current latest upgraded route.
+   - It trains six ONNX models:
+     - `longExitLifecycleAi` / `shortExitLifecycleAi` with 34 features.
+     - `longMicroEntryAi` / `shortMicroEntryAi` with 44 features.
+     - `longMicroExitGuardAi` / `shortMicroExitGuardAi` with 50 features.
+   - The latest local bundle is `model_exports/lifecycle_micro_20260523`.
+   - Its manifest schema matches the Java route concept: 30s context, 5s micro features, entry/setup probability fields, and position-state fields.
+   - Important caveat: the trainer can still fall back to bootstrap `f_setup_score_proxy = 1.0` / `f_entry_score_proxy = 1.0`. Any bundle trained with constant bootstrap scores is an integration artifact, not a live-promotable model.
+   - Latest scorecard observation from `model_exports/lifecycle_micro_20260523`:
+     - Lifecycle exits look strong in held-out test rows by precision/recall, but require live-shaped validation.
+     - Micro-entry precision appears high but recall is extremely low around the current tuned threshold, so threshold calibration and trade-count stability matter more than raw precision.
+
+3. `feature_producers_30s.py`, `generate_timesfm_features.py`, `sequence_meta_features.py`
+   - Current status: useful meta-feature/proxy layer.
+   - TimesFM and sequence outputs are currently safest as offline meta features, not core production decision makers.
+   - The sequence script can train small torch LSTM/TCN/Transformer-style heads, but it is not yet a full production sequence-model pipeline with walk-forward leakage controls, calibration, export, and live parity.
+
+4. `PingPongStrategy.java`
+   - Runtime route already supports the target strategy pattern:
+     - 30s setup model arms a side.
+     - 5s micro-entry model confirms timing inside a TTL window.
+     - lifecycle exit model evaluates position-aware 30s exits.
+     - 5s micro-exit guard can exit faster.
+   - Runtime validates `lifecycle_micro_route_manifest.json` feature columns and schema hashes before allowing the upgraded route.
+   - This means the next training work should preserve exact feature manifests and avoid ad-hoc column-order changes.
+
+### Data organization plan for the incoming downloads
+
+Use a bronze/silver/gold lake layout. Keep raw Databento artifacts immutable; write normalized and feature datasets as versioned Parquet/Arrow; export CSV only for debugging or compatibility scripts.
+
+Recommended root:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/
+  bronze_raw_downloads/
+    dataset=OPRA.PILLAR/schema=definition/batch_id=.../
+    dataset=OPRA.PILLAR/schema=tcbbo/batch_id=.../
+    dataset=EQUS.MINI/schema=definition/batch_id=.../
+    dataset=EQUS.MINI/schema=mbp-1/batch_id=.../
+  source_manifests/
+    batch_id=.../manifest.json
+    batch_id=.../file_hashes.csv
+    batch_id=.../coverage_by_day_symbol.csv
+  raw_audits/
+    dataset=.../schema=.../audit_run_id=.../
+  silver_normalized/
+    equs_mbp1/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+    equs_tbbo/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+    opra_definition/date=YYYY-MM-DD/root=TSLA/part-....parquet
+    opra_tcbbo/date=YYYY-MM-DD/root=TSLA/part-....parquet
+    opra_ohlcv_1s/date=YYYY-MM-DD/root=TSLA/part-....parquet
+  gold_state/
+    state_1s/schema_version=v2/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+    bars_5s/schema_version=v2/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+    bars_30s/schema_version=v2/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+    event_bars/schema_version=v1/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+  labels/
+    label_schema=v2/date=YYYY-MM-DD/symbol=TSLA/part-....parquet
+  model_training_sets/
+    run_id=YYYYMMDD_HHMMSS__experiment_name/
+      dataset_manifest.json
+      feature_schema.json
+      train.parquet
+      validation.parquet
+      holdout.parquet
+  model_exports/
+    run_id=YYYYMMDD_HHMMSS__experiment_name/
+      lifecycle_micro_route_manifest.json
+      calibration_manifest.json
+      scorecards/
+      onnx/
+```
+
+Required metadata per run:
+
+- Raw Databento batch IDs, dataset, schema, stype, symbol file, start/end, and submit command.
+- File path, size, SHA-256, and decoded row count per DBN file.
+- Market-day coverage by symbol/root.
+- Degraded/missing days and whether they were included or excluded.
+- Feature schema version and exact column order.
+- Label schema version and target definitions.
+- Train/validation/holdout date splits.
+- Model family, hyperparameters, calibration method, thresholds, and code commit hash.
+
+### Immediate checks after each download completes
+
+1. Save the Databento job metadata and raw folder path under `source_manifests/`.
+2. Hash every downloaded file before decoding.
+3. Decode one recent day and one older day per schema before bulk processing.
+4. Confirm timestamps, symbols, and stype mapping:
+   - OPRA parent/root mapping from `definition`.
+   - OPRA `tcbbo` trade rows and attached option bid/ask fields.
+   - EQUS `mbp-1` top-book update fields and action/event semantics.
+5. Produce a coverage table for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
+6. Compare new feeds against existing `tbbo`/`ohlcv-1s` for the same days.
+7. Only then run the full pilot build.
+
+### June 13 decision: bars, buckets, event pressure, and imbalance
+
+Use the new OPRA/EQUS data in the existing 5s/30s lifecycle-micro cadence, but do not reduce it to plain OHLCV bars. The target data product is microstructure-enriched 5s and 30s feature buckets, with a separate event-pressure layer available for attribution and future sequence models.
+
+Canonical flow:
+
+```text
+raw Databento events
+  -> immutable bronze DBN/download manifests
+  -> normalized silver event/state tables
+  -> 1s as-of symbol state
+  -> 5s micro-entry / micro-exit buckets
+  -> 30s setup / lifecycle buckets
+  -> optional event_bars for burst/pressure attribution and later sequence research
+```
+
+Immediate modeling rule:
+
+- Keep 30s bars for setup, regime, and lifecycle context.
+- Keep 5s bars/buckets for micro-entry timing and micro-exit guard decisions.
+- Add event-derived and imbalance features into those fixed 5s/30s vectors first.
+- Do not make raw tick/event sequence models the primary runtime route until the enriched tabular pipeline is stable, calibrated, and live-reproducible.
+
+Option buckets should summarize OPRA flow by economically meaningful groups instead of exposing individual contracts directly to the first pilot models:
+
+- Root/underlying: `TSLA`, `TQQQ`, `NVDA`, `SPY`, `QQQ`.
+- Option side: call versus put.
+- DTE bucket: `0DTE`, `1DTE`, `2-7DTE`, `8-30DTE`, `31-90DTE`, `90DTE+`.
+- Moneyness bucket: ITM, ATM, near OTM, far OTM.
+- Trade location/aggression: at bid, below mid, near mid, above mid, at ask.
+
+Example 5s/30s OPRA event-bucket features:
+
+- `opt_trade_count_5s`, `opt_trade_count_30s`.
+- `opt_notional_volume_5s`, `opt_notional_volume_30s`.
+- `opt_call_at_ask_volume_5s`, `opt_put_at_bid_volume_5s`.
+- `opt_trade_above_mid_ratio_30s`, `opt_trade_below_mid_ratio_30s`.
+- `opt_call_put_aggressive_volume_ratio_30s`.
+- `opt_0dte_atm_call_trade_count_30s`.
+- `opt_near_money_trade_burst_5s`.
+- `opt_option_spread_bps_mean_30s`, `opt_option_spread_bps_z_30s`.
+
+EQUS `mbp-1` imbalance should be a first-class feature family. For each as-of top-of-book state:
+
+```text
+l1_imbalance = (bid_size - ask_size) / (bid_size + ask_size)
+microprice = (ask_price * bid_size + bid_price * ask_size) / (bid_size + ask_size)
+```
+
+Guard denominators before division and emit explicit invalid/coverage flags when bid/ask price or size is missing, zero, crossed, or stale.
+
+Example 5s/30s EQUS imbalance and quote-state features:
+
+- `eq_l1_imbalance_last_1s`, `eq_l1_imbalance_mean_5s`, `eq_l1_imbalance_mean_30s`.
+- `eq_l1_imbalance_slope_30s`, `eq_l1_imbalance_flip_count_30s`, `eq_l1_imbalance_z_30s`.
+- `eq_microprice_dist_bps`, `eq_microprice_return_5s`, `eq_microprice_vs_mid_bps`.
+- `eq_quote_update_count_5s`, `eq_quote_update_count_30s`.
+- `eq_spread_bps_mean_5s`, `eq_spread_bps_max_30s`, `eq_spread_widen_count_30s`.
+- `eq_quote_staleness_ms`, `eq_locked_crossed_quote_ratio_30s`.
+
+Event-pressure features should aggregate raw event behavior inside the 5s/30s decision windows rather than require raw event-sequence inference initially:
+
+- trade burst score,
+- quote pressure score,
+- spread shock score,
+- imbalance flip score,
+- option aggression shock score,
+- call/put flow acceleration,
+- quote staleness risk score.
+
+Route the enriched features by decision layer:
+
+| Feature family | 30s setup | 5s entry | 30s lifecycle | 5s exit guard |
+|---|---:|---:|---:|---:|
+| Existing OHLCV/technical bars | yes | yes | yes | yes |
+| EQUS spread/liquidity | yes | strong | yes | strong |
+| EQUS L1 imbalance/microprice | yes | strong | yes | strong |
+| EQUS quote update intensity/staleness | maybe | strong | yes | strong |
+| OPRA aggressive call/put bucket flow | strong | yes | strong | yes |
+| OPRA option spread/liquidity | yes | strong | yes | strong |
+| OPRA DTE/moneyness bucket flow | strong | maybe | strong | maybe |
+| Cross-symbol `SPY`/`QQQ` context | strong | maybe | strong | maybe |
+
+Strict leakage rule for every bucket: use half-open as-of windows and never include rows after the decision boundary. Record the exact boundary convention in `feature_schema.json` / `dataset_manifest.json`. For example, a 5s decision at `09:45:05` should use the completed feature window `[09:45:00, 09:45:05)` and must not include any event at or after `09:45:05.000` unless the live runtime can prove the event was known before the decision was made.
+
+### Feature plan using existing plus new data
+
+Keep the current 30s/5s/lifecycle features as the base contract, then add versioned blocks.
+
+Base feature blocks to preserve:
+
+- `f_30s_*` setup/context features from `train_lifecycle_micro_models.py`.
+- `f_5s_*` micro timing features.
+- Position lifecycle features: `f_unrealized_pnl_r`, `f_mfe_r`, `f_mae_r`, target/stop remaining, bars since entry.
+- 30s setup model scores: real walk-forward `f_setup_prob`, `f_setup_threshold`, and `f_setup_threshold_margin`.
+- Real filled-entry metadata: `f_entry_prob`, `f_entry_threshold`, `f_entry_threshold_margin`.
+
+New EQUS `mbp-1` feature block:
+
+- Continuous spread bps, spread percentile, and spread widening/compression speed.
+- Bid/ask size imbalance and imbalance slope.
+- Quote update intensity.
+- Quote age/staleness and quote coverage.
+- Liquidity drought and wide-spread flags.
+- Mid-price return and mid-price volatility separate from trade-price return.
+- Trade-vs-quote disagreement features by joining existing `tbbo` with `mbp-1`.
+
+New OPRA `definition` + `tcbbo` feature block:
+
+- Reliable expiry, DTE, strike, option side, and contract mapping.
+- Option trade price versus option bid/mid/ask.
+- Option spread bps and option quote-size/liquidity quality.
+- Option quote staleness/availability around volume bursts.
+- Call/put flow by DTE bucket: 0DTE, 1DTE, 2-7DTE, 8-30DTE, 31-90DTE, 90DTE+.
+- Call/put flow by moneyness bucket: ITM, ATM, near OTM, far OTM.
+- Near-ATM call/put imbalance.
+- Short-dated option-flow acceleration.
+- Contract concentration: top contract share, top 5 share, flow entropy.
+- Option-flow divergence versus underlying signed flow and underlying return.
+
+Cross-symbol context block:
+
+- `SPY` and `QQQ` returns/volatility/spread/flow as market anchors.
+- `QQQ` context for `TQQQ`, `TSLA`, and `NVDA`.
+- `SPY`/`QQQ` 0DTE option pressure as risk-on/risk-off context.
+- Basket breadth across pilot symbols: percent above short-term VWAP, signed-flow breadth, option-flow breadth.
+- Relative strength and beta-adjusted residual return for target symbol versus context symbols.
+
+Quality/reliability feature block:
+
+- Trade coverage and quote coverage by 1s/5s/30s parent bar.
+- Synthetic OHLC coverage, not just unioned child flags.
+- Feed lag/staleness and source completeness.
+- Degraded-day/session flags.
+- Symbol-specific valid-trading-window flags.
+
+Sequence/meta feature block:
+
+- Start with small TCN/GRU/LSTM or compact Transformer heads as offline meta-feature producers.
+- Feed sequence scores into tabular setup/lifecycle models first.
+- Do not make a large sequence model the core runtime decision-maker until it beats calibrated tabular models in walk-forward backtests and can be reproduced live.
+
+### Model strategy we should use next
+
+Primary architecture: keep the current hierarchical route, not a single end-to-end model.
+
+1. 30s setup/context models
+   - Primary candidates: LightGBM and CatBoost, with RandomForest as the compatibility/control baseline.
+   - Targets:
+     - long setup TP-before-SL probability,
+     - short setup TP-before-SL probability,
+     - expected net R regression or quantile regression,
+     - setup risk/slippage/liquidity filter.
+   - Output required for downstream models:
+     - walk-forward setup score,
+     - calibrated setup probability,
+     - threshold used,
+     - margin over threshold,
+     - expected R and risk metrics.
+
+2. 5s micro-entry models
+   - Keep separate long/short micro-entry classifiers.
+   - Train only on live-shaped arms generated by walk-forward 30s setup scores.
+   - Add EQUS quote-state and OPRA option quote/flow features.
+   - Optimize for net R and fill quality, not just precision.
+   - Required improvement over latest bundle: increase useful confirmation count while keeping loss/drawdown controlled.
+
+3. Lifecycle exit models
+   - Keep separate long/short position-aware lifecycle exits.
+   - Upgrade labels from simple exit-now-vs-hold classification toward hold-value / exit-hazard targets.
+   - Train auxiliary regressors for expected hold value over next 30s/60s/120s.
+   - Runtime decision should become `exit if exit_now_value > hold_value + cost_margin` or if hazard exceeds threshold.
+
+4. 5s micro-exit guard models
+   - Keep as fast deterioration detectors.
+   - Add spread/quote/liquidity degradation and option-flow reversal features.
+   - Treat guard exits as protective; measure whether they avoid hard stops without cutting winners too early.
+
+5. Regime models
+   - Keep a regime classifier but treat regime probabilities as features and routing modifiers, not hard truth.
+   - Add cross-symbol context and realized liquidity/volatility regime features.
+   - Use calibrated regime probabilities and entropy rather than only class labels.
+
+6. Calibration and threshold models
+   - Add calibration after every classifier: isotonic or Platt/sigmoid by fold, symbol, and model family.
+   - Track Brier score and ECE in scorecards.
+   - Select thresholds from stable net-R islands across folds, not from a single best PnL row.
+
+### Experiment matrix after the pilot data is built
+
+Run experiments as additive feature blocks so lift can be attributed.
+
+| Experiment | Data/features | Purpose | Promote only if |
+|---|---|---|---|
+| `baseline_current_v1` | existing 30s/5s features | Reproduce current latest stack | Matches current scorecard/backtest within tolerance |
+| `quality_fixed_v2` | fixed aggregate quality features | Ensure label/data reliability | Quality distributions and labels are sane |
+| `equs_quote_v2` | add EQUS `mbp-1` quote-state features | Test continuous quote/liquidity lift | Better net R and fewer hard stops |
+| `equs_imbalance_v2` | add L1 imbalance, microprice, imbalance slope/flip features | Test order-book pressure lift | Better entry timing and fewer adverse fills |
+| `opra_tcbbo_v2` | add option NBBO/trade-location features | Test richer option-flow interpretation | Better micro-entry confirmation and exits |
+| `event_pressure_v2` | add quote/trade burst, spread shock, option aggression shock features | Test event-derived pressure on top of buckets | Better lifecycle exits and micro-exit guard behavior |
+| `context_v2` | add SPY/QQQ/NVDA/TQQQ/TSLA context | Test market/sector context lift | More stable thresholds across days |
+| `sequence_meta_v2` | add compact sequence scores | Test temporal-state lift | Improves holdout without overfitting |
+| `full_pilot_v2` | all accepted blocks | Candidate paper bundle | Passes all promotion gates |
+
+Each experiment must emit:
+
+- `dataset_manifest.json`
+- `feature_schema.json`
+- `label_manifest.json`
+- `scorecard.csv`
+- `calibration_manifest.json`
+- `threshold_grid.csv`
+- backtest trade/lifecycle summaries
+- feature importance or SHAP-style attribution where practical
+
+### Strategy approach for the next candidate bundle
+
+Keep the current runtime strategy pattern, but make decisions expected-value and quality aware:
+
+```text
+30s setup layer:
+  choose side only if calibrated setup probability, expected net R, liquidity quality,
+  option/equity confirmation, and context regime are acceptable
+
+5s micro-entry layer:
+  confirm only when current spread, quote freshness, signed flow, option flow,
+  and price path improve entry quality inside the arm TTL
+
+position lifecycle layer:
+  hold while expected hold value remains better than exit-now value after costs
+
+5s micro-exit guard:
+  exit quickly on adverse microstructure, option-flow reversal, or liquidity deterioration
+
+hard safety layer:
+  hard stop, daily drawdown, max trades, flatten windows, and shared-capital gates always override AI
+```
+
+Initial rollout rule:
+
+- Trade candidates: `TSLA` and `TQQQ` first.
+- Shadow/paper candidate: `NVDA` after training validation.
+- Context-only at first: `SPY` and `QQQ`.
+- Do not expand beyond the pilot until the same bundle passes walk-forward, holdout, and paper-mode drift checks.
+
+Recent calibration/backtest evidence should be treated as encouraging but not sufficient. The selected low-threshold TSLA/TQQQ calibration rows improved materially versus the older current January-May configuration in the stored analysis, but the trade count is still limited and the results rely on current feature/label assumptions. The new data plan should be used to reduce hard-stop reliance, improve micro-entry selectivity, and validate thresholds on more independent windows.
+
+### Concrete next actions when the download finishes
+
+1. Inventory raw completed jobs and write a source manifest.
+2. Decode and inspect sample files for every new schema.
+3. Implement or extend normalized readers for OPRA `definition`, OPRA `tcbbo`, and EQUS `mbp-1`.
+4. Rebuild a two-day pilot slice for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
+5. Fix aggregate quality flags before full retraining.
+6. Rebuild full-window pilot 1s state, enriched 5s/30s buckets, and event-pressure Parquet datasets.
+7. Generate upgraded labels and walk-forward 30s setup probabilities.
+8. Retrain lifecycle/micro models with real setup/entry probabilities.
+9. Run the additive experiment matrix and preserve all manifests.
+10. Backtest TSLA/TQQQ first, then shadow NVDA.
+11. Promote only if schema validation, calibration, threshold stability, and paper-mode drift checks pass.
+
 ## Promotion gates
 
 A model bundle should not be promoted unless all of these are true:
