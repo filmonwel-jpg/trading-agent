@@ -197,7 +197,13 @@ Action plan:
 
 Action done:
 
-- Not done yet. This is the next code blocker before the 10-day pilot build should be treated as clean.
+- Implemented in `build_30s_from_5s_csv.py`.
+- Parent `DataQualityFlags` are now derived from aggregate coverage/staleness/synthetic thresholds instead of blindly unioning child flags.
+- Child flag union is preserved separately as `ChildDataQualityFlagUnion` for audit/debugging.
+- Added aggregate quality fields: `TradeSecondsPresent`, `QuoteUpdateSecondsPresent`, `QuoteStateSecondsValid`, `SyntheticSeconds`, `TradeCoverage`, `QuoteUpdateCoverage`, `QuoteStateCoverage`, `SyntheticCoverage`, `QuoteAgeMsMean`, `QuoteAgeMsMax`, `ValidSpreadCoverage`, `LockedCrossedSeconds`, and `QualityScore`.
+- Added tests in `tests/test_build_30s_from_5s_csv_regularization.py` proving a parent with high quote-state coverage is not marked `no_quote` just because one child second has `no_quote`, while the child union is still preserved.
+- Verified with `python3 -m py_compile build_30s_from_5s_csv.py tests/test_build_30s_from_5s_csv_regularization.py`.
+- Verified with `python3 tests/test_build_30s_from_5s_csv_regularization.py`.
 
 ### Step 6 — 10-day pilot build
 
@@ -206,11 +212,11 @@ Action plan:
 - Use `source_manifests/pilot_dates_latest10_20260613_153639` as the date/file contract.
 - Process partitioned by date and source; do not materialize all 10 days across all sources at once.
 - Write outputs only under external `data_lake_v2`; no large local-disk outputs.
-- Start only after C1 and C2 are fixed and tested.
+- Start only after pulling the commit that contains both C1 and C2 fixes and rerunning the targeted tests on the 48GB machine.
 
 Action done:
 
-- Not started. Correctly paused after manifest selection and before normalization/training.
+- Not started. Correctly paused after manifest selection and before normalization/training; this becomes the next controlled execution step after the C2 fix is pulled and validated on the 48GB machine.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 

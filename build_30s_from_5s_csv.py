@@ -151,6 +151,7 @@ CATEGORICAL_COLUMNS = {
     'SessionBucket',
     'SentimentModel',
     'DataQualityFlags',
+    'ChildDataQualityFlagUnion',
 }
 
 SUM_COLUMNS = {
@@ -163,6 +164,11 @@ SUM_COLUMNS = {
     'PutVolDelta5s',
     'CallVolDelta5s',
     'ShortableDelta5s',
+    'TradeSecondsPresent',
+    'QuoteUpdateSecondsPresent',
+    'QuoteStateSecondsValid',
+    'SyntheticSeconds',
+    'LockedCrossedSeconds',
 }
 
 MEAN_COLUMNS = {
@@ -174,6 +180,13 @@ MEAN_COLUMNS = {
     'L1Imbalance',
     'QuoteCoverage5s',
     'QuoteAgeMs',
+    'TradeCoverage',
+    'QuoteUpdateCoverage',
+    'QuoteStateCoverage',
+    'SyntheticCoverage',
+    'QuoteAgeMsMean',
+    'ValidSpreadCoverage',
+    'QualityScore',
     'ImbalanceStd5s',
     'SentimentMean300s',
     'SentimentStd300s',
@@ -217,6 +230,7 @@ MAX_COLUMNS = {
     'SpreadMaxBps5s',
     'ShortableMax5s',
     'MktReadyCount',
+    'QuoteAgeMsMax',
 }
 
 MIN_COLUMNS = {
@@ -265,6 +279,10 @@ MARKET_TIMEZONE = 'America/New_York'
 RTH_OPEN_MINUTE = 9 * 60 + 30
 RTH_CLOSE_MINUTE = 16 * 60
 SESSION_SECONDS = (RTH_CLOSE_MINUTE - RTH_OPEN_MINUTE) * 60
+PARENT_NO_QUOTE_STATE_COVERAGE_THRESHOLD = 0.50
+PARENT_SYNTHETIC_OHLC_COVERAGE_THRESHOLD = 0.80
+PARENT_PARTIAL_SYNTHETIC_OHLC_COVERAGE_THRESHOLD = 0.20
+PARENT_STALE_QUOTE_AGE_MS_THRESHOLD = 5000.0
 DBEQ_FILE_RE = re.compile(r'.*?(\d{8})\.tbbo\.dbn\.zst$')
 OPRA_FILE_RE = re.compile(r'.*?(\d{8})\.ohlcv-1s\.dbn\.zst$')
 OPRA_SYMBOL_RE = re.compile(r'^([A-Z]+)\s+(\d{6,8})([CP])\d+$')
@@ -297,6 +315,128 @@ def _quality_flag_union(series):
             seen.add(token)
             tokens.append(token)
     return 'none' if not tokens else '|'.join(tokens)
+
+
+def _flag_contains(series, token):
+    return series.fillna('none').astype(str).str.split('|').map(
+        lambda tokens: token in {str(item).strip() for item in tokens}
+    )
+
+
+def _numeric_series(df, col, default=np.nan):
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors='coerce')
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def _valid_quote_state(df):
+    bid = _numeric_series(df, 'Bid')
+    ask = _numeric_series(df, 'Ask')
+    return bid.notna() & ask.notna() & bid.gt(0.0) & ask.gt(0.0)
+
+
+def _valid_spread_state(df):
+    bid = _numeric_series(df, 'Bid')
+    ask = _numeric_series(df, 'Ask')
+    return _valid_quote_state(df) & ask.gt(bid)
+
+
+def _locked_crossed_state(df):
+    bid = _numeric_series(df, 'Bid')
+    ask = _numeric_series(df, 'Ask')
+    return _valid_quote_state(df) & ask.le(bid)
+
+
+def _derive_quality_score(trade_coverage, quote_state_coverage, valid_spread_coverage, synthetic_coverage, locked_crossed_seconds):
+    score = (
+        0.35 * trade_coverage.fillna(0.0)
+        + 0.35 * quote_state_coverage.fillna(0.0)
+        + 0.20 * valid_spread_coverage.fillna(0.0)
+        + 0.10 * (1.0 - synthetic_coverage.fillna(1.0))
+    )
+    score = score.where(pd.to_numeric(locked_crossed_seconds, errors='coerce').fillna(0.0).le(0.0), score * 0.5)
+    return np.clip(score, 0.0, 1.0)
+
+
+def _ensure_quality_metric_columns(df):
+    out = df.copy()
+    flags = out.get('DataQualityFlags', pd.Series('none', index=out.index)).fillna('none').astype(str)
+    if 'ChildDataQualityFlagUnion' not in out.columns:
+        out['ChildDataQualityFlagUnion'] = flags
+
+    count = pd.to_numeric(out.get('Count', 0.0), errors='coerce').fillna(0.0)
+    volume = pd.to_numeric(out.get('Volume', 0.0), errors='coerce').fillna(0.0)
+    trade_prints = pd.to_numeric(out.get('TradePrintCount5s', count), errors='coerce').fillna(0.0)
+    trade_present = trade_prints.gt(0.0) | count.gt(0.0) | volume.gt(0.0)
+
+    quote_updates = pd.to_numeric(out.get('QuoteUpdateCount5s', out.get('QuoteCoverage5s', 0.0)), errors='coerce').fillna(0.0)
+    quote_update_present = quote_updates.gt(0.0)
+    quote_state_valid = _valid_quote_state(out)
+    valid_spread = _valid_spread_state(out)
+    locked_crossed = _locked_crossed_state(out)
+    synthetic = _flag_contains(flags, 'synthetic_ohlc') | _flag_contains(flags, 'no_trade') | ~trade_present
+
+    defaults = {
+        'TradeSecondsPresent': trade_present.astype(float),
+        'QuoteUpdateSecondsPresent': quote_update_present.astype(float),
+        'QuoteStateSecondsValid': quote_state_valid.astype(float),
+        'SyntheticSeconds': synthetic.astype(float),
+        'TradeCoverage': trade_present.astype(float),
+        'QuoteUpdateCoverage': quote_update_present.astype(float),
+        'QuoteStateCoverage': quote_state_valid.astype(float),
+        'SyntheticCoverage': synthetic.astype(float),
+        'QuoteAgeMsMean': pd.to_numeric(out.get('QuoteAgeMs', 999999.0), errors='coerce').fillna(999999.0),
+        'QuoteAgeMsMax': pd.to_numeric(out.get('QuoteAgeMs', 999999.0), errors='coerce').fillna(999999.0),
+        'ValidSpreadCoverage': valid_spread.astype(float),
+        'LockedCrossedSeconds': locked_crossed.astype(float),
+    }
+    for col, values in defaults.items():
+        if col not in out.columns:
+            out[col] = values
+        else:
+            out[col] = pd.to_numeric(out[col], errors='coerce').fillna(values)
+
+    if 'QualityScore' not in out.columns:
+        out['QualityScore'] = _derive_quality_score(
+            pd.to_numeric(out['TradeCoverage'], errors='coerce'),
+            pd.to_numeric(out['QuoteStateCoverage'], errors='coerce'),
+            pd.to_numeric(out['ValidSpreadCoverage'], errors='coerce'),
+            pd.to_numeric(out['SyntheticCoverage'], errors='coerce'),
+            pd.to_numeric(out['LockedCrossedSeconds'], errors='coerce'),
+        )
+    else:
+        out['QualityScore'] = pd.to_numeric(out['QualityScore'], errors='coerce').fillna(0.0)
+
+    return out
+
+
+def _parent_quality_flags(row):
+    tokens = []
+    trade_coverage = float(row.get('TradeCoverage', 0.0) or 0.0)
+    quote_state_coverage = float(row.get('QuoteStateCoverage', 0.0) or 0.0)
+    synthetic_coverage = float(row.get('SyntheticCoverage', 0.0) or 0.0)
+    quote_age_max = float(row.get('QuoteAgeMsMax', 999999.0) or 999999.0)
+    locked_crossed_seconds = float(row.get('LockedCrossedSeconds', 0.0) or 0.0)
+
+    if trade_coverage <= 0.0:
+        tokens.append('no_trade')
+    if quote_state_coverage < PARENT_NO_QUOTE_STATE_COVERAGE_THRESHOLD:
+        tokens.append('no_quote')
+    if synthetic_coverage >= PARENT_SYNTHETIC_OHLC_COVERAGE_THRESHOLD:
+        tokens.append('synthetic_ohlc')
+    elif synthetic_coverage >= PARENT_PARTIAL_SYNTHETIC_OHLC_COVERAGE_THRESHOLD:
+        tokens.append('partial_synthetic_ohlc')
+    if quote_state_coverage >= PARENT_NO_QUOTE_STATE_COVERAGE_THRESHOLD and quote_age_max > PARENT_STALE_QUOTE_AGE_MS_THRESHOLD:
+        tokens.append('stale_quote')
+    if locked_crossed_seconds > 0.0:
+        tokens.append('locked_crossed')
+    return 'none' if not tokens else '|'.join(tokens)
+
+
+def _derive_parent_quality_flags(df):
+    if df.empty:
+        return pd.Series(dtype=object)
+    return df.apply(_parent_quality_flags, axis=1)
 
 
 def _news_coverage_score(news_count_300s):
@@ -533,8 +673,11 @@ def _build_agg_fn(df, col):
 
         return weighted_wap
 
-    if col == 'DataQualityFlags':
+    if col == 'ChildDataQualityFlagUnion':
         return _quality_flag_union
+
+    if col == 'DataQualityFlags':
+        return 'last'
 
     if col in SUM_COLUMNS:
         return 'sum'
@@ -712,6 +855,8 @@ def _aggregate_intraday_to_cadence(df, cadence, add_meta_features=False, news_cs
     if not isinstance(working.index, pd.DatetimeIndex):
         raise ValueError(f'Expected a DatetimeIndex before {cadence} aggregation.')
 
+    working = _ensure_quality_metric_columns(working)
+
     if news_csv:
         working = enrich_bars_with_news(working, news_csv)
 
@@ -723,6 +868,7 @@ def _aggregate_intraday_to_cadence(df, cadence, add_meta_features=False, news_cs
 
     out = working.resample(cadence, closed='left', label='left').agg(agg_map)
     out = out.dropna(subset=['Close']).copy()
+    out['DataQualityFlags'] = _derive_parent_quality_flags(out)
 
     if add_meta_features:
         out = apply_all_feature_producers(out)
@@ -905,23 +1051,47 @@ def _regularize_second_bars(symbol_df, market_day, previous_close=None):
     out['ShortableMax5s'] = 0.0
     out['MktReadyCount'] = 0.0
 
+    quote_state_valid = _valid_quote_state(out)
+    valid_spread = _valid_spread_state(out)
+    locked_crossed = _locked_crossed_state(out)
     synthetic_flags = []
     trade_missing = out['TradePrintCount5s'].eq(0)
     quote_missing = ~raw_quote_seen
-    for no_trade, no_quote in zip(trade_missing.tolist(), quote_missing.tolist()):
+    for no_trade, no_quote_update in zip(trade_missing.tolist(), quote_missing.tolist()):
         tokens = []
         if no_trade:
             tokens.append('no_trade')
-        if no_quote:
+        if no_quote_update:
             tokens.append('no_quote')
         if no_trade:
             tokens.append('synthetic_ohlc')
         synthetic_flags.append('none' if not tokens else '|'.join(tokens))
     out['DataQualityFlags'] = synthetic_flags
+    out['ChildDataQualityFlagUnion'] = out['DataQualityFlags']
+
+    out['TradeSecondsPresent'] = (~trade_missing).astype(float)
+    out['QuoteUpdateSecondsPresent'] = raw_quote_seen.astype(float)
+    out['QuoteStateSecondsValid'] = quote_state_valid.astype(float)
+    out['SyntheticSeconds'] = trade_missing.astype(float)
+    out['TradeCoverage'] = out['TradeSecondsPresent']
+    out['QuoteUpdateCoverage'] = out['QuoteUpdateSecondsPresent']
+    out['QuoteStateCoverage'] = out['QuoteStateSecondsValid']
+    out['SyntheticCoverage'] = out['SyntheticSeconds']
+    out['QuoteAgeMsMean'] = out['QuoteAgeMs']
+    out['QuoteAgeMsMax'] = out['QuoteAgeMs']
+    out['ValidSpreadCoverage'] = valid_spread.astype(float)
+    out['LockedCrossedSeconds'] = locked_crossed.astype(float)
+    out['QualityScore'] = _derive_quality_score(
+        out['TradeCoverage'],
+        out['QuoteStateCoverage'],
+        out['ValidSpreadCoverage'],
+        out['SyntheticCoverage'],
+        out['LockedCrossedSeconds'],
+    )
 
     feature_base = (
         0.45 * (~trade_missing).astype(float)
-        + 0.35 * (~quote_missing).astype(float)
+        + 0.35 * quote_state_valid.astype(float)
         + 0.20 * base_close.notna().astype(float)
     )
     out['FeatureCompleteness'] = np.clip(feature_base, 0.0, 1.0)
