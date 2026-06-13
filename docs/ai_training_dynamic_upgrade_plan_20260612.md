@@ -1163,7 +1163,7 @@ Recommended first pull requests on this branch:
 
 1. Use `config/databento_dynamic_upgrade_pilot_symbols.csv` as the initial `pilot_core_5` cohort contract.
 2. `build_30s_from_5s_csv.py`: remove future `bfill()` leakage and fix aggregate quality flag semantics in the same PR.
-3. `scripts/audit_databento_source_data.py`: add source manifest/condition/hash audit.
+3. `scripts/audit_databento_pilot_sources.py`: use the initial source manifest, hash, duplicate-folder, and paired-date audit helper; extend it later if decoded row-count/schema audits need Databento-specific parsing.
 4. `scripts/run_parallel_databento_build_20260523.sh`: make `EQUS_DIR`, `OPRA_DIR`, `PYTHON_BIN`, output root, and symbol file configurable for this machine.
 5. Add a `pilot_core_5` rebuild script for a small validation slice covering `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
 6. Add a data-quality comparison report script for old/new 1s/5s/30s datasets.

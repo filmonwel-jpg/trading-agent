@@ -102,6 +102,7 @@ Good tasks for the 48GB machine:
    - new `EQUS mbp-1`
    - new `OPRA tcbbo`
    - new `OPRA definition`
+   Use `scripts/audit_databento_pilot_sources.py` for the first repeatable manifest and paired-date check.
 3. Confirm paired dates across sources. Special handling required:
    - `EQUS-20260612-36BEU4G7M8` includes `20260403`.
    - The paired OPRA folders do not include `20260403`.
@@ -156,6 +157,10 @@ export RAW_OPRA_DEFINITION=/path/to/OPRA-20260612-B5D4JV3GV6
 export OUT_ROOT=/path/to/writeable/training_data/dynamic_pilot_20260613
 
 mkdir -p "$OUT_ROOT"/manifests "$OUT_ROOT"/pilot_10d "$OUT_ROOT"/logs
+
+python3 scripts/audit_databento_pilot_sources.py \
+  --output-dir "$OUT_ROOT/manifests/source_inventory_$(date +%Y%m%d_%H%M%S)" \
+  --include-hashes
 ```
 
 ## Bottom line
