@@ -109,8 +109,9 @@ Good tasks for the 48GB machine:
    - The pilot build should skip unpaired dates or mark them source-unavailable in the manifest; it must not silently inner/outer join without an explicit count.
 4. Decode one representative day, preferably `2026-05-21`, for each new schema.
 5. Produce row counts, symbol coverage, option contract coverage, and compressed/uncompressed size estimates.
-6. Build a 10-day pilot slice before the full-window pilot.
-7. Only after the 10-day pilot passes manifest, leakage, row-count, and join checks, expand to the full aligned window.
+6. Use `scripts/plan_databento_pilot_dates.py` to select a fully paired 10-day pilot manifest from `paired_dates.csv` and `source_files.csv`.
+7. Build a 10-day pilot slice before the full-window pilot.
+8. Only after the 10-day pilot passes manifest, leakage, row-count, and join checks, expand to the full aligned window.
 
 Use `scripts/audit_databento_dbn_day.py` for step 4. It loads one daily DBN file at a time and writes compact summaries only; it is not a full-window normalizer.
 
@@ -158,7 +159,7 @@ export RAW_OPRA_TCBBO=/path/to/OPRA-20260612-KN5TPHB5EF
 export RAW_OPRA_DEFINITION=/path/to/OPRA-20260612-B5D4JV3GV6
 export OUT_ROOT=/path/to/writeable/training_data/dynamic_pilot_20260613
 
-mkdir -p "$OUT_ROOT"/manifests "$OUT_ROOT"/pilot_10d "$OUT_ROOT"/logs
+mkdir -p "$OUT_ROOT"/manifests "$OUT_ROOT"/raw_audits "$OUT_ROOT"/pilot_10d "$OUT_ROOT"/logs
 
 export HASH_RUN_ID="source_inventory_hashes_$(date +%Y%m%d_%H%M%S)"
 
@@ -179,6 +180,18 @@ python3 scripts/audit_databento_dbn_day.py \
   --output-dir "$OUT_ROOT/raw_audits/$DBN_AUDIT_RUN_ID" \
   --sample-rows 5 \
   --continue-on-error
+
+export PILOT_DATES_RUN_ID="pilot_dates_latest10_$(date +%Y%m%d_%H%M%S)"
+
+python3 scripts/plan_databento_pilot_dates.py \
+  --paired-dates "$OUT_ROOT/manifests/$HASH_RUN_ID/paired_dates.csv" \
+  --source-files "$OUT_ROOT/manifests/$HASH_RUN_ID/source_files.csv" \
+  --output-dir "$OUT_ROOT/source_manifests/$PILOT_DATES_RUN_ID" \
+  --days 10 \
+  --strategy latest
+
+# If a combined DBN audit summary exists, add:
+#   --dbn-audit-summary "$OUT_ROOT/raw_audits/$AUDIT_SUMMARY_RUN_ID/dbn_audit_summary.csv"
 ```
 
 ## Bottom line
