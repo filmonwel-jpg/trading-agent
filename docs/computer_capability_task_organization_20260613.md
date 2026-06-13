@@ -112,6 +112,8 @@ Good tasks for the 48GB machine:
 6. Build a 10-day pilot slice before the full-window pilot.
 7. Only after the 10-day pilot passes manifest, leakage, row-count, and join checks, expand to the full aligned window.
 
+Use `scripts/audit_databento_dbn_day.py` for step 4. It loads one daily DBN file at a time and writes compact summaries only; it is not a full-window normalizer.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 1. Use the fixed builders only; old `20260523` staged datasets are pre-fix artifacts.
@@ -158,9 +160,20 @@ export OUT_ROOT=/path/to/writeable/training_data/dynamic_pilot_20260613
 
 mkdir -p "$OUT_ROOT"/manifests "$OUT_ROOT"/pilot_10d "$OUT_ROOT"/logs
 
+export HASH_RUN_ID="source_inventory_hashes_$(date +%Y%m%d_%H%M%S)"
+
 python3 scripts/audit_databento_pilot_sources.py \
-  --output-dir "$OUT_ROOT/manifests/source_inventory_$(date +%Y%m%d_%H%M%S)" \
+  --output-dir "$OUT_ROOT/manifests/$HASH_RUN_ID" \
   --include-hashes
+
+export DBN_AUDIT_RUN_ID="dbn_day_audit_20260521_$(date +%Y%m%d_%H%M%S)"
+
+python3 scripts/audit_databento_dbn_day.py \
+  --date 2026-05-21 \
+  --source-inventory "$OUT_ROOT/manifests/$HASH_RUN_ID/source_inventory.csv" \
+  --output-dir "$OUT_ROOT/raw_audits/$DBN_AUDIT_RUN_ID" \
+  --sample-rows 5 \
+  --continue-on-error
 ```
 
 ## Bottom line

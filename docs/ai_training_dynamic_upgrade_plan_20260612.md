@@ -1429,8 +1429,9 @@ Required metadata per run:
    - EQUS `mbp-1` top-book update fields and action/event semantics.
 5. Produce a coverage table for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
 6. Compare new feeds against existing `tbbo`/`ohlcv-1s` for the same days.
-7. Produce a storage/throughput estimate by schema before bulk normalization, especially for OPRA `tcbbo`. If pilot `tcbbo` files are unexpectedly large, start with a 10-day normalization slice instead of the full aligned window.
-8. Only then run the full pilot build.
+7. Use `scripts/audit_databento_dbn_day.py` to decode and summarize one representative day per schema before bulk normalization.
+8. Produce a storage/throughput estimate by schema before bulk normalization, especially for OPRA `tcbbo`. If pilot `tcbbo` files are unexpectedly large, start with a 10-day normalization slice instead of the full aligned window.
+9. Only then run the full pilot build.
 
 ### June 13 decision: bars, buckets, event pressure, and imbalance
 
