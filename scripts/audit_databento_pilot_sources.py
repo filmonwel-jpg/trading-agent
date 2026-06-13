@@ -53,6 +53,8 @@ class FileRecord:
     date: str
     is_dbn: bool
     sha256: str = ""
+    sha256_status: str = "not_requested"
+    sha256_error: str = ""
 
 
 @dataclass
@@ -92,6 +94,15 @@ def _sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
         for chunk in iter(lambda: handle.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _hash_record(path: Path, include_hashes: bool) -> tuple[str, str, str]:
+    if not include_hashes:
+        return "", "not_requested", ""
+    try:
+        return _sha256(path), "ok", ""
+    except OSError as exc:
+        return "", "error", f"{type(exc).__name__}: {exc}"
 
 
 def default_sources(vault_root: Path) -> list[SourceSpec]:
@@ -145,6 +156,9 @@ def audit_source(spec: SourceSpec, include_hashes: bool) -> tuple[SourceSummary,
     for path in sorted((p for p in spec.path.iterdir() if p.is_file()), key=lambda p: p.name):
         stat = path.stat()
         is_dbn = _is_dbn_name(path.name)
+        sha256, sha256_status, sha256_error = _hash_record(path, include_hashes)
+        if sha256_error:
+            print(f"hash error: {spec.label}: {path}: {sha256_error}", file=sys.stderr)
         records.append(
             FileRecord(
                 source_label=spec.label,
@@ -156,7 +170,9 @@ def audit_source(spec: SourceSpec, include_hashes: bool) -> tuple[SourceSummary,
                 mtime_utc=_utc_timestamp(stat.st_mtime),
                 date=_date_from_name(path.name) if is_dbn else "",
                 is_dbn=is_dbn,
-                sha256=_sha256(path) if include_hashes else "",
+                sha256=sha256,
+                sha256_status=sha256_status,
+                sha256_error=sha256_error,
             )
         )
 
@@ -227,7 +243,24 @@ def duplicate_candidates(summaries: list[SourceSummary]) -> list[list[str]]:
     return [labels for labels in groups.values() if len(labels) > 1]
 
 
-def run_audit(sources: list[SourceSpec], output_dir: Path, include_hashes: bool, allow_missing: bool) -> int:
+def filter_sources(
+    sources: list[SourceSpec],
+    include_labels: list[str] | None,
+    exclude_labels: list[str] | None,
+) -> list[SourceSpec]:
+    include = set(include_labels or [])
+    exclude = set(exclude_labels or [])
+    filtered = [source for source in sources if not include or source.label in include]
+    return [source for source in filtered if source.label not in exclude]
+
+
+def run_audit(
+    sources: list[SourceSpec],
+    output_dir: Path,
+    include_hashes: bool,
+    allow_missing: bool,
+    allow_hash_errors: bool,
+) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     summaries: list[SourceSummary] = []
@@ -245,6 +278,7 @@ def run_audit(sources: list[SourceSpec], output_dir: Path, include_hashes: bool,
 
     summary_rows = [asdict(summary) for summary in summaries]
     file_rows = [asdict(record) for record in records]
+    hash_error_rows = [asdict(record) for record in records if record.sha256_status == "error"]
     source_labels = [source.label for source in sources if any(summary.source_label == source.label and summary.exists for summary in summaries)]
     pair_rows = paired_date_rows(records, source_labels)
 
@@ -270,6 +304,10 @@ def run_audit(sources: list[SourceSpec], output_dir: Path, include_hashes: bool,
         "output_dir": str(output_dir),
         "sources": summary_rows,
         "duplicate_candidates": duplicate_candidates(summaries),
+        "hash_error_count": len(hash_error_rows),
+        "hash_errors": hash_error_rows,
+        "hash_ok_count": sum(1 for record in records if record.sha256_status == "ok"),
+        "hash_skipped_count": sum(1 for record in records if record.sha256_status == "not_requested"),
         "paired_date_count": len(pair_rows),
         "fully_paired_date_count": sum(1 for row in pair_rows if row["all_sources_present"] == "1"),
         "unpaired_dates": [row for row in pair_rows if row["all_sources_present"] != "1"],
@@ -284,6 +322,14 @@ def run_audit(sources: list[SourceSpec], output_dir: Path, include_hashes: bool,
         print(f"warning: {len(manifest['unpaired_dates'])} dates are not present in every source")
     if manifest["duplicate_candidates"]:
         print(f"warning: duplicate-like source groups: {manifest['duplicate_candidates']}")
+    if hash_error_rows:
+        print(f"warning: {len(hash_error_rows)} files could not be hashed; see source_files.csv and manifest.json", file=sys.stderr)
+        for row in hash_error_rows[:10]:
+            print(f"hash_error_file: {row['path']} :: {row['sha256_error']}", file=sys.stderr)
+        if len(hash_error_rows) > 10:
+            print(f"hash_error_file: ... {len(hash_error_rows) - 10} more", file=sys.stderr)
+        if not allow_hash_errors:
+            return 3
     return 0
 
 
@@ -301,20 +347,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=parse_source,
         help="Override default sources. Format: label=dataset:schema:/absolute/path. Repeatable.",
     )
+    parser.add_argument("--source-label", action="append", help="Only audit matching source label. Repeatable.")
+    parser.add_argument("--exclude-source-label", action="append", help="Skip matching source label. Repeatable.")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory where audit CSV/JSON outputs will be written.")
     parser.add_argument("--include-hashes", action="store_true", help="Compute SHA-256 for every source file; slower but required for immutable manifests.")
     parser.add_argument("--allow-missing", action="store_true", help="Write a partial manifest instead of failing when a source folder is missing.")
+    parser.add_argument("--allow-hash-errors", action="store_true", help="Exit 0 even if some files could not be hashed. Hash failures are still recorded in source_files.csv and manifest.json.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     sources = args.source if args.source else default_sources(args.vault_root)
+    sources = filter_sources(sources, args.source_label, args.exclude_source_label)
+    if not sources:
+        raise SystemExit("no sources selected after applying --source-label/--exclude-source-label filters")
     return run_audit(
         sources=sources,
         output_dir=args.output_dir,
         include_hashes=args.include_hashes,
         allow_missing=args.allow_missing,
+        allow_hash_errors=args.allow_hash_errors,
     )
 
 

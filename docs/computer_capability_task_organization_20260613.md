@@ -166,6 +166,11 @@ python3 scripts/audit_databento_pilot_sources.py \
   --output-dir "$OUT_ROOT/manifests/$HASH_RUN_ID" \
   --include-hashes
 
+# If hashing reports an I/O error, pull the version containing resilient hash
+# recording and inspect manifest.json/source_files.csv for the exact file path.
+# If the problem is only the duplicate OPRA definition folder, rerun with:
+#   --exclude-source-label opra_definition_20260612_duplicate
+
 export DBN_AUDIT_RUN_ID="dbn_day_audit_20260521_$(date +%Y%m%d_%H%M%S)"
 
 python3 scripts/audit_databento_dbn_day.py \

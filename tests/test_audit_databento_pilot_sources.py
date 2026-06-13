@@ -38,6 +38,7 @@ class AuditDatabentoPilotSourcesTest(unittest.TestCase):
                 output_dir=out,
                 include_hashes=False,
                 allow_missing=False,
+                allow_hash_errors=False,
             )
 
             self.assertEqual(rc, 0)
@@ -63,6 +64,60 @@ class AuditDatabentoPilotSourcesTest(unittest.TestCase):
             self.assertEqual(manifest["paired_date_count"], 2)
             self.assertEqual(manifest["fully_paired_date_count"], 1)
             self.assertEqual(len(manifest["unpaired_dates"]), 1)
+            self.assertEqual(manifest["hash_error_count"], 0)
+
+    def test_records_hash_errors_without_traceback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            equs = root / "EQUS"
+            out = root / "out"
+            equs.mkdir()
+            good = equs / "equs-mini-20260102.mbp-1.dbn.zst"
+            bad = equs / "equs-mini-20260103.mbp-1.dbn.zst"
+            good.write_bytes(b"good")
+            bad.write_bytes(b"bad")
+
+            original_sha256 = audit_module._sha256
+
+            def fake_sha256(path, chunk_size=1024 * 1024):
+                if Path(path).name == bad.name:
+                    raise OSError(5, "Input/output error")
+                return "abc123"
+
+            audit_module._sha256 = fake_sha256
+            try:
+                rc = audit_module.run_audit(
+                    sources=[audit_module.SourceSpec("equs", "EQUS.MINI", "mbp-1", equs)],
+                    output_dir=out,
+                    include_hashes=True,
+                    allow_missing=False,
+                    allow_hash_errors=False,
+                )
+            finally:
+                audit_module._sha256 = original_sha256
+
+            self.assertEqual(rc, 3)
+            with (out / "source_files.csv").open(newline="", encoding="utf-8") as handle:
+                rows = {row["name"]: row for row in csv.DictReader(handle)}
+            self.assertEqual(rows[good.name]["sha256_status"], "ok")
+            self.assertEqual(rows[good.name]["sha256"], "abc123")
+            self.assertEqual(rows[bad.name]["sha256_status"], "error")
+            self.assertIn("Input/output error", rows[bad.name]["sha256_error"])
+
+            manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["hash_error_count"], 1)
+            self.assertEqual(manifest["hash_ok_count"], 1)
+            self.assertEqual(manifest["hash_errors"][0]["name"], bad.name)
+
+    def test_source_filters(self):
+        sources = [
+            audit_module.SourceSpec("a", "D", "S", Path("/a")),
+            audit_module.SourceSpec("b", "D", "S", Path("/b")),
+            audit_module.SourceSpec("c", "D", "S", Path("/c")),
+        ]
+
+        self.assertEqual([source.label for source in audit_module.filter_sources(sources, ["a", "b"], ["b"])], ["a"])
+        self.assertEqual([source.label for source in audit_module.filter_sources(sources, None, ["c"])], ["a", "b"])
 
 
 if __name__ == "__main__":
