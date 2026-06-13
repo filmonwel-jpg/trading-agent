@@ -212,6 +212,7 @@ Action plan:
 
 - Use `source_manifests/pilot_dates_latest10_20260613_153639` as the date/file contract.
 - Before starting any build, verify the external disk mount, write access, selected source-file existence, selected source-file sizes, selected dates, and source labels.
+- Use `scripts/verify_databento_pilot_prebuild.py` for repeatable manifest/source-file verification rather than ad-hoc heredocs.
 - Process partitioned by date and source; do not materialize all 10 days across all sources at once.
 - Write outputs only under external `data_lake_v2`; no large local-disk outputs.
 - Start only after pulling the commit that contains both C1 and C2 fixes and rerunning the targeted tests on the 48GB machine.
@@ -219,6 +220,9 @@ Action plan:
 Action done:
 
 - Pre-build source/code validation is ready to run on the 48GB machine because C1 and C2 are now pulled and tested there.
+- External disk write check passed on the 48GB computer after reconnecting the disk: `/Volumes/DatabentoVault` was mounted read-write and a write/read/remove test under `data_lake_v2` succeeded.
+- Manifest pre-build checks passed: `hash_error_count=0`, `audit_error_count=0`, `audit_warning_count=0`, selected dates are `20260511`, `20260512`, `20260513`, `20260514`, `20260515`, `20260518`, `20260519`, `20260520`, `20260521`, `20260522`, selected file count is `50`, total compressed input is `4.508 GiB`, and `20260403` is not selected.
+- Source-file existence/size/hash checks passed and were written to `raw_audits/prebuild_manifest_check_20260613_172522/prebuild_manifest_check.json` and `raw_audits/prebuild_manifest_check_20260613_172522/prebuild_manifest_check_files.csv`; `errors: []`, `warnings: []`.
 - The 10-day pilot build itself has not started yet. Correctly paused after manifest selection and before normalization/training.
 
 ### Phase C — Training and promotion gates on the 48GB machine
