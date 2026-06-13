@@ -255,6 +255,8 @@ Pilot modeling rule:
 - `SPY` and `QQQ` should be included from day one as context features, regime features, and option-flow anchors, even if not initially traded.
 - Every pipeline should accept a symbol-cohort file, not hardcoded symbols, so scaling from 5 symbols to 10, 25, and 99 later is just a config change plus capacity validation.
 
+TQQQ-specific peer-review note: `TQQQ` remains a core trade target because it is a current-strategy survivor and a leveraged `QQQ` product, but its own OPRA flow is materially sparser than `TSLA`, `NVDA`, `SPY`, and `QQQ` in the five-session sample. The pilot must explicitly test whether `TQQQ.OPT` flow adds independent lift beyond `QQQ` option-flow context. If not, the promotable `TQQQ` feature set should prefer `QQQ`/`SPY` option-flow context plus `TQQQ` equity microstructure rather than forcing noisy `TQQQ.OPT` buckets into the micro-entry and lifecycle models.
+
 ## Information we can extract from the current data
 
 ### From existing EQUS `tbbo`
@@ -698,6 +700,12 @@ Submit this minimal set first:
 
 Delay OPRA `cbbo`, OPRA `statistics`, EQUS `bbo`, and EQUS `statistics` until after checking estimated job size/cost or after the first pilot feature-build inspection.
 
+Symbol-file clarification from peer review:
+
+- `runtime/pilot_core_5_symbols.txt` intentionally contains raw equity symbols (`TSLA`, `TQQQ`, `NVDA`, `SPY`, `QQQ`). For OPRA requests, `scripts/submit_batch.py` appends `.OPT` automatically when `--stype-in parent`; for EQUS requests, `scripts/submit_equity_batch.py` submits the raw symbols unchanged.
+- `runtime/symbols_100.txt` is a historical filename. The current audited command text refers to 99 non-empty symbols/parents, even though the file name still says `100`. Do not infer the request count from the filename; record the loaded symbol count in the source manifest.
+- Do not submit optional OPRA `cbbo` or `cbbo-1s` until `tcbbo` storage size, decode speed, feature coverage, and ablation lift have been measured. If continuous option quote-state is still needed after `tcbbo`, prefer a smaller validation slice first; event-frequency `cbbo` may be much larger than sampled `cbbo-1s` for `SPY`/`QQQ` option chains.
+
 ## Current derived data observations
 
 Derived/staged data exists under:
@@ -754,23 +762,95 @@ Observed symptom in a full `mega_liquid.csv` staged dataset:
 - Most 30-second rows were marked `no_trade|no_quote|synthetic_ohlc`.
 - Sample rows still had meaningful `Volume`, `Count`, `TradePrintCount5s`, bid/ask, and quote-related fields.
 
-Recommended fix:
+Recommended Phase 0 fix:
 
-- Keep 1-second flags as raw child-level diagnostic data.
+- Keep 1-second `DataQualityFlags` as raw child-level diagnostic data.
+- Preserve the old parent union only as `ChildDataQualityFlagUnion` for audit/debugging.
+- Do not use the raw child union as the parent training-exclusion flag.
 - For 5-second and 30-second bars, generate aggregate quality features instead of blindly unioning child flags.
-- Add fields such as:
-  - `TradeSecondsPresent`
-  - `QuoteSecondsPresent`
-  - `TradeCoverage`
-  - `QuoteCoverage`
-  - `SyntheticSeconds`
-  - `SyntheticCoverage`
-  - `QualityScore`
-- Mark a parent bar `no_trade` only when aggregate trade count or trade coverage is below a configured threshold.
-- Mark a parent bar `no_quote` only when quote coverage is below a configured threshold.
-- Mark `synthetic_ohlc` only when OHLC was materially synthesized rather than supported by real prints.
+- Rebuild parent `DataQualityFlags` from thresholds on aggregate coverage and quote validity.
+
+Important semantic split:
+
+- `QuoteUpdateCoverage`: fraction of child seconds with a fresh quote update event.
+- `QuoteStateCoverage`: fraction of child seconds with a valid as-of quote state.
+
+A symbol does not need a quote update every second to have valid quote state. A quote can be stale or invalid, but a quiet second after a fresh quote should not automatically make the parent bar `no_quote`.
+
+Aggregate quality fields to add for 5s/30s bars:
+
+- `TradeSecondsPresent`
+- `QuoteUpdateSecondsPresent`
+- `QuoteStateSecondsValid`
+- `SyntheticSeconds`
+- `TradeCoverage`
+- `QuoteUpdateCoverage`
+- `QuoteStateCoverage`
+- `SyntheticCoverage`
+- `QuoteAgeMsMean`
+- `QuoteAgeMsMax`
+- `ValidSpreadCoverage`
+- `LockedCrossedSeconds`
+- `QualityScore`
+
+Parent flag rules:
+
+- Mark parent `no_trade` only when aggregate trade count or `TradeCoverage` is below a configured threshold.
+- Mark parent `no_quote` only when `QuoteStateCoverage` is below a configured threshold, not because one child second lacked a quote update.
+- Mark parent `synthetic_ohlc` only when OHLC was materially synthesized rather than supported by real prints.
+- Use `partial_synthetic_ohlc` when `SyntheticCoverage` is material but not total.
+- Use `stale_quote` when `QuoteAgeMsMax` or quote-age percentile exceeds the model-specific threshold.
+- Use explicit invalid flags for missing, zero, crossed, locked, or unreasonable bid/ask state.
+
+Training-row policy:
+
+- Hard reject only truly unusable rows, such as outside-session rows, timestamp-order failures, rows with no trade and no valid quote state, rows with no usable price anchor, or rows whose label path lacks enough real price/mid coverage.
+- Keep partial-quality rows and expose their coverage/staleness/synthetic metrics as model features.
+- Apply model-specific gates: 5s micro-entry should be strict on quote freshness/spread; 30s setup can tolerate more partial trade coverage if quote/context state is valid; lifecycle and micro-exit models should see quality deterioration as a potential exit-risk feature.
+
+Leakage guard for regularization:
+
+- Avoid future `bfill()` when regularizing quote/book state. Prefer forward-fill from known past state plus explicit previous-close fallback only when allowed by the manifest.
+- Pre-first-quote or pre-first-trade seconds should remain low-quality or invalid rather than inheriting a future quote/price.
+- Every quality field must be computed using the same half-open as-of window used for model features.
+
+Required audit report for the Phase 0 fix:
+
+- Old versus new `no_quote` counts.
+- Old versus new `synthetic_ohlc` counts.
+- Bars recovered by symbol/day/cadence.
+- Bars hard-rejected by symbol/day/cadence.
+- Distributions for `TradeCoverage`, `QuoteUpdateCoverage`, `QuoteStateCoverage`, `SyntheticCoverage`, `QuoteAgeMsMax`, and `FeatureCompleteness`.
+
+Minimum synthetic tests before retraining:
+
+1. A 5s parent with four valid quote-state seconds and one `no_quote` child second must not become parent `no_quote`.
+2. A 5s parent with low quote-update coverage but fresh carried quote state should have low `QuoteUpdateCoverage`, high `QuoteStateCoverage`, and no parent `no_quote`.
+3. Pre-first-quote seconds must not be backfilled from future quote state.
+4. A no-trade parent with valid quote state can remain as a partial-quality row with high `SyntheticCoverage`.
+5. A no-trade/no-quote parent should be hard-rejected or assigned a very low `QualityScore`.
 
 This should be treated as a Phase 0 reliability fix before serious retraining.
+
+### June 13 peer-review import: confirmed blockers from code inspection
+
+The peer-review document `docs/peer_review_ai_training_dynamic_upgrade_plan_20260613.md` adds concrete code-inspection findings that should be treated as execution blockers, not optional hardening.
+
+Hard blockers before any retrained bundle is treated as a paper/shadow candidate:
+
+| ID | Blocker | Required action |
+|---|---|---|
+| `C1` | Future backfill leakage is present in `build_30s_from_5s_csv.py` around the current book/price regularization calls: `out[book_cols] = out[book_cols].ffill().bfill()`, `base_close = base_close.ffill().bfill()`, and per-column `ffill().bfill()`. | Remove `bfill()` from book/price regularization before retraining. Use forward-fill from past-known state only, explicit previous-close fallback only when allowed, and invalid/low-quality flags for leading null state. |
+| `C2` | `_quality_flag_union()` is still the parent aggregation path for `DataQualityFlags`. | Replace parent child-flag union with aggregate coverage/staleness/synthetic metrics and threshold-derived parent flags. Preserve the old union only as `ChildDataQualityFlagUnion` for audit. |
+| `C3` | `f_setup_score_proxy` / `f_entry_score_proxy` can be constant bootstrap `1.0` when no walk-forward setup probability exists. | Lifecycle/micro training must fail by default if real out-of-fold setup probabilities are missing or constant, unless an explicit research-only override is used. |
+| `C4` | `train_30s_models.py` walk-forward reporting does not write out-of-fold setup predictions that can be joined into lifecycle/micro training rows. | Build `generate_walk_forward_setup_predictions.py` or equivalent to emit one out-of-fold prediction row per 30s training bar with symbol, timestamp, fold ID, raw score/probability, selected threshold, and threshold margin. Fail if any trainable bar lacks a prediction. |
+
+Pre-fix artifact policy:
+
+- Existing staged datasets built through the current quality path, including `compare_runs_20260523_meta_ab` and `databento_training_runs_20260523`, are pre-fix artifacts. They can be used for debugging and regression comparison only, not as clean baselines to beat.
+- `model_exports/lifecycle_micro_20260523` is an integration artifact, not a paper/shadow candidate. Its micro-entry scorecard has extremely low useful coverage (`longMicroEntryAi` around `precision=1.0`, `recall=0.005264`, `pred_pos_rate=0.000555`; `shortMicroEntryAi` around `precision=1.0`, `recall=0.00514`, `pred_pos_rate=0.000495`) and was trained with bootstrap proxy risk. A calibration pass alone cannot promote it.
+- Code inspection found no complete probability-calibration infrastructure yet: no persisted Brier score, ECE, calibration curves, or calibration manifest in the current trainers. Until that exists, promising raw scorecards remain research-only.
+- Code inspection found no complete dataset/join/label manifest infrastructure yet. The manifest requirements in this plan are new deliverables, not already-satisfied controls.
 
 ## Assessment of the current 30-second model approach
 
@@ -852,6 +932,7 @@ Recommended changes:
 - Produce calibration curves per symbol/cohort/regime.
 - Select thresholds by expected net R, drawdown, trade count, and stability, not precision alone.
 - Preserve both raw score and calibrated probability in scorecards.
+- Rename existing code/comment terminology that says threshold selection is "calibration" to `tune_threshold` or `select_threshold`. Threshold tuning is not probability calibration; the new calibration step must mean isotonic/Platt/sigmoid-style score-to-probability calibration with Brier/ECE reporting.
 
 Candidate runtime decision logic should become closer to:
 
@@ -946,7 +1027,7 @@ Start with practical models:
 - GRU/LSTM,
 - compact Transformer/PatchTST only after dataset and label quality are stable.
 
-Do not jump directly to a large Transformer as the core production model. Use sequence scores as meta features first, then compare by walk-forward backtest.
+Do not jump directly to a large Transformer as the core production model. Sequence models are feature generators only until they beat calibrated tabular models on walk-forward net R, calibration, threshold stability, and live replay reproducibility.
 
 ## Label upgrade plan
 
@@ -973,16 +1054,33 @@ For exits, prefer survival/hazard-style labels over generic top/bottom labels:
 - probability of deterioration soon,
 - expected value of exit now versus hold.
 
+`expected_net_r_after_costs` must be execution-aware rather than theoretical. Store the component assumptions in the label manifest and make the label build fail if they are missing:
+
+- entry spread cost,
+- exit spread cost,
+- slippage model by symbol/time/liquidity regime,
+- partial-fill or missed-fill penalty,
+- commissions/fees if applicable,
+- quote staleness/adverse-selection penalty where available,
+- latency assumption used for entry and exit decisions.
+
+Any expected-R, hazard, or hold-value model that ignores realistic entry/exit friction should be considered research-only and not promotable.
+
+Phase-ordering correction from peer review: add a minimum cost-aware label in parallel with the Phase 1 pilot slice, not only after feature expansion. At minimum, feature-block experiments should use a net-R label with entry spread, exit spread, fixed/conservative slippage, and partial-fill/missed-fill assumptions. Any `equs_quote_v2`, `opra_tcbbo_v2`, `event_pressure_v2`, or `full_pilot_v2` experiment evaluated only against cost-naive binary labels is research-only.
+
 ## Phased roadmap
 
 ### Phase 0: reliability and reproducibility
 
-1. Fix aggregate quality flag logic in `build_30s_from_5s_csv.py`.
+1. Remove confirmed future `bfill()` leakage and fix aggregate quality flag logic in `build_30s_from_5s_csv.py`.
 2. Add a Databento source audit script.
 3. Make Databento source paths configurable in build scripts.
 4. Make the Python Databento environment reproducible.
 5. Rebuild a small TSLA/TQQQ subset from raw DBN as a validation slice.
 6. Compare old versus new quality distributions and labels.
+7. Add code-level as-of/leakage enforcement for every cross-feed join and label join.
+8. Require dataset manifests to record timestamp columns, join rules, lag assumptions, and future-row assertion results.
+9. Mark all existing quality-pre-fix staged datasets and scorecards as research/debug artifacts.
 
 ### Phase 1: canonical data lake
 
@@ -1009,9 +1107,11 @@ data_lake_v2/
 
 Use partitioned Parquet/Arrow as the main storage format. Keep CSV only for debugging/export.
 
+Before full-window builds, create a 2-5 day pilot slice and verify that EQUS/OPRA joins, feature reproduction, row counts, and quality distributions are stable and explainable. If OPRA `tcbbo` output is unexpectedly large, for example above roughly `100GB` for the pilot download, restrict the first normalization pass to a 10-day validation slice and produce storage/throughput estimates before attempting the full window.
+
 ### Phase 2: remove bootstrap proxy scores
 
-1. Generate walk-forward 30-second setup predictions.
+1. Generate walk-forward 30-second setup predictions with a concrete out-of-fold prediction artifact, such as `generate_walk_forward_setup_predictions.py`.
 2. Store real setup probability, threshold, and margin.
 3. Generate live-shaped micro-entry arms from those walk-forward predictions.
 4. Store real entry probability, threshold, and margin.
@@ -1020,11 +1120,14 @@ Use partitioned Parquet/Arrow as the main storage format. Keep CSV only for debu
 
 ### Phase 3: event/state feature expansion
 
+Do not promote Phase 3 feature-block results unless the minimum cost-aware label from Phase 1/2 is already available. Feature blocks evaluated only against cost-naive binary labels can remain useful research, but cannot enter `full_pilot_v2`.
+
 1. Add event bars and volume/dollar/trade-count bars.
 2. Expand OPRA option-flow feature extraction.
 3. Add cross-symbol market context.
 4. Add rolling time-of-day-normalized liquidity and flow baselines.
 5. Add sequence-model meta scores.
+6. Add delayed and smoothed variants of timing-sensitive event-pressure features for robustness tests.
 
 ### Phase 4: target/label upgrade
 
@@ -1032,6 +1135,7 @@ Use partitioned Parquet/Arrow as the main storage format. Keep CSV only for debu
 2. Add time-to-target/time-to-stop labels.
 3. Add exit hazard and hold-value labels.
 4. Train companion models for probability, expected value, and risk.
+5. Include spread, slippage, partial-fill, and latency assumptions in every promotable EV label.
 
 ### Phase 5: calibration and threshold overhaul
 
@@ -1040,6 +1144,7 @@ Use partitioned Parquet/Arrow as the main storage format. Keep CSV only for debu
 3. Select thresholds by net R/PnL, drawdown, trade count, and stability.
 4. Require stable threshold islands across folds, not a single lucky threshold.
 5. Preserve calibration manifests with model exports.
+6. Treat calibration as a hard precondition for paper/shadow promotion, even if Phases 1-4 produce promising raw scorecards.
 
 ### Phase 6: runtime/paper-trading gates
 
@@ -1050,20 +1155,132 @@ Use partitioned Parquet/Arrow as the main storage format. Keep CSV only for debu
 5. Validate no threshold/probability violations in logs.
 6. Monitor probability drift.
 7. Run paper/shadow mode before symbol expansion.
+8. Run recorded-event replay and confirm runtime decisions/features match training assumptions.
 
 ## Immediate engineering task list
 
 Recommended first pull requests on this branch:
 
 1. Use `config/databento_dynamic_upgrade_pilot_symbols.csv` as the initial `pilot_core_5` cohort contract.
-2. `build_30s_from_5s_csv.py`: fix aggregate quality flag semantics.
+2. `build_30s_from_5s_csv.py`: remove future `bfill()` leakage and fix aggregate quality flag semantics in the same PR.
 3. `scripts/audit_databento_source_data.py`: add source manifest/condition/hash audit.
 4. `scripts/run_parallel_databento_build_20260523.sh`: make `EQUS_DIR`, `OPRA_DIR`, `PYTHON_BIN`, output root, and symbol file configurable for this machine.
 5. Add a `pilot_core_5` rebuild script for a small validation slice covering `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
 6. Add a data-quality comparison report script for old/new 1s/5s/30s datasets.
 7. Add lifecycle/micro training guardrails that fail on constant bootstrap proxy scores unless explicitly overridden.
-8. Add walk-forward setup-score generation for lifecycle/micro training.
+8. Add walk-forward setup-score generation for lifecycle/micro training, producing an out-of-fold prediction file with symbol, timestamp, fold ID, raw score/probability, threshold, and threshold margin.
 9. Add calibration scorecard fields: raw score, calibrated probability, Brier score, ECE, net R, drawdown, trade count, and threshold stability.
+10. Add an as-of join helper that refuses ambiguous timestamp columns and records join assumptions in the dataset manifest.
+11. Add a feature ablation ledger so every new feature block must prove incremental net-R lift before it enters `full_pilot_v2`.
+12. Add a recorded-event replay harness for feature/decision parity before promotion.
+13. Add a minimum cost-aware label builder before feature-block ablations, even if the full hazard/hold-value label upgrade comes later.
+14. Define and freeze the internal holdout window before experiments start.
+15. Add OPRA `tcbbo` file-size/storage/throughput sanity checks before full-window normalization.
+16. Rename threshold-selection terminology in trainer code from "calibrate" to `tune_threshold`/`select_threshold` to avoid confusing it with probability calibration.
+17. Add storage preflight checks and external-disk output-root enforcement so large raw/decoded/training/backtest/model artifacts cannot silently land on the 0.7TB local disk.
+
+## Senior peer-review hardening controls
+
+The key peer-review takeaway is that the upgraded system will live or die on data correctness, label correctness, and calibration, not model sophistication. Treat the following as non-negotiable controls for this branch.
+
+### 1. Leakage enforcement must be code-level, not a guideline
+
+Every cross-feed join, label join, and feature/state join must use an explicit as-of operator and must write its assumptions to the dataset manifest.
+
+Required manifest fields per join:
+
+- left table/path and right table/path,
+- left timestamp column,
+- right timestamp column,
+- timestamp type used, such as `ts_event`, `ts_recv`, ingest timestamp, or derived bucket boundary,
+- join direction, normally backward/as-of only,
+- max lookback tolerance,
+- max forward tolerance, which should be `0` for promotable datasets unless explicitly justified,
+- intentional lag applied, such as OPRA lagged by `1s`,
+- boundary convention, for example `[start, end)`,
+- unmatched-row rate,
+- future-row violation count,
+- code commit and feature schema version.
+
+Builds should fail if timestamp columns are ambiguous, if future-row assertions fail, or if a join lacks a manifest entry.
+
+Cross-feed OPRA/EQUS lag sensitivity is blocking, not optional. A feature block that depends on apparent option-flow lead/lag must be tested with conservative delays. At minimum:
+
+- OPRA as-of with no extra lag,
+- OPRA lagged by `1s`,
+- OPRA lagged by `2s`,
+- EQUS quote state as-of with no extra lag,
+- EQUS quote state lagged by `1s`.
+
+If the feature only works at perfect simultaneity and fails with a small realistic lag, reject it or keep it research-only until live replay proves reproducibility.
+
+### 2. Feature expansion must be ablation-gated
+
+The new data can easily create a 1000+ feature system with poor signal density. Add features in blocks and require proof before inclusion in the candidate bundle.
+
+No new feature block should enter `full_pilot_v2` without an ablation result showing:
+
+- incremental net-R lift after costs,
+- stable threshold islands across folds,
+- stable or explainable feature importance across folds,
+- no single day dominating improvement,
+- robustness to time shift, lag, or smoothing for timing-sensitive features,
+- acceptable calibration impact, including Brier score and ECE.
+
+Feature importance alone is not enough. A block that looks important but destabilizes thresholds, worsens calibration, or only works in one volatility regime should be rejected or kept as research-only.
+
+### 3. Labels must align with executable PnL
+
+Expected-R, hazard, and hold-value labels must be aligned to what the strategy can actually execute. A paper label that ignores spread, slippage, fill probability, or latency will train the model to overtrade fake edge.
+
+Every promotable label build must store:
+
+- raw gross R,
+- entry cost assumption,
+- exit cost assumption,
+- slippage estimate,
+- partial-fill/missed-fill penalty,
+- latency assumption,
+- final net R after costs,
+- whether the row is label-quality eligible.
+
+The runtime strategy should use the same cost model family as the label builder, even if live parameters are more conservative.
+
+### 4. Event-pressure features must survive delayed/smoothed tests
+
+Burst, pressure, shock, and aggression features are useful but timing-sensitive. Keep the first production version aggregated into 5s/30s buckets, then test delayed and smoothed variants.
+
+Reject or quarantine event-pressure features that:
+
+- only work at perfect latency,
+- reverse under a 1-2 second delay,
+- produce unstable fold-to-fold thresholds,
+- cannot be reproduced in recorded-event replay.
+
+### 5. Sequence models remain meta-feature producers
+
+Sequence models can be tested, but they are not the decision layer for the next candidate bundle. They can enter as meta-feature producers only after they beat the tabular baseline on:
+
+- walk-forward net R after costs,
+- calibration,
+- threshold stability,
+- replay parity,
+- feature-drift checks.
+
+Until then, the hierarchy remains: 30s setup, 5s micro-entry, 30s lifecycle, and 5s micro-exit guard.
+
+### 6. Add live reproducibility / replay as a promotion gate
+
+Backtests are not enough. A promotable bundle needs a recorded-event replay test that reconstructs features from a recorded stream and confirms the runtime would have made the same decisions assumed by training/backtest.
+
+Replay report requirements:
+
+- feature vector parity versus offline feature store,
+- bucket boundary parity,
+- quote staleness and quality flag parity,
+- model score parity within tolerance,
+- decision parity for arms, entries, holds, exits, and guard exits,
+- explanation of every mismatch above tolerance.
 
 ## Next execution plan while new downloads are in progress
 
@@ -1110,6 +1327,42 @@ Latest model/training path to build on:
 ### Data organization plan for the incoming downloads
 
 Use a bronze/silver/gold lake layout. Keep raw Databento artifacts immutable; write normalized and feature datasets as versioned Parquet/Arrow; export CSV only for debugging or compatibility scripts.
+
+Storage and memory constraint for the other main computer:
+
+- External disk: about `5TB`; this should be the canonical storage target for raw downloads, decoded Parquet, feature stores, labels, training datasets, experiment outputs, and model export bundles.
+- Local available disk: about `0.7TB`; this should be treated as a working/code/cache disk, not the primary data lake.
+- Memory: `48GB`; sufficient for pilot work only if processing is partitioned/streaming and never loads the full duration into memory.
+
+The pilot build must be external-disk-first and partitioned/streaming rather than full-window in-memory processing. Treat 48GB RAM and 0.7TB local disk as bounded resources; every heavy step should be bounded by date and symbol/root partitions and should write durable outputs to the external disk.
+
+48GB processing policy:
+
+- Never load full-window multi-symbol OPRA `tcbbo` or EQUS `mbp-1` into one pandas dataframe.
+- Process by `date` plus `symbol` or OPRA `root`, then write partitioned Parquet and release memory.
+- Start heavy OPRA `tcbbo` normalization with 1-2 workers; raise concurrency only after measuring peak RSS.
+- Use modest 2-4 worker concurrency for lighter EQUS partitions only if memory remains stable.
+- Prefer Polars lazy, PyArrow dataset scans, or DuckDB-style partition scans where practical; if using pandas, keep chunks small.
+- Downcast counts to `int32`/`uint32`, model features to `float32`, and low-cardinality flags/enums to categorical/dictionary encodings where practical.
+- Target peak active memory around 24-32GB rather than trying to consume all 48GB.
+- Write intermediate silver and gold outputs frequently so failed runs resume from partitions instead of restarting the full window.
+
+External-disk storage policy:
+
+- Use `/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/` as the canonical root for heavy artifacts.
+- Do not write full-window decoded DBN, `silver_normalized`, `gold_state`, `labels`, `model_training_sets`, `threshold_grid.csv`, backtest trade logs, calibration curves, SHAP/feature-importance outputs, or ONNX export bundles to the local internal disk by default.
+- Keep local repository storage limited to source code, small manifests, tiny debug samples, and logs that are safe to commit or inspect.
+- If a script requires a temp directory, point it to an external-disk scratch path such as `/Volumes/DatabentoVault/trading-agent-offload/databento/tmp/` and clean completed partition temp files.
+- Training should read partitioned Parquet from external disk and write run artifacts under `model_training_sets/run_id=.../` and `model_exports/run_id=.../` on the external disk. Only copy the final small promoted ONNX bundle into the repo or app runtime path after validation.
+- Every long-running decode/build/train script should expose `--data-root`, `--output-root`, `--tmp-dir`, and `--run-id` or equivalent settings so paths do not silently default to local disk.
+- Before each full-window normalization or training run, run a disk preflight that records free space on both the external disk and local disk. Abort if the output root is local or if projected free space after the run would be unsafe.
+- Keep at least `15-20%` free space on the external disk and at least `100GB` free on local disk during heavy processing to avoid failed writes, OS pressure, and corrupted partial outputs.
+
+Computer-capability handoff as of 2026-06-13:
+
+- Current 16GB machine: can read `/Volumes/DatabentoVault` but cannot write to it. Use it only for code, documentation, read-only inventory, manifest review, and tiny local tests/summaries. Do not run external offload scripts, full-window DBN decoding, large Parquet/CSV builds, training grids, or any command that writes to the external vault from this machine.
+- 48GB/write-capable machine: use it for `data_lake_v2` creation, source manifests and hashes, DBN-to-Parquet normalization, 10-day pilot slices, full-window feature builds, walk-forward prediction artifacts, training, calibration, backtests, and model exports.
+- Detailed downloaded-data inventory and per-machine task split are recorded in `docs/computer_capability_task_organization_20260613.md`. Pull this branch on the 48GB machine before moving from inspection to artifact-producing work.
 
 Recommended root:
 
@@ -1176,7 +1429,8 @@ Required metadata per run:
    - EQUS `mbp-1` top-book update fields and action/event semantics.
 5. Produce a coverage table for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
 6. Compare new feeds against existing `tbbo`/`ohlcv-1s` for the same days.
-7. Only then run the full pilot build.
+7. Produce a storage/throughput estimate by schema before bulk normalization, especially for OPRA `tcbbo`. If pilot `tcbbo` files are unexpectedly large, start with a 10-day normalization slice instead of the full aligned window.
+8. Only then run the full pilot build.
 
 ### June 13 decision: bars, buckets, event pressure, and imbalance
 
@@ -1262,6 +1516,16 @@ Route the enriched features by decision layer:
 | Cross-symbol `SPY`/`QQQ` context | strong | maybe | strong | maybe |
 
 Strict leakage rule for every bucket: use half-open as-of windows and never include rows after the decision boundary. Record the exact boundary convention in `feature_schema.json` / `dataset_manifest.json`. For example, a 5s decision at `09:45:05` should use the completed feature window `[09:45:00, 09:45:05)` and must not include any event at or after `09:45:05.000` unless the live runtime can prove the event was known before the decision was made.
+
+Cross-feed timestamp discipline is mandatory when joining OPRA and EQUS. Do not assume apparent option-flow lead/lag is alpha until it survives conservative as-of tests. Track `ts_event` versus any receive/ingest timestamp available in the decoded data, document which timestamp drives each join, and avoid letting the model learn structural exchange/SIP latency. Every OPRA/EQUS feature block should be tested under lag sensitivity, for example:
+
+- OPRA features as-of with no extra lag.
+- OPRA features lagged by 1s.
+- OPRA features lagged by 2s.
+- EQUS quote-state features as-of with no extra lag.
+- EQUS quote-state features lagged by 1s.
+
+If a feature only works with perfectly simultaneous cross-feed timing and disappears under a small conservative lag, treat it as suspect until live replay proves it is reproducible.
 
 ### Feature plan using existing plus new data
 
@@ -1366,6 +1630,28 @@ Primary architecture: keep the current hierarchical route, not a single end-to-e
    - Track Brier score and ECE in scorecards.
    - Select thresholds from stable net-R islands across folds, not from a single best PnL row.
 
+### Holdout construction and provisional quantitative gates
+
+The current aligned source window ends at `2026-05-22` because Databento requests use the half-open interval `[2025-07-21, 2026-05-23)`. That means there is no true forward holdout after `2026-05-23` unless a later data window is downloaded. Until then, the plan must explicitly reserve an internal chronological holdout and treat it as untouchable for training, threshold selection, feature ablation, and calibration fitting.
+
+Default internal holdout policy for the pilot:
+
+- Preferred holdout: `2026-02-01` through `2026-05-22`.
+- If trade counts are too small, a wider holdout such as `2026-01-01` through `2026-05-22` can be used, but the exact choice must be frozen before experiments and written to `dataset_manifest.json`.
+- No feature-block ablation, threshold-grid selection, isotonic/Platt fitting, or model-family choice should use the holdout rows.
+- A genuine forward holdout requires extending the source window beyond `2026-05-23`; internal holdout results are necessary but not sufficient for live expansion.
+
+Provisional experiment-gate fields to store in the experiment config/manifest:
+
+- `min_net_r_improvement_pct`: initial default `>= 5%` versus the matched baseline over the frozen holdout, after costs.
+- `max_threshold_std`: initial default `<= 0.03` across walk-forward folds.
+- `max_threshold_abs_deviation`: initial default `<= 0.05` from the fold median.
+- `min_holdout_trade_count`: initial target `>= 30` closed trades per active trade target or `>= 100` aggregate pilot trades; if not met, mark results as insufficient-sample/research-only rather than promotable.
+- `max_single_day_profit_share`: initial default `<= 30%` of total holdout profit from any one day.
+- `max_hard_stop_rate_delta`: hard-stop rate must not worsen versus the baseline; target improvement should be recorded, for example `>= 10%` reduction when sample size supports it.
+
+These are starting gates, not universal truths. They should be adjusted only by an explicit experiment-governance change, not ad hoc after seeing results.
+
 ### Experiment matrix after the pilot data is built
 
 Run experiments as additive feature blocks so lift can be attributed.
@@ -1390,8 +1676,13 @@ Each experiment must emit:
 - `scorecard.csv`
 - `calibration_manifest.json`
 - `threshold_grid.csv`
+- `feature_ablation_result.json`
 - backtest trade/lifecycle summaries
 - feature importance or SHAP-style attribution where practical
+
+No feature block can move from a standalone experiment into `full_pilot_v2` unless its ablation result shows incremental after-cost net-R lift, stable thresholds, acceptable calibration, and robustness to reasonable lag/smoothing tests.
+
+Every `feature_ablation_result.json` should also record whether the block passed or failed the frozen holdout and quantitative gates above. A feature can have promising feature importance or train-fold lift and still be rejected if it fails holdout trade-count, threshold-stability, or single-day concentration gates.
 
 ### Strategy approach for the next candidate bundle
 
@@ -1430,14 +1721,16 @@ Recent calibration/backtest evidence should be treated as encouraging but not su
 1. Inventory raw completed jobs and write a source manifest.
 2. Decode and inspect sample files for every new schema.
 3. Implement or extend normalized readers for OPRA `definition`, OPRA `tcbbo`, and EQUS `mbp-1`.
-4. Rebuild a two-day pilot slice for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
-5. Fix aggregate quality flags before full retraining.
-6. Rebuild full-window pilot 1s state, enriched 5s/30s buckets, and event-pressure Parquet datasets.
-7. Generate upgraded labels and walk-forward 30s setup probabilities.
-8. Retrain lifecycle/micro models with real setup/entry probabilities.
-9. Run the additive experiment matrix and preserve all manifests.
-10. Backtest TSLA/TQQQ first, then shadow NVDA.
-11. Promote only if schema validation, calibration, threshold stability, and paper-mode drift checks pass.
+4. Produce file-size, row-count, and decode-throughput estimates; if OPRA `tcbbo` is large, normalize a 10-day validation slice before the full window.
+5. Rebuild a 2-10 day pilot slice for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
+6. Fix `bfill()` leakage and aggregate quality flags before full retraining.
+7. Generate a minimum cost-aware net-R label and freeze the internal holdout window.
+8. Generate walk-forward out-of-fold 30s setup probabilities.
+9. Rebuild full-window pilot 1s state, enriched 5s/30s buckets, and event-pressure Parquet datasets only after the validation slice passes.
+10. Retrain lifecycle/micro models with real setup/entry probabilities.
+11. Run the additive experiment matrix and preserve all manifests.
+12. Backtest TSLA/TQQQ first, then shadow NVDA.
+13. Promote only if schema validation, calibration, threshold stability, frozen-holdout gates, replay parity, and paper-mode drift checks pass.
 
 ## Promotion gates
 
@@ -1446,9 +1739,18 @@ A model bundle should not be promoted unless all of these are true:
 - Source audit passes.
 - Dataset manifest is complete.
 - Degraded days are explicitly included/excluded and recorded.
+- Pre-fix staged datasets and pre-fix scorecards are not used as promotable baselines.
+- Every cross-feed and label join has an as-of join manifest with timestamp columns, boundary convention, lag assumptions, unmatched rates, and zero future-row assertion failures.
+- OPRA/EQUS lag-sensitivity tests pass for every timing-sensitive feature block.
 - 5s/30s quality aggregation is fixed.
 - No constant bootstrap `f_setup_score_proxy`.
 - No constant bootstrap `f_entry_score_proxy`.
+- Real out-of-fold 30s setup predictions cover every lifecycle/micro training row that requires setup context.
+- Every accepted new feature block has an ablation result proving incremental after-cost lift and stable thresholds.
+- Quantitative ablation gates are recorded, including minimum after-cost net-R lift, threshold variance/deviation, holdout trade count, hard-stop-rate delta, and single-day profit concentration.
+- Event-pressure features survive delayed/smoothed robustness tests or remain research-only.
+- Labels include entry spread, exit spread, slippage, partial-fill/missed-fill, and latency assumptions.
+- The frozen internal holdout is not used for training, threshold selection, calibration fitting, or feature-block acceptance.
 - Java runtime feature schema validation passes exactly.
 - Model hashes and feature schema hashes are recorded.
 - Calibration curves and metrics are recorded.
@@ -1456,6 +1758,7 @@ A model bundle should not be promoted unless all of these are true:
 - Backtest uses live-shaped arms and realistic fills/slippage.
 - Holdout trade count is sufficient.
 - No single day dominates profitability.
+- Recorded-event replay shows feature, score, and decision parity within tolerance.
 - Runtime probability/threshold validation has zero violations.
 - Paper/shadow mode shows no material feature drift.
 
