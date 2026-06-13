@@ -204,19 +204,22 @@ Action done:
 - Added tests in `tests/test_build_30s_from_5s_csv_regularization.py` proving a parent with high quote-state coverage is not marked `no_quote` just because one child second has `no_quote`, while the child union is still preserved.
 - Verified with `python3 -m py_compile build_30s_from_5s_csv.py tests/test_build_30s_from_5s_csv_regularization.py`.
 - Verified with `python3 tests/test_build_30s_from_5s_csv_regularization.py`.
+- Verified on the 48GB/write-capable computer after pulling commit `4163c88`; `python3 tests/test_build_30s_from_5s_csv_regularization.py` ran `5` tests successfully and `grep -n "ffill()\\.bfill()" build_30s_from_5s_csv.py` returned no matches.
 
 ### Step 6 — 10-day pilot build
 
 Action plan:
 
 - Use `source_manifests/pilot_dates_latest10_20260613_153639` as the date/file contract.
+- Before starting any build, verify the external disk mount, write access, selected source-file existence, selected source-file sizes, selected dates, and source labels.
 - Process partitioned by date and source; do not materialize all 10 days across all sources at once.
 - Write outputs only under external `data_lake_v2`; no large local-disk outputs.
 - Start only after pulling the commit that contains both C1 and C2 fixes and rerunning the targeted tests on the 48GB machine.
 
 Action done:
 
-- Not started. Correctly paused after manifest selection and before normalization/training; this becomes the next controlled execution step after the C2 fix is pulled and validated on the 48GB machine.
+- Pre-build source/code validation is ready to run on the 48GB machine because C1 and C2 are now pulled and tested there.
+- The 10-day pilot build itself has not started yet. Correctly paused after manifest selection and before normalization/training.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
