@@ -843,14 +843,19 @@ def _regularize_second_bars(symbol_df, market_day, previous_close=None):
         out[col] = pd.to_numeric(out[col], errors='coerce')
 
     book_cols = ['Bid', 'Ask', 'BidSize', 'AskSize', 'BidLast', 'AskLast', 'BidSizeLast', 'AskSizeLast']
-    out[book_cols] = out[book_cols].ffill().bfill()
+    # Forward-fill only: backfilling would leak future top-of-book state into
+    # pre-first-quote seconds. Size columns can safely remain zero before the
+    # first observed quote; price columns must remain NaN until observed.
+    out[book_cols] = out[book_cols].ffill()
+    size_cols = ['BidSize', 'AskSize', 'BidSizeLast', 'AskSizeLast']
+    out[size_cols] = out[size_cols].fillna(0.0)
 
     mid = ((out['Bid'] + out['Ask']) / 2.0).where(out[['Bid', 'Ask']].notna().all(axis=1))
     mid = mid.fillna(out['Bid']).fillna(out['Ask'])
     base_close = pd.to_numeric(out['Close'], errors='coerce').combine_first(mid)
     if previous_close is not None:
         base_close = base_close.fillna(float(previous_close))
-    base_close = base_close.ffill().bfill()
+    base_close = base_close.ffill()
 
     if base_close.isna().all():
         return None
@@ -859,7 +864,7 @@ def _regularize_second_bars(symbol_df, market_day, previous_close=None):
         if col not in out.columns:
             out[col] = np.nan
         out[col] = pd.to_numeric(out[col], errors='coerce').combine_first(base_close)
-        out[col] = out[col].ffill().bfill()
+        out[col] = out[col].ffill()
 
     out['SpreadBps'] = np.where(
         mid.notna() & mid.ne(0.0),

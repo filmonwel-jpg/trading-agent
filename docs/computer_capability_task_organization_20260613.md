@@ -115,6 +115,103 @@ Good tasks for the 48GB machine:
 
 Use `scripts/audit_databento_dbn_day.py` for step 4. It loads one daily DBN file at a time and writes compact summaries only; it is not a full-window normalizer.
 
+## Action plan / action done ledger
+
+Use this ledger format for every remaining step: write the **Action plan** first, then record **Action done** immediately below it with artifact paths, counts, and stop/go decisions. Do not replace this ledger with prose-only status updates.
+
+### Step 1 — Source inventory and immutable hashes
+
+Action plan:
+
+- Build the source inventory from the five required folders only: existing `EQUS tbbo`, existing `OPRA ohlcv-1s`, new `EQUS mbp-1`, new `OPRA tcbbo`, and primary new `OPRA definition`.
+- Exclude the duplicate `OPRA-20260612-B5D4JV3GV6 2` definition folder unless a later hash check proves it is needed.
+- Require `hash_error_count == 0` before using the source manifest for pilot planning.
+
+Action done:
+
+- Completed on the 48GB/write-capable computer under `source_inventory_hashes_20260613_133951`.
+- `hash_error_count: 0`.
+- `hash_ok_count: 1081`.
+- `hash_skipped_count: 0`.
+- Expected unpaired date remains `20260403`, present only in `equs_mbp1_20260612`.
+- `duplicate_candidates: []` after excluding the duplicate definition folder.
+
+### Step 2 — Representative DBN day decode audits
+
+Action plan:
+
+- Decode one recent day and one older day, one DBN file at a time, before any 10-day or full-window build.
+- Use the compact audit outputs only: row counts, schema columns, timestamp bounds, symbol/instrument coverage, compressed size, decoded dataframe size, and decode time.
+- Stop if any source has `status != ok`.
+
+Action done:
+
+- Recent day completed: `raw_audits/dbn_day_audit_20260521_20260613_142154`.
+- Older day completed: `raw_audits/dbn_day_audit_20250721_20260613_150022`.
+- Combined summary completed: `raw_audits/dbn_audit_summary_recent_old_20260613_150239`.
+- Combined summary results: `error_count=0`, `warning_count=0`, `row_count=10`, `max_row_count=18080585`, `max_dataframe_mib=1836.107`, `max_memory_expansion_ratio=8.488`, `total_dataframe_gib=4.304`, `total_file_gib=0.769`.
+- Decision: safe to plan a 10-day pilot manifest, but not safe to start model training or full-window normalization until the Phase 0 builder blockers are fixed.
+
+### Step 3 — Fully paired 10-day pilot manifest
+
+Action plan:
+
+- Select the latest 10 fully paired trading dates from the hashed source manifest.
+- The selected set must exclude `20260403` automatically because that date is not paired across sources.
+- Require exactly five source files per selected date: `EQUS tbbo`, `OPRA ohlcv-1s`, `EQUS mbp-1`, `OPRA tcbbo`, and primary `OPRA definition`.
+- Record compressed-size and decoded-memory estimates before any build.
+
+Action done:
+
+- Completed on the 48GB/write-capable computer under `source_manifests/pilot_dates_latest10_20260613_153639`.
+- Selected dates: `2026-05-11`, `2026-05-12`, `2026-05-13`, `2026-05-14`, `2026-05-15`, `2026-05-18`, `2026-05-19`, `2026-05-20`, `2026-05-21`, `2026-05-22`.
+- Selected files: `50`.
+- Total compressed size estimate: `4.508 GiB`.
+- Decision: use this manifest for the first 10-day build after Phase 0 code blockers are fixed; do not expand to full-window work yet.
+
+### Step 4 — Phase 0 builder blocker C1: remove future backfill leakage
+
+Action plan:
+
+- Remove confirmed `ffill().bfill()` leakage from `build_30s_from_5s_csv.py` regularization.
+- Price/book state must only forward-fill from already observed values.
+- Explicit previous-close fallback is allowed for price anchoring, but it must not create quote/book state.
+- Add a regression test proving pre-first-quote seconds do not inherit future bid/ask/close values.
+
+Action done:
+
+- Implemented in `build_30s_from_5s_csv.py` by replacing future backfill with forward-fill-only regularization.
+- Added `tests/test_build_30s_from_5s_csv_regularization.py`.
+- Verified with `python3 -m py_compile build_30s_from_5s_csv.py tests/test_build_30s_from_5s_csv_regularization.py`.
+- Verified with `python3 tests/test_build_30s_from_5s_csv_regularization.py`.
+- Verified no `ffill().bfill()` pattern remains in `build_30s_from_5s_csv.py`.
+
+### Step 5 — Phase 0 builder blocker C2: replace parent quality union
+
+Action plan:
+
+- Replace parent `DataQualityFlags` child-union behavior with aggregate coverage/staleness/synthetic quality fields.
+- Preserve old child union only as `ChildDataQualityFlagUnion` for audit.
+- Add parent thresholds for `no_trade`, `no_quote`, `synthetic_ohlc`, `partial_synthetic_ohlc`, and `stale_quote`.
+- Add tests where one child `no_quote` second does not make a valid 5s/30s parent `no_quote`.
+
+Action done:
+
+- Not done yet. This is the next code blocker before the 10-day pilot build should be treated as clean.
+
+### Step 6 — 10-day pilot build
+
+Action plan:
+
+- Use `source_manifests/pilot_dates_latest10_20260613_153639` as the date/file contract.
+- Process partitioned by date and source; do not materialize all 10 days across all sources at once.
+- Write outputs only under external `data_lake_v2`; no large local-disk outputs.
+- Start only after C1 and C2 are fixed and tested.
+
+Action done:
+
+- Not started. Correctly paused after manifest selection and before normalization/training.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 1. Use the fixed builders only; old `20260523` staged datasets are pre-fix artifacts.

@@ -845,6 +845,13 @@ Hard blockers before any retrained bundle is treated as a paper/shadow candidate
 | `C3` | `f_setup_score_proxy` / `f_entry_score_proxy` can be constant bootstrap `1.0` when no walk-forward setup probability exists. | Lifecycle/micro training must fail by default if real out-of-fold setup probabilities are missing or constant, unless an explicit research-only override is used. |
 | `C4` | `train_30s_models.py` walk-forward reporting does not write out-of-fold setup predictions that can be joined into lifecycle/micro training rows. | Build `generate_walk_forward_setup_predictions.py` or equivalent to emit one out-of-fold prediction row per 30s training bar with symbol, timestamp, fold ID, raw score/probability, selected threshold, and threshold margin. Fail if any trainable bar lacks a prediction. |
 
+Execution status as of 2026-06-13:
+
+- `C1` is fixed in branch code: `build_30s_from_5s_csv.py` no longer uses `ffill().bfill()` in second-bar book/price regularization. It now forward-fills only from already observed state, keeps pre-first-quote bid/ask as missing, allows explicit previous-close price fallback without creating quote state, and has regression coverage in `tests/test_build_30s_from_5s_csv_regularization.py`.
+- `C2` remains the next Phase 0 code blocker. Do not treat the 10-day pilot build as clean until parent `DataQualityFlags` child-union behavior is replaced with aggregate coverage/staleness/synthetic quality fields and tests.
+- Source/audit readiness is complete for the first 10-day pilot manifest: `source_inventory_hashes_20260613_133951` has `hash_error_count=0`; `dbn_audit_summary_recent_old_20260613_150239` has `error_count=0` and `warning_count=0`; `pilot_dates_latest10_20260613_153639` selected `2026-05-11` through `2026-05-22` excluding weekend/non-paired dates, with `50` source files and about `4.508 GiB` compressed input.
+- The detailed step ledger is maintained in `docs/computer_capability_task_organization_20260613.md` using the required **Action plan** followed by **Action done** format for every step.
+
 Pre-fix artifact policy:
 
 - Existing staged datasets built through the current quality path, including `compare_runs_20260523_meta_ab` and `databento_training_runs_20260523`, are pre-fix artifacts. They can be used for debugging and regression comparison only, not as clean baselines to beat.
