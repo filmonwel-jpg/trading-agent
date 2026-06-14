@@ -275,7 +275,27 @@ Action done:
   - Every `5s` and `30s` per-symbol/combined file has `parent_child_flag_different_rows == row_count`, proving parent `DataQualityFlags` are no longer blind child-flag unions.
   - Child unions still contain heavy `no_trade|no_quote|synthetic_ohlc` counts, while parent `5s`/`30s` quality flags are expressed as aggregate `partial_synthetic_ohlc`, `synthetic_ohlc`, `stale_quote`, `locked_crossed`, and occasional `none` states.
 - Important interpretation: the fixed-quality baseline is structurally valid and demonstrates the intended parent/child quality split, but many bars still carry synthetic/stale quality flags. Treat it as a reliability baseline for downstream label/setup-prediction infrastructure testing, not as a model-promotion dataset.
-- Added repeatable summarizer `scripts/summarize_databento_pilot_quality.py` with tests in `tests/test_summarize_databento_pilot_quality.py`; run it next on the 48GB computer to create durable quality-sanity artifacts under `raw_audits/`.
+- Added repeatable summarizer `scripts/summarize_databento_pilot_quality.py` with tests in `tests/test_summarize_databento_pilot_quality.py`.
+- Durable quality-sanity artifact completed on the 48GB/write-capable computer under `raw_audits/pilot_quality_sanity_20260613_223642`.
+- `scripts/summarize_databento_pilot_quality.py` returned `PILOT_QUALITY_SANITY=PASS`.
+- Quality sanity summary: `errors=[]`, `warnings=[]`, `row_count=18`, `cadence_counts={1s:6,5s:6,30s:6}`, `min_parent_child_diff_frac_by_cadence={1s:0.0,5s:1.0,30s:1.0}`, `max_parent_child_diff_frac_by_cadence={1s:0.0,5s:1.0,30s:1.0}`, and `parent_child_decoupling_evidence_count=12`.
+- Verification artifacts:
+  - `raw_audits/pilot_quality_sanity_20260613_223642/pilot_quality_sanity.json`
+  - `raw_audits/pilot_quality_sanity_20260613_223642/pilot_quality_sanity_rows.csv`
+- Decision: the fixed-quality 10-day baseline has passed source, decode, prebuild, build, post-build, and quality-sanity gates. Next work should move to C3/C4 walk-forward setup prediction infrastructure, not model training.
+
+### Step 9 — C3/C4 walk-forward setup prediction infrastructure
+
+Action plan:
+
+- Inspect `train_30s_models.py` and current lifecycle/micro training code paths to locate existing setup-score/proxy usage.
+- Build a dedicated generator that emits one out-of-fold setup prediction row per trainable 30s bar with at least: `Symbol`, `Timestamp`, `fold_id`, raw score/probability, selected threshold, and threshold margin.
+- Add a lifecycle/micro training gate that fails by default if setup probabilities are missing, constant, or bootstrap proxy values.
+- Use the fixed-quality 10-day baseline only for infrastructure smoke tests; do not treat results from this short slice as model-performance evidence.
+
+Action done:
+
+- Pending.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
