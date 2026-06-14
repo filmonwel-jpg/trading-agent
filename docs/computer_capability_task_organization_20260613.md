@@ -263,7 +263,19 @@ Action plan:
 
 Action done:
 
-- Pending. The next command should read and summarize `raw_audits/pilot_build_check_20260613_220839/pilot_build_file_summary.csv` on the 48GB/write-capable computer.
+- Completed manually on the 48GB/write-capable computer by reading `raw_audits/pilot_build_check_20260613_220839/pilot_build_file_summary.csv`.
+- The summary contained `18` rows: five per-symbol files plus one combined file for each cadence (`1s`, `5s`, `30s`).
+- Row counts matched the expected fixed-quality baseline build contract:
+  - `1s`: `234000` rows per symbol and `1170000` rows combined.
+  - `5s`: `46800` rows per symbol and `234000` rows combined.
+  - `30s`: `7800` rows per symbol and `39000` rows combined.
+- Date coverage was `10` for every file and symbol coverage was `1` for per-symbol files / `5` for combined files.
+- C2 behavior is confirmed in the built artifacts:
+  - `1s` files have `parent_child_flag_different_rows=0`, which is expected because raw-second parent flags and child-union diagnostics are identical at the leaf level.
+  - Every `5s` and `30s` per-symbol/combined file has `parent_child_flag_different_rows == row_count`, proving parent `DataQualityFlags` are no longer blind child-flag unions.
+  - Child unions still contain heavy `no_trade|no_quote|synthetic_ohlc` counts, while parent `5s`/`30s` quality flags are expressed as aggregate `partial_synthetic_ohlc`, `synthetic_ohlc`, `stale_quote`, `locked_crossed`, and occasional `none` states.
+- Important interpretation: the fixed-quality baseline is structurally valid and demonstrates the intended parent/child quality split, but many bars still carry synthetic/stale quality flags. Treat it as a reliability baseline for downstream label/setup-prediction infrastructure testing, not as a model-promotion dataset.
+- Added repeatable summarizer `scripts/summarize_databento_pilot_quality.py` with tests in `tests/test_summarize_databento_pilot_quality.py`; run it next on the 48GB computer to create durable quality-sanity artifacts under `raw_audits/`.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
