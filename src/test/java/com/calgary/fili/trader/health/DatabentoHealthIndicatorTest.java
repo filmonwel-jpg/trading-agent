@@ -86,7 +86,14 @@ class DatabentoHealthIndicatorTest {
             0.0,
             0L,
             0L,
-            quoteFresh
+            quoteFresh,
+            0L,
+            0L,
+            0L,
+            0L,
+            Double.NaN,
+            "",
+            ""
         );
         return new DatabentoFeedHealth.Snapshot(
             gatewayRunning,

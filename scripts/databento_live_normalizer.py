@@ -16,6 +16,8 @@ from typing import Iterable
 import databento as db
 import databento_dbn as dbn
 
+from databento_event_contract import EVENT_SCHEMA_VERSION, decorate_equity_bar, decorate_option_bar
+
 PRICE_SCALE = 1_000_000_000.0
 OPRA_SYMBOL_RE = re.compile(r'^([A-Z]+)\s+(\d{6,8})([CP])\d+$')
 SNAPSHOT_UNSUPPORTED_EQUITY_DATASETS = {'EQUS.MINI'}
@@ -58,6 +60,7 @@ def _normalize_option_parents(values: str | Iterable[str]) -> list[str]:
 @dataclass
 class EquitySecondBar:
     epoch_sec: int
+    ts_event_ns: int = 0
     open: float = 0.0
     high: float = 0.0
     low: float = 0.0
@@ -73,6 +76,10 @@ class EquitySecondBar:
     at_bid_vol: int = 0
     at_ask_vol: int = 0
     saw_trade: bool = False
+
+    def observe_ts_event(self, ts_event_ns: int) -> None:
+        if ts_event_ns > 0:
+            self.ts_event_ns = max(self.ts_event_ns, int(ts_event_ns))
 
     def update_trade(self, price: float, size: int, side_text: str) -> None:
         if price <= 0.0:
@@ -110,12 +117,13 @@ class EquitySecondBar:
             if fallback > 0.0:
                 self.open = self.high = self.low = self.close = fallback
 
-    def to_payload(self, symbol: str) -> dict:
+    def to_payload(self, symbol: str, *, event_source: str, dataset: str, schema: str, stype_in: str) -> dict:
         wap = (self.px_x_sz / self.volume) if self.volume > 0 else self.close
-        return {
+        payload = {
             'event': 'equity_bar',
             'symbol': symbol,
             'barEpochSec': int(self.epoch_sec),
+            'tsEventNs': int(self.ts_event_ns) if self.ts_event_ns > 0 else int(self.epoch_sec) * 1_000_000_000,
             'open': round(self.open, 6),
             'high': round(self.high, 6),
             'low': round(self.low, 6),
@@ -131,6 +139,14 @@ class EquitySecondBar:
             'atBidVol': int(self.at_bid_vol),
             'atAskVol': int(self.at_ask_vol),
         }
+        return decorate_equity_bar(
+            payload,
+            event_source=event_source,
+            dataset=dataset,
+            schema=schema,
+            stype_in=stype_in,
+            ts_event_ns=payload['tsEventNs'],
+        )
 
 
 class JsonWriter:
@@ -207,7 +223,13 @@ class DatabentoNormalizer:
                     bars.pop(symbol, None)
 
         for symbol, bar in ready:
-            self.writer.emit(bar.to_payload(symbol))
+            self.writer.emit(bar.to_payload(
+                symbol,
+                event_source='live',
+                dataset=self.args.equity_dataset,
+                schema=self.args.equity_schema,
+                stype_in='raw_symbol',
+            ))
         return len(ready)
 
     def run(self) -> int:
@@ -215,6 +237,7 @@ class DatabentoNormalizer:
             self.writer.emit({
                 'event': 'status',
                 'message': 'dry-run',
+                'EventSchemaVersion': EVENT_SCHEMA_VERSION,
                 'symbols': self.args.symbols,
                 'optionParents': self.args.option_parents,
                 'equityDataset': self.args.equity_dataset,
@@ -253,7 +276,7 @@ class DatabentoNormalizer:
 
         heartbeat_seconds = max(1, int(self.args.heartbeat_seconds))
         while not self.stop_event.wait(timeout=heartbeat_seconds):
-            self.writer.emit({'event': 'status', 'message': f'heartbeat symbols={"|".join(self.args.symbols)}'})
+            self.writer.emit({'event': 'status', 'message': f'heartbeat symbols={"|".join(self.args.symbols)}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
 
         for thread in threads:
             thread.join(timeout=5.0)
@@ -284,7 +307,7 @@ class DatabentoNormalizer:
                 stype_in='raw_symbol',
                 snapshot=self._equity_snapshot_enabled(),
             )
-            self.writer.emit({'event': 'status', 'message': f'equity-subscribe dataset={self.args.equity_dataset} schema={self.args.equity_schema}'})
+            self.writer.emit({'event': 'status', 'message': f'equity-subscribe dataset={self.args.equity_dataset} schema={self.args.equity_schema}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
             for record in client:
                 if self.stop_event.is_set():
                     break
@@ -304,7 +327,8 @@ class DatabentoNormalizer:
                 symbol = self.instrument_to_symbol.get(int(getattr(record, 'instrument_id', 0) or 0), '')
                 if not symbol:
                     continue
-                epoch_sec = int(getattr(record, 'ts_event', 0) or 0) // 1_000_000_000
+                ts_event_ns = int(getattr(record, 'ts_event', 0) or 0)
+                epoch_sec = ts_event_ns // 1_000_000_000
                 if epoch_sec <= 0:
                     continue
                 ready_bar = None
@@ -317,6 +341,7 @@ class DatabentoNormalizer:
                     if current is None:
                         current = EquitySecondBar(epoch_sec=epoch_sec)
                         bars[symbol] = current
+                    current.observe_ts_event(ts_event_ns)
                     bid, ask, bid_size, ask_size = self._extract_quote(record)
                     current.update_quote(bid, ask, bid_size, ask_size)
                     trade_price = self._normalize_price(getattr(record, 'price', 0))
@@ -324,7 +349,13 @@ class DatabentoNormalizer:
                     current.update_trade(trade_price, trade_size, str(getattr(record, 'side', '') or ''))
 
                 if ready_bar is not None:
-                    self.writer.emit(ready_bar.to_payload(symbol))
+                    self.writer.emit(ready_bar.to_payload(
+                        symbol,
+                        event_source='live',
+                        dataset=self.args.equity_dataset,
+                        schema=self.args.equity_schema,
+                        stype_in='raw_symbol',
+                    ))
 
                 # Timer-based flushing does not synthesize silent seconds; it only releases already-seen bars
                 # once their second is definitely closed.
@@ -353,6 +384,7 @@ class DatabentoNormalizer:
         start_time = end_time - timedelta(seconds=history_seconds)
         self.writer.emit({
             'event': 'status',
+            'EventSchemaVersion': EVENT_SCHEMA_VERSION,
             'message': (
                 f'startup-history-begin dataset={self.args.equity_dataset} schema={history_schema} '
                 f'start={start_time.isoformat()} end={end_time.isoformat()} symbols={"|".join(self.args.symbols)}'
@@ -363,7 +395,7 @@ class DatabentoNormalizer:
         try:
             client = db.Historical(api_key)
         except Exception as exc:
-            self.writer.emit({'event': 'status', 'message': f'startup-history-skip reason=historical-client-init-failed error={exc}'})
+            self.writer.emit({'event': 'status', 'message': f'startup-history-skip reason=historical-client-init-failed error={exc}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
             return
 
         for symbol in self.args.symbols:
@@ -412,11 +444,11 @@ class DatabentoNormalizer:
                     self.writer.emit(payload)
                     emitted_for_symbol += 1
                 emitted_total += emitted_for_symbol
-                self.writer.emit({'event': 'status', 'message': f'startup-history-symbol symbol={symbol} emittedBars={emitted_for_symbol}'})
+                self.writer.emit({'event': 'status', 'message': f'startup-history-symbol symbol={symbol} emittedBars={emitted_for_symbol}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
             except Exception as exc:
-                self.writer.emit({'event': 'status', 'message': f'startup-history-error symbol={symbol} error={exc}'})
+                self.writer.emit({'event': 'status', 'message': f'startup-history-error symbol={symbol} error={exc}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
 
-        self.writer.emit({'event': 'status', 'message': f'startup-history-complete emittedBars={emitted_total}'})
+        self.writer.emit({'event': 'status', 'message': f'startup-history-complete emittedBars={emitted_total}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
 
     def _adjust_history_window_from_exception(
         self,
@@ -441,6 +473,7 @@ class DatabentoNormalizer:
         adjusted_start = adjusted_end - timedelta(seconds=max(0, history_seconds))
         self.writer.emit({
             'event': 'status',
+            'EventSchemaVersion': EVENT_SCHEMA_VERSION,
             'message': (
                 f'startup-history-clamped symbol={symbol} '
                 f'start={adjusted_start.isoformat()} end={adjusted_end.isoformat()} '
@@ -510,10 +543,11 @@ class DatabentoNormalizer:
             return None
         volume = max(0, int(round(self._safe_float(row.get('volume')))))
         wap = self._safe_float(row.get('vwap'))
-        return {
+        payload = {
             'event': 'equity_bar',
             'symbol': symbol,
             'barEpochSec': epoch_sec,
+            'tsEventNs': epoch_sec * 1_000_000_000,
             'open': round(open_px if open_px > 0.0 else close_px, 6),
             'high': round(high_px if high_px > 0.0 else close_px, 6),
             'low': round(low_px if low_px > 0.0 else close_px, 6),
@@ -530,6 +564,14 @@ class DatabentoNormalizer:
             'atAskVol': 0,
             'historical': True,
         }
+        return decorate_equity_bar(
+            payload,
+            event_source='startup_history',
+            dataset=self.args.equity_dataset,
+            schema=str(getattr(self.args, 'startup_history_schema', DEFAULT_STARTUP_HISTORY_SCHEMA) or DEFAULT_STARTUP_HISTORY_SCHEMA),
+            stype_in='raw_symbol',
+            ts_event_ns=payload['tsEventNs'],
+        )
 
     def _safe_float(self, raw_value: object) -> float:
         try:
@@ -577,7 +619,7 @@ class DatabentoNormalizer:
                 stype_in='parent',
                 snapshot=False,
             )
-            self.writer.emit({'event': 'status', 'message': f'options-subscribe dataset={self.args.options_dataset} schema={self.args.options_schema}'})
+            self.writer.emit({'event': 'status', 'message': f'options-subscribe dataset={self.args.options_dataset} schema={self.args.options_schema}', 'EventSchemaVersion': EVENT_SCHEMA_VERSION})
             for record in client:
                 if self.stop_event.is_set():
                     break
@@ -598,17 +640,19 @@ class DatabentoNormalizer:
                 if not option_meta:
                     continue
                 underlying, right = option_meta
-                epoch_sec = int(getattr(record, 'ts_event', 0) or 0) // 1_000_000_000
+                ts_event_ns = int(getattr(record, 'ts_event', 0) or 0)
+                epoch_sec = ts_event_ns // 1_000_000_000
                 volume = int(getattr(record, 'volume', 0) or 0)
                 if epoch_sec <= 0 or volume <= 0:
                     continue
-                self.writer.emit({
+                self.writer.emit(decorate_option_bar({
                     'event': 'option_bar',
                     'underlying': underlying,
                     'right': right,
                     'barEpochSec': epoch_sec,
+                    'tsEventNs': ts_event_ns,
                     'volume': volume,
-                })
+                }, event_source='live', dataset=self.args.options_dataset, schema=self.args.options_schema, stype_in='parent', ts_event_ns=ts_event_ns))
             else:
                 iterator_exhausted = True
         except Exception as exc:  # pragma: no cover - live path

@@ -178,6 +178,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.databento.restart-delay-ms:2000}") private long databentoRestartDelayMs;
     @Value("${trading.databento.max-silence-ms:120000}") private long databentoMaxSilenceMs;
     @Value("${trading.databento.quote-stale-threshold-ms:5000}") private long databentoQuoteStaleThresholdMs;
+    @Value("${trading.databento.sanity.expected-event-schema-version:databento_ndjson_v2}") private String databentoExpectedEventSchemaVersion;
+    @Value("${trading.databento.sanity.min-quality-score:0.50}") private double databentoMinQualityScore;
+    @Value("${trading.databento.sanity.block-entries-on-invalid:true}") private boolean databentoBlockEntriesOnInvalidSanity;
     @Value("${trading.databento.allow-stale-closing-market-order:true}") private boolean databentoAllowStaleClosingMarketOrder;
     @Value("${trading.databento.model-routing-csv:runtime/databento/model-routing.csv}") private String databentoModelRoutingCsv;
     @Value("${trading.databento.symbol-plan-csv:training_data/databento_30s/symbol_model_plan.csv}") private String databentoSymbolPlanCsv;
@@ -1833,6 +1836,11 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
         ZonedDateTime barTs = Instant.ofEpochSecond(event.barEpochSec).atZone(ZoneOffset.UTC).withZoneSameInstant(MARKET_ZONE);
         applyMarketSchedule(barTs);
+        boolean entryQualityOk = databentoEventAllowsNewEntries(event);
+        if (!entryQualityOk && shopStrategy != null) {
+            databentoFeedHealth.recordRejectedEquityBar(event, System.currentTimeMillis());
+            shopStrategy.setAllowNewEntries(false);
+        }
         flowDataDebug("DATABENTO.BAR", "symbol=" + symbol + " tsEt=" + barTs + " ohlc=" + event.open + "/" + event.high + "/" + event.low + "/" + event.close + " vol=" + event.volume + " bid=" + currentBidPrice + " ask=" + currentAskPrice);
 
         if (shopStrategy != null) {
@@ -1848,6 +1856,27 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             shopStrategy.onTickForExitsOnly(event.close);
             shopStrategy.onSourceBar(event.barEpochSec, event.open, event.high, event.low, event.close, event.volume, event.wap > 0.0 ? event.wap : event.close);
         }
+    }
+
+    private boolean databentoEventAllowsNewEntries(DatabentoEvent event) {
+        if (!databentoBlockEntriesOnInvalidSanity || event == null || !event.isEquityBar()) {
+            return true;
+        }
+        double minQualityScore = Double.isFinite(databentoMinQualityScore)
+            ? Math.max(0.0, Math.min(1.0, databentoMinQualityScore))
+            : 0.50;
+        boolean pass = !event.blocksNewEntries(minQualityScore, databentoExpectedEventSchemaVersion);
+        flowConditionDebug(
+            "DATABENTO.SANITY",
+            "ENTRY_SAFE_EVENT_CONTRACT",
+            pass,
+            "schema=" + event.eventSchemaVersion
+                + " expected=" + databentoExpectedEventSchemaVersion
+                + " qualityScore=" + event.effectiveQualityScore()
+                + " minQualityScore=" + minQualityScore
+                + " flags=" + event.dataQualityFlags
+        );
+        return pass;
     }
 
     private void handleDatabentoOptionBar(DatabentoEvent event) {

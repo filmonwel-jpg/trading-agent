@@ -6,6 +6,7 @@ Decisions recorded: 2026-06-02
 Implementation updated: 2026-06-03
 Exit calibration updated: 2026-06-10
 Micro-entry outcome updated: 2026-06-10
+Partial weekly grid outcome updated: 2026-06-11
 
 Status: living design/review note after inspecting the current Databento/IBKR training, runtime, launch, and backtest code paths. See the 2026-06-03 implementation ledger below for what has now been implemented from this document, including the completed bootstrap lifecycle/micro model training and export snapshot. The exported bundle is a schema-valid bootstrap artifact, not yet a live-promotable artifact, because the completed run still used bootstrap setup/entry score proxies.
 
@@ -615,6 +616,156 @@ The exit-calibration work intentionally held the already-selected micro-entry th
 - These thresholds are execution-confirmation overlays for the 5-second `long_micro_entry_5s.onnx` and `short_micro_entry_5s.onnx` routes; they do not replace the 30-second setup model.
 - During exit-threshold calibration, micro-entry thresholds should remain fixed so the experiment isolates lifecycle-exit and micro-exit-guard behavior.
 - Future documentation updates should add artifact paths, date windows, baseline-vs-overlay metrics, and failure counts before any of these thresholds are described as promotion-ready.
+
+## 0C. Partial weekly TSLA/TQQQ broad micro-threshold grid — 2026-06-11
+
+This section records the broader TSLA/TQQQ weekly micro-entry threshold grid that was stopped early after enough jobs had completed to evaluate the failure pattern. It materially changes the promotion interpretation of the 2026-06-10 micro-entry survivors: the recent-window survivor thresholds are now evidence of a narrow recent-regime fit, not a production-ready validation result.
+
+Source run on the external Databento disk:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/trading-agent-tsla-tqqq-weekly-micro-threshold-grid-10-parallel-20260611_121657
+```
+
+Local analysis artifacts generated from the connected external disk:
+
+```text
+/Users/FXG06FA/trading-agent-main/runtime/partial_weekly_grid_analysis_20260611_121657
+/Users/FXG06FA/trading-agent-main/runtime/analyze_partial_weekly_grid_outputs.py
+/Users/FXG06FA/trading-agent-main/runtime/extract_partial_weekly_grid_highlights.py
+```
+
+The analysis intentionally used the small `out/` CSV artifacts instead of scanning the run logs. The external run contained about `39G` of logs but only about `9.9M` of output CSVs, so CSV-only parsing is the practical path for this result set.
+
+### Grid shape and coverage
+
+Grid dimensions:
+
+```text
+Symbols:          TSLA, TQQQ
+Long thresholds:  0.11 0.13 0.15 0.17 0.19 0.21 0.23
+Short thresholds: 0.13 0.15 0.17 0.19 0.21
+Per symbol/week:  7 x 5 = 35 combinations
+Full planned grid: 19 weeks x 2 symbols x 35 = 1330 jobs
+```
+
+Completed partial coverage:
+
+| Metric | Value |
+|---|---:|
+| Output combo directories found | `875` |
+| Completed lifecycle summaries analyzed | `873` |
+| Missing/failed output directories skipped | `2` |
+| Full planned jobs | `1330` |
+
+Coverage was complete for both symbols from `2026-01-05` through `2026-03-20`. The run then included near-complete `2026-03-23..2026-03-27` coverage (`TSLA 34/35`, `TQQQ 35/35`) and partial `2026-03-30..2026-04-03` coverage (`TSLA 34/35`). The remaining April/May symbol-week windows were not needed for the immediate conclusion because the completed partial grid was already broadly negative.
+
+The run originally stopped on a transient Java class-loading failure:
+
+```text
+java.lang.NoClassDefFoundError: com/calgary/fili/trader/bot/strategy/StrategyEvent$SetYesterdayCloseEvent
+```
+
+This was diagnosed as an operational/classpath issue, likely caused by rebuilding while the grid was running against `target/classes`, not a strategy result. Later the run was manually stopped after a larger partial set had completed.
+
+### Partial-grid outcome
+
+Overall completed-run result:
+
+| Symbol | Completed runs | Closed trades | PnL | Win rate | Profit factor | Avg PnL/run | Long/short trades | Guard exits | Hard-stop exits |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TQQQ` | `420` | `1353` | `-67780.00` | `34.00%` | `0.36` | `-161.38` | `282/1071` | `432` | `893` |
+| `TSLA` | `453` | `692` | `-43165.98` | `42.92%` | `0.59` | `-95.29` | `157/535` | `291` | `393` |
+| **ALL** | **873** | **2045** | **-110945.98** | **37.02%** | **0.47** | **-127.09** | **439/1606** | **723** | **1286** |
+
+Exit-reason attribution across completed runs:
+
+| Scope | Exit reason | Count | PnL |
+|---|---|---:|---:|
+| `ALL` | `guard` | `723` | `+95978.58` |
+| `ALL` | `lifecycle` | `34` | `+3412.28` |
+| `ALL` | `eod` | `2` | `-254.51` |
+| `ALL` | `hard_stop` | `1286` | `-210082.33` |
+
+Side attribution confirms the repeated failure mode:
+
+| Symbol | Side | Trades | PnL | Win rate | Profit factor | Guard exits | Hard-stop exits |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `TQQQ` | long | `282` | `-230.00` | `58.87%` | `0.98` | `166` | `116` |
+| `TQQQ` | short | `1071` | `-67550.00` | `27.45%` | `0.27` | `266` | `777` |
+| `TSLA` | long | `157` | `-3840.98` | `49.04%` | `0.82` | `77` | `79` |
+| `TSLA` | short | `535` | `-39325.00` | `41.12%` | `0.53` | `214` | `314` |
+
+Interpretation:
+
+- The guard and lifecycle exits are still profitable in aggregate.
+- The hard-stop loss bucket overwhelms all profitable exits.
+- The short side remains the dominant loss source, especially `TQQQ` shorts.
+- `TQQQ` long-side performance is close to flat in this partial grid (`-230`, `PF=0.98`), but it is still not positive enough to promote.
+- This confirms that the current failure is not just a one-off threshold choice; it is a side/risk-regime problem.
+
+### Threshold ranking from the partial grid
+
+Even the best completed symbol+threshold combinations were negative:
+
+| Rank | Symbol | Long threshold | Short threshold | Runs | Trades | PnL | Win rate | Profit factor | Positive symbol-week rate | Guard exits | Hard-stop exits |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | `TSLA` | `0.23` | `0.21` | `13` | `9` | `-442.48` | `44.44%` | `0.66` | `42.86%` | `4` | `5` |
+| 2 | `TSLA` | `0.15` | `0.21` | `13` | `9` | `-459.75` | `44.44%` | `0.65` | `42.86%` | `4` | `5` |
+| 3 | `TSLA` | `0.17` | `0.21` | `13` | `9` | `-459.75` | `44.44%` | `0.65` | `42.86%` | `4` | `5` |
+| 4 | `TSLA` | `0.21` | `0.21` | `13` | `9` | `-459.75` | `44.44%` | `0.65` | `42.86%` | `4` | `5` |
+| 5 | `TSLA` | `0.13` | `0.21` | `13` | `11` | `-470.41` | `45.45%` | `0.70` | `37.50%` | `5` | `6` |
+
+The best `TQQQ` row was also negative:
+
+```text
+TQQQ L=0.23 S=0.21 runs=12 trades=38 pnl=-1560.00 win=39.47% pf=0.42 hard_stop=23
+```
+
+The current documented `TQQQ` threshold pair remained weak in this broader partial window:
+
+```text
+TQQQ L=0.11 S=0.13 runs=12 trades=41 pnl=-2255.00 win=31.71% pf=0.32 hard_stop=28
+```
+
+The current documented `TSLA` short threshold (`0.10`) was not included in this higher-short-threshold grid, but the results are still cautionary: even much higher `TSLA` short thresholds such as `0.21` did not make the symbol profitable over the covered weeks.
+
+Best combined TSLA+TQQQ threshold pair was also negative:
+
+```text
+ALL L=0.23 S=0.21 runs=25 trades=47 pnl=-2002.48 win=40.43% pf=0.50 hard_stop=28
+```
+
+### Two-day near-current sanity check
+
+The short `2026-06-10..2026-06-11` safe-end run using the documented new thresholds also completed successfully and was negative:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/backtests/tsla_tqqq_yesterday_today_new_threshold_2026-06-10_to_2026-06-11_safe_end_20260611_140051
+```
+
+Result:
+
+| Symbol | Trades | PnL | Win rate | Long/short trades | Guard exits | Hard-stop exits |
+|---|---:|---:|---:|---:|---:|---:|
+| `TQQQ` | `2` | `-330.00` | `0.00%` | `0/2` | `0` | `2` |
+| `TSLA` | `1` | `-288.30` | `0.00%` | `0/1` | `0` | `1` |
+| **ALL** | **3** | **-618.30** | **0.00%** | **0/3** | **0** | **3** |
+
+This is a small sample and should not be over-weighted alone, but it matches the same failure signature as the partial weekly grid: short entries that exit through hard stops.
+
+### Decision update after 2026-06-11 broader validation
+
+The 2026-06-10 micro-entry survivors should now be treated as **research candidates only**, not live-promotable thresholds.
+
+Updated operational decision:
+
+1. **Do not promote the current TSLA/TQQQ micro-entry thresholds to live size.** They were profitable in recent calibration windows but failed across broader completed weekly coverage.
+2. **Do not continue threshold-only tuning as the main fix.** Higher short thresholds reduced trade count and loss magnitude but did not produce a positive robust pair.
+3. **Treat short-side trading as the primary blocker.** Before any promotion, test `long-only`, `short-disabled`, and side-specific hard-stop cooldown/budget variants.
+4. **Keep deterministic hard-stop attribution as a primary gate.** A candidate threshold pair should be rejected if hard-stop losses exceed guard+lifecycle profits across validation windows.
+5. **Use the partial grid as a stop signal, not as final model selection.** Since the best completed combinations are still negative, there is no need to finish the remaining April/May jobs merely to select a threshold from this grid.
+6. **Next research experiment should be side/risk aware:** margin-over-threshold filters, one-hard-stop-per-side/day lockout, symbol-side disablement, and a live-shaped retraining distribution are higher priority than another flat threshold sweep.
 
 ## Project Understanding Snapshot
 

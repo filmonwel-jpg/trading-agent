@@ -123,4 +123,31 @@ class DatabentoFeedHealthTest {
         assertEquals(137, snapshot.lastGatewayExitCode());
         assertTrue(snapshot.restartRecommended());
     }
+
+    @Test
+    void tracksSanityContractQualityCounters() {
+        DatabentoFeedHealth health = new DatabentoFeedHealth();
+        long nowMs = 500_000L;
+        health.markGatewayStarted(List.of("TSLA"), nowMs);
+
+        DatabentoEvent event = new DatabentoEvent();
+        event.event = "equity_bar";
+        event.symbol = "TSLA";
+        event.bid = 100.0;
+        event.ask = 100.1;
+        event.eventSchemaVersion = "databento_ndjson_v2";
+        event.dataQualityFlags = "no_quote";
+        event.qualityScore = 0.25;
+
+        health.recordEquityBar(event, nowMs + 1_000L);
+        health.recordRejectedEquityBar(event, nowMs + 1_000L);
+
+        DatabentoFeedHealth.Snapshot snapshot = health.snapshot("TSLA", nowMs + 2_000L, 5_000L, 45_000L, true);
+        assertEquals(1L, snapshot.primarySymbolHealth().equityBarCount());
+        assertEquals(0L, snapshot.primarySymbolHealth().missingSanityContractCount());
+        assertEquals(1L, snapshot.primarySymbolHealth().lowQualityBarCount());
+        assertEquals(1L, snapshot.primarySymbolHealth().entryRejectedBarCount());
+        assertEquals(0.25, snapshot.primarySymbolHealth().lastQualityScore(), 0.0001);
+        assertEquals("no_quote", snapshot.primarySymbolHealth().lastDataQualityFlags());
+    }
 }

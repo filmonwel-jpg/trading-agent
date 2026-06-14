@@ -12,6 +12,8 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from databento_event_contract import EVENT_SCHEMA_VERSION, decorate_equity_bar, decorate_option_bar
+
 db: Any | None = None
 
 MARKET_TZ = "America/New_York"
@@ -72,6 +74,10 @@ def rth_filter(local_ts: pd.Series) -> pd.Series:
     return (minute >= 9 * 60 + 30) & (minute < 16 * 60)
 
 
+def timestamp_ns_series(local_ts: pd.Series) -> pd.Series:
+    return local_ts.map(lambda ts: int(ts.tz_convert("UTC").value) if pd.notna(ts) else 0)
+
+
 def safe_float(value: object, fallback: float = 0.0) -> float:
     try:
         parsed = float(value)
@@ -116,7 +122,15 @@ def frame_from_store(store: Any) -> pd.DataFrame:
     return frame
 
 
-def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple[int, int, str, dict]]:
+def equity_events_from_frame(
+    raw: pd.DataFrame,
+    symbols: set[str],
+    *,
+    event_source: str = "historical_dbn",
+    dataset: str = "",
+    schema: str = "tbbo",
+    stype_in: str = "raw_symbol",
+) -> list[tuple[int, int, str, dict]]:
     if raw.empty:
         return []
     if "symbol" not in raw.columns:
@@ -131,6 +145,7 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
     if raw.empty:
         return []
     raw["bar_epoch"] = (local_ts.astype("int64") // 1_000_000_000).astype("int64")
+    raw["ts_event_ns"] = timestamp_ns_series(local_ts)
     if "price" not in raw.columns and {"open", "high", "low", "close"}.issubset(raw.columns):
         for col in ["open", "high", "low", "close", "volume", "vwap", "bid", "ask", "bidSize", "askSize"]:
             if col not in raw.columns:
@@ -146,6 +161,7 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
                 "event": "equity_bar",
                 "symbol": row.symbol,
                 "barEpochSec": int(row.bar_epoch),
+                "tsEventNs": int(getattr(row, "ts_event_ns", 0) or int(row.bar_epoch) * 1_000_000_000),
                 "open": round(safe_float(getattr(row, "open", close), close), 6),
                 "high": round(safe_float(getattr(row, "high", close), close), 6),
                 "low": round(safe_float(getattr(row, "low", close), close), 6),
@@ -162,24 +178,34 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
                 "atAskVol": 0,
                 "historical": True,
             }
+            payload = decorate_equity_bar(
+                payload,
+                event_source=event_source,
+                dataset=dataset,
+                schema=schema,
+                stype_in=stype_in,
+                ts_event_ns=payload["tsEventNs"],
+            )
             events.append((int(row.bar_epoch), 1, row.symbol, payload))
         return events
     for col in ["price", "size", "bid_px_00", "ask_px_00", "bid_sz_00", "ask_sz_00"]:
         if col not in raw.columns:
             raw[col] = 0.0
         raw[col] = pd.to_numeric(raw[col], errors="coerce").fillna(0.0)
-    raw["px_x_sz"] = raw["price"] * raw["size"]
+    raw["trade_size"] = raw["size"].where(raw["price"].gt(0.0) & raw["size"].gt(0.0), 0.0)
+    raw["trade_present"] = raw["trade_size"].gt(0.0).astype(int)
+    raw["px_x_sz"] = raw["price"] * raw["trade_size"]
     side = raw.get("side", pd.Series("", index=raw.index)).astype(str).str.upper()
-    raw["at_bid_vol"] = raw["size"].where(side.eq("B"), 0.0)
-    raw["at_ask_vol"] = raw["size"].where(side.isin(["A", "S"]), 0.0)
+    raw["at_bid_vol"] = raw["trade_size"].where(side.eq("B"), 0.0)
+    raw["at_ask_vol"] = raw["trade_size"].where(side.isin(["A", "S"]), 0.0)
     grouped = raw.groupby(["symbol", "bar_epoch"], sort=True)
     bars = grouped.agg(
         open=("price", "first"),
         high=("price", "max"),
         low=("price", "min"),
         close=("price", "last"),
-        volume=("size", "sum"),
-        tradeCount=("size", "size"),
+        volume=("trade_size", "sum"),
+        tradeCount=("trade_present", "sum"),
         px_x_sz=("px_x_sz", "sum"),
         bid=("bid_px_00", "last"),
         ask=("ask_px_00", "last"),
@@ -188,6 +214,7 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
         quoteCount=("bid_px_00", lambda s: int((pd.to_numeric(s, errors="coerce") > 0).sum())),
         atBidVol=("at_bid_vol", "sum"),
         atAskVol=("at_ask_vol", "sum"),
+        tsEventNs=("ts_event_ns", "max"),
     ).reset_index()
     events: list[tuple[int, int, str, dict]] = []
     for row in bars.itertuples(index=False):
@@ -204,6 +231,7 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
             "event": "equity_bar",
             "symbol": row.symbol,
             "barEpochSec": int(row.bar_epoch),
+            "tsEventNs": int(row.tsEventNs or int(row.bar_epoch) * 1_000_000_000),
             "open": round(float(row.open or close), 6),
             "high": round(float(row.high or close), 6),
             "low": round(float(row.low or close), 6),
@@ -220,13 +248,28 @@ def equity_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
             "atAskVol": int(round(float(row.atAskVol or 0.0))),
             "historical": True,
         }
+        payload = decorate_equity_bar(
+            payload,
+            event_source=event_source,
+            dataset=dataset,
+            schema=schema,
+            stype_in=stype_in,
+            ts_event_ns=payload["tsEventNs"],
+        )
         events.append((int(row.bar_epoch), 1, row.symbol, payload))
     return events
 
 
-def load_equity_events(path: Path, symbols: set[str]) -> list[tuple[int, int, str, dict]]:
+def load_equity_events(path: Path, symbols: set[str], *, dataset: str = "local_dbn", schema: str = "tbbo", stype_in: str = "raw_symbol") -> list[tuple[int, int, str, dict]]:
     databento = require_databento()
-    return equity_events_from_frame(frame_from_store(databento.DBNStore.from_file(path)), symbols)
+    return equity_events_from_frame(
+        frame_from_store(databento.DBNStore.from_file(path)),
+        symbols,
+        event_source="historical_dbn",
+        dataset=dataset,
+        schema=schema,
+        stype_in=stype_in,
+    )
 
 
 def extract_option_meta(symbol: str) -> tuple[str, str] | None:
@@ -236,7 +279,15 @@ def extract_option_meta(symbol: str) -> tuple[str, str] | None:
     return match.group(1), match.group(3)
 
 
-def option_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple[int, int, str, dict]]:
+def option_events_from_frame(
+    raw: pd.DataFrame,
+    symbols: set[str],
+    *,
+    event_source: str = "historical_dbn",
+    dataset: str = "",
+    schema: str = "ohlcv-1s",
+    stype_in: str = "parent",
+) -> list[tuple[int, int, str, dict]]:
     if raw.empty:
         return []
     if "symbol" not in raw.columns:
@@ -247,6 +298,7 @@ def option_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
     if raw.empty:
         return []
     raw["bar_epoch"] = (local_ts.astype("int64") // 1_000_000_000).astype("int64")
+    raw["ts_event_ns"] = timestamp_ns_series(local_ts)
     raw["volume"] = pd.to_numeric(raw.get("volume", 0), errors="coerce").fillna(0.0)
     raw["raw_symbol"] = raw["symbol"].astype(str).str.upper()
     meta = raw["raw_symbol"].map(extract_option_meta)
@@ -255,7 +307,10 @@ def option_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
     raw = raw[raw["underlying"].isin(symbols) & raw["right"].isin(["C", "P"]) & raw["volume"].gt(0)].copy()
     if raw.empty:
         return []
-    grouped = raw.groupby(["underlying", "right", "bar_epoch"], sort=True)["volume"].sum().reset_index()
+    grouped = raw.groupby(["underlying", "right", "bar_epoch"], sort=True).agg(
+        volume=("volume", "sum"),
+        tsEventNs=("ts_event_ns", "max"),
+    ).reset_index()
     events: list[tuple[int, int, str, dict]] = []
     for row in grouped.itertuples(index=False):
         payload = {
@@ -263,16 +318,32 @@ def option_events_from_frame(raw: pd.DataFrame, symbols: set[str]) -> list[tuple
             "underlying": row.underlying,
             "right": row.right,
             "barEpochSec": int(row.bar_epoch),
+            "tsEventNs": int(row.tsEventNs or int(row.bar_epoch) * 1_000_000_000),
             "volume": int(round(float(row.volume))),
             "historical": True,
         }
+        payload = decorate_option_bar(
+            payload,
+            event_source=event_source,
+            dataset=dataset,
+            schema=schema,
+            stype_in=stype_in,
+            ts_event_ns=payload["tsEventNs"],
+        )
         events.append((int(row.bar_epoch), 0, row.underlying, payload))
     return events
 
 
-def load_option_events(path: Path, symbols: set[str]) -> list[tuple[int, int, str, dict]]:
+def load_option_events(path: Path, symbols: set[str], *, dataset: str = "local_dbn", schema: str = "ohlcv-1s", stype_in: str = "parent") -> list[tuple[int, int, str, dict]]:
     databento = require_databento()
-    return option_events_from_frame(frame_from_store(databento.DBNStore.from_file(path)), symbols)
+    return option_events_from_frame(
+        frame_from_store(databento.DBNStore.from_file(path)),
+        symbols,
+        event_source="historical_dbn",
+        dataset=dataset,
+        schema=schema,
+        stype_in=stype_in,
+    )
 
 
 def api_option_symbol(symbol: str, stype_in: str) -> str:
@@ -333,6 +404,7 @@ def emit_previous_close_context(client: Any, args: argparse.Namespace, symbol: s
     if previous_close and previous_close > 0:
         emit({
             "event": "previous_close",
+            "EventSchemaVersion": EVENT_SCHEMA_VERSION,
             "symbol": symbol,
             "sessionDate": pd.Timestamp(start).tz_convert(MARKET_TZ).date().isoformat(),
             "previousClose": previous_close,
@@ -352,6 +424,7 @@ def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
     emit({
         "event": "status",
         "message": "historical-api-stream-start",
+        "EventSchemaVersion": EVENT_SCHEMA_VERSION,
         "symbols": sorted(symbols),
         "start": start.isoformat(),
         "end": end.isoformat(),
@@ -378,7 +451,14 @@ def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
             start=start,
             end=end,
         )
-        events.extend(equity_events_from_frame(frame_from_store(equity), {symbol}))
+        events.extend(equity_events_from_frame(
+            frame_from_store(equity),
+            {symbol},
+            event_source="historical_api",
+            dataset=args.equity_dataset,
+            schema=args.equity_schema,
+            stype_in=args.equity_stype_in,
+        ))
 
         try:
             option_symbol = api_option_symbol(symbol, args.options_stype_in)
@@ -390,7 +470,14 @@ def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
                 start=start,
                 end=end,
             )
-            events.extend(option_events_from_frame(frame_from_store(options), {symbol}))
+            events.extend(option_events_from_frame(
+                frame_from_store(options),
+                {symbol},
+                event_source="historical_api",
+                dataset=args.options_dataset,
+                schema=args.options_schema,
+                stype_in=args.options_stype_in,
+            ))
         except Exception as exc:
             emit({"event": "status", "message": f"historical-api-options-skip symbol={symbol} error={exc}"})
 
@@ -432,7 +519,7 @@ def main() -> int:
     if args.source == "api":
         stream_api_events(args, symbols)
         return 0
-    emit({"event": "status", "message": "historical-stream-start", "symbols": sorted(symbols), "equityDir": args.equity_dir, "optionsDir": args.options_dir})
+    emit({"event": "status", "message": "historical-stream-start", "EventSchemaVersion": EVENT_SCHEMA_VERSION, "symbols": sorted(symbols), "equityDir": args.equity_dir, "optionsDir": args.options_dir})
     if args.dry_run:
         return 0
     eq_files = list_daily_files(args.equity_dir, DBEQ_FILE_RE)
@@ -445,7 +532,7 @@ def main() -> int:
     total = 0
     for day in days:
         emit({"event": "status", "message": f"historical-day-begin day={day}"})
-        events = load_option_events(op_files[day], symbols) + load_equity_events(eq_files[day], symbols)
+        events = load_option_events(op_files[day], symbols, dataset=args.options_dataset, schema=args.options_schema, stype_in=args.options_stype_in) + load_equity_events(eq_files[day], symbols, dataset=args.equity_dataset, schema=args.equity_schema, stype_in=args.equity_stype_in)
         events.sort(key=lambda x: (x[0], x[1], x[2]))
         for _, _, _, payload in events:
             emit(payload)

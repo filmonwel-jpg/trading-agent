@@ -50,7 +50,14 @@ public class DatabentoFeedHealth {
         double lastAsk,
         long lastBidSize,
         long lastAskSize,
-        boolean quoteFresh
+        boolean quoteFresh,
+        long equityBarCount,
+        long missingSanityContractCount,
+        long lowQualityBarCount,
+        long entryRejectedBarCount,
+        double lastQualityScore,
+        String lastDataQualityFlags,
+        String lastEventSchemaVersion
     ) {}
 
     public record Snapshot(
@@ -132,7 +139,17 @@ public class DatabentoFeedHealth {
         }
         lastAnyEventAtMs.set(nowMs);
         SymbolState state = symbolState(event.symbol);
+        state.equityBarCount.incrementAndGet();
         state.lastBarAtMs.set(nowMs);
+        state.lastQualityScore = event.effectiveQualityScore();
+        state.lastDataQualityFlags = event.dataQualityFlags == null ? "" : event.dataQualityFlags;
+        state.lastEventSchemaVersion = event.eventSchemaVersion == null ? "" : event.eventSchemaVersion;
+        if (!event.hasSanityContract()) {
+            state.missingSanityContractCount.incrementAndGet();
+        }
+        if (event.hasEntryBlockingQualityFlag() || event.effectiveQualityScore() < 0.50) {
+            state.lowQualityBarCount.incrementAndGet();
+        }
         if (event.bid > 0.0 || event.ask > 0.0) {
             state.lastQuoteAtMs.set(nowMs);
         }
@@ -148,6 +165,15 @@ public class DatabentoFeedHealth {
         if (event.askSize > 0L) {
             state.lastAskSize = event.askSize;
         }
+    }
+
+    public void recordRejectedEquityBar(DatabentoEvent event, long nowMs) {
+        if (event == null) {
+            return;
+        }
+        SymbolState state = symbolState(event.symbol);
+        state.entryRejectedBarCount.incrementAndGet();
+        state.lastRejectedAtMs.set(nowMs);
     }
 
     public void recordOptionBar(DatabentoEvent event, long nowMs) {
@@ -283,6 +309,13 @@ public class DatabentoFeedHealth {
         payload.put("lastBidSize", snapshot.lastBidSize());
         payload.put("lastAskSize", snapshot.lastAskSize());
         payload.put("quoteFresh", snapshot.quoteFresh());
+        payload.put("equityBarCount", snapshot.equityBarCount());
+        payload.put("missingSanityContractCount", snapshot.missingSanityContractCount());
+        payload.put("lowQualityBarCount", snapshot.lowQualityBarCount());
+        payload.put("entryRejectedBarCount", snapshot.entryRejectedBarCount());
+        payload.put("lastQualityScore", snapshot.lastQualityScore());
+        payload.put("lastDataQualityFlags", snapshot.lastDataQualityFlags());
+        payload.put("lastEventSchemaVersion", snapshot.lastEventSchemaVersion());
         return payload;
     }
 
@@ -347,10 +380,18 @@ public class DatabentoFeedHealth {
         private final AtomicLong lastQuoteAtMs = new AtomicLong(0L);
         private final AtomicLong lastBarAtMs = new AtomicLong(0L);
         private final AtomicLong lastOptionAtMs = new AtomicLong(0L);
+        private final AtomicLong equityBarCount = new AtomicLong(0L);
+        private final AtomicLong missingSanityContractCount = new AtomicLong(0L);
+        private final AtomicLong lowQualityBarCount = new AtomicLong(0L);
+        private final AtomicLong entryRejectedBarCount = new AtomicLong(0L);
+        private final AtomicLong lastRejectedAtMs = new AtomicLong(0L);
         private volatile double lastBid = 0.0;
         private volatile double lastAsk = 0.0;
         private volatile long lastBidSize = 0L;
         private volatile long lastAskSize = 0L;
+        private volatile double lastQualityScore = Double.NaN;
+        private volatile String lastDataQualityFlags = "";
+        private volatile String lastEventSchemaVersion = "";
 
         private SymbolSnapshot snapshot(String symbol, long nowMs, long quoteStaleThresholdMs) {
             long quoteAt = lastQuoteAtMs.get();
@@ -372,7 +413,14 @@ public class DatabentoFeedHealth {
                 lastAsk,
                 lastBidSize,
                 lastAskSize,
-                quoteAge >= 0L && quoteAge <= quoteStaleThresholdMs && lastAsk > 0.0
+                quoteAge >= 0L && quoteAge <= quoteStaleThresholdMs && lastAsk > 0.0,
+                equityBarCount.get(),
+                missingSanityContractCount.get(),
+                lowQualityBarCount.get(),
+                entryRejectedBarCount.get(),
+                lastQualityScore,
+                lastDataQualityFlags,
+                lastEventSchemaVersion
             );
         }
 

@@ -428,7 +428,7 @@ def maybe_query_trade_db(target_day: date, symbols: set[str]) -> dict[str, int]:
 
     try:
         conn = psycopg.connect(
-            "postgresql://trading_agent_databento:LocalDb_2026_trade@127.0.0.1:5432/trading_agent",
+            os.getenv("TRADING_DB_URL", "postgresql://trading_agent_databento@127.0.0.1:5432/trading_agent"),
             connect_timeout=3,
         )
     except Exception:

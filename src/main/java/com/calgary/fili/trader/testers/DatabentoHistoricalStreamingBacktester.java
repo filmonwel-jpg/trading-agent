@@ -4,6 +4,7 @@ import com.calgary.fili.trader.bot.strategy.PingPongStrategy;
 import com.calgary.fili.trader.bot.trader.DatabentoEvent;
 import com.calgary.fili.trader.bot.trader.DatabentoLiveGateway;
 import com.calgary.fili.trader.bot.trader.IBKRTrader;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -39,11 +40,13 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     private static final LocalTime ENTRY_CUTOFF = LocalTime.of(15, 50, 0);
     private static final LocalTime EOD_FLATTEN_TIME = LocalTime.of(15, 59, 50);
     private static final double SIMULATED_SLIPPAGE_PER_SHARE = 0.03;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AtomicInteger simulatedOrderId = new AtomicInteger(1);
     private final AtomicInteger streamExitCode = new AtomicInteger(Integer.MIN_VALUE);
     private final CountDownLatch streamDone = new CountDownLatch(1);
     private final BacktestLifecycleStats lifecycleStats = new BacktestLifecycleStats();
+    private final StreamSanityStats streamSanityStats = new StreamSanityStats();
     private PingPongStrategy strategy;
     private DatabentoLiveGateway gateway;
     private String backtestSymbol = "TSLA";
@@ -51,6 +54,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     private String tradeLogFileName;
     private String orderHistoryFileName;
     private String tradeLifecycleSummaryFileName;
+    private String streamSanityReportFileName;
     private long processedEquityBars = 0L;
     private long processedOptionBars = 0L;
     private long skippedEvents = 0L;
@@ -220,6 +224,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
                 return;
             }
             if (event.isStatus()) {
+                streamSanityStats.recordStatus(event);
                 System.out.println(">>> [FLOW][INFO][DATABENTO] " + (event.message == null ? "status" : event.message));
                 return;
             }
@@ -260,6 +265,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         if (!backtestSymbol.equals(underlying) || event.volume <= 0L) {
             return;
         }
+        streamSanityStats.recordOption(event);
         if ("P".equalsIgnoreCase(event.right)) {
             latestPutVolume += event.volume;
         } else if ("C".equalsIgnoreCase(event.right)) {
@@ -277,8 +283,12 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         if (!backtestSymbol.equals(normalizeSymbol(event.symbol)) || event.close <= 0.0) {
             return;
         }
+        streamSanityStats.recordEquity(event, sanityMinQualityScore(), expectedEventSchemaVersion());
         ZonedDateTime barTs = Instant.ofEpochSecond(event.barEpochSec).atZone(ZoneOffset.UTC).withZoneSameInstant(MARKET_ZONE);
         applySessionState(barTs);
+        if (event.blocksNewEntries(sanityMinQualityScore(), expectedEventSchemaVersion())) {
+            strategy.setAllowNewEntries(false);
+        }
         latestBid = event.bid > 0.0 ? event.bid : latestBid;
         latestAsk = event.ask > 0.0 ? event.ask : latestAsk;
         latestBidSize = event.bidSize > 0L ? event.bidSize : latestBidSize;
@@ -406,6 +416,13 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         return tradeLifecycleSummaryFileName;
     }
 
+    public String getStreamSanityReportFile() {
+        if (streamSanityReportFileName == null) {
+            streamSanityReportFileName = System.getProperty("backtest.streamSanityReportFile", "runtime/backtests/databento-stream-" + backtestSymbol.toLowerCase(Locale.US) + "-" + backtestRunTimestamp() + "-sanity.json");
+        }
+        return streamSanityReportFileName;
+    }
+
     private String backtestRunTimestamp() {
         if (backtestRunTimestamp == null) {
             backtestRunTimestamp = LocalDateTime.now(MARKET_ZONE).format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
@@ -517,6 +534,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
     private void printSummary() {
         BacktestLifecycleStats.Summary lifecycleSummary = lifecycleStats.summary();
         writeTradeLifecycleSummary(lifecycleSummary);
+        writeStreamSanityReport();
         System.out.println(">>> [FLOW][INFO][BACKTEST] ==============================================");
         System.out.println(">>> [FLOW][INFO][BACKTEST] DATABENTO HISTORICAL STREAM BACKTEST COMPLETE");
         System.out.println(">>> [FLOW][INFO][BACKTEST] Symbol: " + backtestSymbol);
@@ -546,7 +564,37 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         System.out.println(">>> [FLOW][INFO][BACKTEST] Trade log: " + getTradeLogFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] Order history: " + getOrderHistoryFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] Trade lifecycle summary: " + getTradeLifecycleSummaryFile());
+        System.out.println(">>> [FLOW][INFO][BACKTEST] Stream sanity report: " + getStreamSanityReportFile());
         System.out.println(">>> [FLOW][INFO][BACKTEST] ==============================================");
+    }
+
+    private void writeStreamSanityReport() {
+        Path path = Path.of(getStreamSanityReportFile());
+        try {
+            Path parent = path.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Map<String, Object> report = streamSanityStats.report(
+                backtestSymbol,
+                expectedEventSchemaVersion(),
+                sanityMinQualityScore(),
+                processedEquityBars,
+                processedOptionBars,
+                skippedEvents
+            );
+            OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), report);
+        } catch (IOException exception) {
+            System.err.println(">>> [FLOW][ERROR][BACKTEST.SANITY] write failed file=" + path + " reason=" + exception.getMessage());
+        }
+    }
+
+    private static String expectedEventSchemaVersion() {
+        return System.getProperty("backtest.databento.sanity.expectedEventSchemaVersion", "databento_ndjson_v2").trim();
+    }
+
+    private static double sanityMinQualityScore() {
+        return parsePositiveDouble(System.getProperty("backtest.databento.sanity.minQualityScore", "0.50"), 0.50);
     }
 
     private void printAiDecisionDiagnostics() {
@@ -1078,6 +1126,114 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
                                long guardFires, long lifecycleExits, long hardRiskExits, long eodExits,
                                double avgSetupToFillSeconds, double avgMfeR, double avgMaeR,
                                String exitReasonDistribution) {}
+    }
+
+    private static final class StreamSanityStats {
+        private long statusEvents;
+        private long equityBars;
+        private long optionBars;
+        private long equityBarsWithContract;
+        private long equityBarsMissingContract;
+        private long schemaMismatchEquityBars;
+        private long lowQualityEquityBars;
+        private long entryRejectedEquityBars;
+        private double minQualityScore = Double.NaN;
+        private double maxQualityScore = Double.NaN;
+        private double qualityScoreSum;
+        private final Map<String, Long> qualityFlagCounts = new LinkedHashMap<>();
+
+        private void recordStatus(DatabentoEvent event) {
+            statusEvents++;
+        }
+
+        private void recordOption(DatabentoEvent event) {
+            optionBars++;
+        }
+
+        private void recordEquity(DatabentoEvent event, double minAllowedQualityScore, String expectedSchemaVersion) {
+            equityBars++;
+            if (event.hasSanityContract()) {
+                equityBarsWithContract++;
+            } else {
+                equityBarsMissingContract++;
+            }
+            if (!event.isExpectedEventSchema(expectedSchemaVersion)) {
+                schemaMismatchEquityBars++;
+            }
+            double quality = event.effectiveQualityScore();
+            minQualityScore = Double.isNaN(minQualityScore) ? quality : Math.min(minQualityScore, quality);
+            maxQualityScore = Double.isNaN(maxQualityScore) ? quality : Math.max(maxQualityScore, quality);
+            qualityScoreSum += quality;
+            for (String flag : splitFlags(event.dataQualityFlags)) {
+                qualityFlagCounts.put(flag, qualityFlagCounts.getOrDefault(flag, 0L) + 1L);
+            }
+            if (event.hasEntryBlockingQualityFlag() || quality < minAllowedQualityScore) {
+                lowQualityEquityBars++;
+            }
+            if (event.blocksNewEntries(minAllowedQualityScore, expectedSchemaVersion)) {
+                entryRejectedEquityBars++;
+            }
+        }
+
+        private Map<String, Object> report(String symbol,
+                                           String expectedSchemaVersion,
+                                           double minAllowedQualityScore,
+                                           long processedEquityBars,
+                                           long processedOptionBars,
+                                           long skippedEvents) {
+            List<String> errors = new ArrayList<>();
+            List<String> warnings = new ArrayList<>();
+            if (processedEquityBars <= 0L) {
+                errors.add("no_equity_bars_processed");
+            }
+            if (equityBarsMissingContract > 0L) {
+                errors.add("equity_bars_missing_sanity_contract=" + equityBarsMissingContract);
+            }
+            if (schemaMismatchEquityBars > 0L) {
+                errors.add("equity_bars_schema_mismatch=" + schemaMismatchEquityBars);
+            }
+            if (lowQualityEquityBars > 0L) {
+                warnings.add("low_quality_equity_bars=" + lowQualityEquityBars);
+            }
+            if (entryRejectedEquityBars > 0L) {
+                warnings.add("entry_rejected_equity_bars=" + entryRejectedEquityBars);
+            }
+
+            Map<String, Object> report = new LinkedHashMap<>();
+            report.put("symbol", symbol);
+            report.put("expectedEventSchemaVersion", expectedSchemaVersion);
+            report.put("minAllowedQualityScore", minAllowedQualityScore);
+            report.put("processedEquityBars", processedEquityBars);
+            report.put("processedOptionBars", processedOptionBars);
+            report.put("skippedEvents", skippedEvents);
+            report.put("statusEvents", statusEvents);
+            report.put("equityBarsObservedBySanity", equityBars);
+            report.put("optionBarsObservedBySanity", optionBars);
+            report.put("equityBarsWithContract", equityBarsWithContract);
+            report.put("equityBarsMissingContract", equityBarsMissingContract);
+            report.put("schemaMismatchEquityBars", schemaMismatchEquityBars);
+            report.put("lowQualityEquityBars", lowQualityEquityBars);
+            report.put("entryRejectedEquityBars", entryRejectedEquityBars);
+            report.put("minQualityScore", Double.isNaN(minQualityScore) ? null : minQualityScore);
+            report.put("maxQualityScore", Double.isNaN(maxQualityScore) ? null : maxQualityScore);
+            report.put("meanQualityScore", equityBars > 0L ? qualityScoreSum / equityBars : null);
+            report.put("qualityFlagCounts", Map.copyOf(qualityFlagCounts));
+            report.put("errors", errors);
+            report.put("warnings", warnings);
+            return report;
+        }
+
+        private static List<String> splitFlags(String rawFlags) {
+            String value = rawFlags == null || rawFlags.isBlank() ? "none" : rawFlags.trim().toLowerCase(Locale.US).replace(',', '|');
+            List<String> out = new ArrayList<>();
+            for (String token : value.split("\\|")) {
+                String normalized = token == null ? "" : token.trim();
+                if (!normalized.isBlank()) {
+                    out.add(normalized);
+                }
+            }
+            return out.isEmpty() ? List.of("none") : out;
+        }
     }
 
     private static double parseThreshold(String key, double fallback) {

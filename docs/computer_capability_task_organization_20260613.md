@@ -342,7 +342,20 @@ Action plan:
 
 Action done:
 
-- Documented requirements only. Implementation is pending and must happen before any paper/live promotion of a C1/C2-fixed or `mbp-1`/`tcbbo`-expanded bundle.
+- 2026-06-14 first-pass live/backtester sanity parity implementation is complete in branch code. This is a runtime-contract and replay-sanity gate only; it does not promote any model bundle to paper/live.
+- Added a shared Python live/replay NDJSON event contract in `scripts/databento_event_contract.py` and wired it into both `scripts/databento_live_normalizer.py` and `scripts/databento_historical_streamer.py`.
+- Live and replay equity bars now carry schema/provenance and offline-style sanity fields including `EventSchemaVersion`, `DataQualityFlags`, `ChildDataQualityFlagUnion`, `TradeSecondsPresent`, `QuoteUpdateSecondsPresent`, `QuoteStateSecondsValid`, `SyntheticSeconds`, coverage fields, quote-age/spread/locked-crossed fields, `QualityScore`, `EventSource`, `Dataset`, `Schema`, `STypeIn`, `tsEventNs`, `BarEpochSec`, and `EventGeneratedAtMs`.
+- Fixed historical TBBO aggregation so quote-only rows no longer count as trades: replay `volume`, `tradeCount`, `px_x_sz`, `atBidVol`, and `atAskVol` are now derived from positive trade price/size rows only, while quote state can still form synthetic low-quality OHLC for audit/replay.
+- Extended Java live/backtester consumers in `src/main/java/com/calgary/fili/trader/bot/trader/DatabentoEvent.java`, `IBKRTrader.java`, `DatabentoFeedHealth.java`, and `src/main/java/com/calgary/fili/trader/testers/DatabentoHistoricalStreamingBacktester.java` so the live route and streaming backtester parse the same quality/provenance fields and expose per-symbol sanity counters through feed health.
+- Added/updated regression coverage in `tests/test_databento_event_contract.py`, `src/test/java/com/calgary/fili/trader/bot/trader/DatabentoEventTest.java`, `src/test/java/com/calgary/fili/trader/bot/trader/DatabentoFeedHealthTest.java`, and `src/test/java/com/calgary/fili/trader/health/DatabentoHealthIndicatorTest.java`.
+- Validation run on this computer passed:
+  - `python3 -m py_compile scripts/databento_event_contract.py scripts/databento_historical_streamer.py scripts/databento_live_normalizer.py tests/test_databento_event_contract.py`
+  - `python3 tests/test_databento_event_contract.py` (`4` tests)
+  - `python3 scripts/databento_historical_streamer.py --source api --symbols TSLA --start 2026-05-21 --end 2026-05-21 --dry-run` piped through a JSON schema/version assertion (`EventSchemaVersion=databento_ndjson_v2`)
+  - `python3 -m unittest discover -s tests -p 'test*.py' -v` (`35` tests)
+  - `./mvnw -q -Dtest=DatabentoEventTest,DatabentoFeedHealthTest,DatabentoHealthIndicatorTest test`
+  - `./mvnw -q test` (`71` Surefire tests, `failures=0`, `errors=0`, `skipped=0`)
+- Stop/go decision: Step 10 first-pass parity is GO for moving to the next controlled blocker. Remaining before any paper/live promotion: record a real live-shaped NDJSON sample during market hours, replay it through `DatabentoHistoricalStreamingBacktester`, persist machine-readable replay parity artifacts, and complete probability-calibration/manifest hardening. Emergency exits/flattening remain outside the entry block and must stay available.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
