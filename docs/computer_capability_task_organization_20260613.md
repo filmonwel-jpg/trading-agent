@@ -223,7 +223,27 @@ Action done:
 - External disk write check passed on the 48GB computer after reconnecting the disk: `/Volumes/DatabentoVault` was mounted read-write and a write/read/remove test under `data_lake_v2` succeeded.
 - Manifest pre-build checks passed: `hash_error_count=0`, `audit_error_count=0`, `audit_warning_count=0`, selected dates are `20260511`, `20260512`, `20260513`, `20260514`, `20260515`, `20260518`, `20260519`, `20260520`, `20260521`, `20260522`, selected file count is `50`, total compressed input is `4.508 GiB`, and `20260403` is not selected.
 - Source-file existence/size/hash checks passed and were written to `raw_audits/prebuild_manifest_check_20260613_172522/prebuild_manifest_check.json` and `raw_audits/prebuild_manifest_check_20260613_172522/prebuild_manifest_check_files.csv`; `errors: []`, `warnings: []`.
-- The 10-day pilot build itself has not started yet. Correctly paused after manifest selection and before normalization/training.
+- Fixed-quality baseline 10-day build completed on the 48GB/write-capable computer under `model_training_sets/pilot_10d_fixed_quality_20260613_173446`.
+- Command used the existing supported sources first: `/Volumes/DatabentoVault/EQUS-20260523-6J9KE98BJ9` (`tbbo`) and `/Volumes/DatabentoVault/OPRA-20260523-MSV68VKVKD` (`ohlcv-1s`) with symbols `TSLA,TQQQ,NVDA,SPY,QQQ` and `--max-days 10`.
+- The build processed the expected 10 dates from `20260511` through `20260522` and wrote `reports/symbol_model_plan.csv`.
+- This is a fixed-quality baseline build only. It does not yet include the new `EQUS mbp-1`, `OPRA tcbbo`, or OPRA definition feature expansion.
+- Decision: run post-build artifact validation next before labels, training, or any full-window build.
+
+### Step 7 — Post-build artifact validation
+
+Action plan:
+
+- Verify the 10-day build root exists and contains `data_1s`, `data_5s`, `data_30s`, `combined`, and `reports` outputs.
+- For each expected symbol, require per-symbol `1s`, `5s`, and `30s` CSVs with the expected 10 pilot dates.
+- Require combined `combined_1s.csv`, `combined_5s.csv`, and `combined_30s.csv` with all five symbols.
+- Require quality-fix output columns, including `DataQualityFlags`, `ChildDataQualityFlagUnion`, coverage/staleness/synthetic quality fields, and `QualityScore`.
+- Require exact regular-session row counts for the baseline 10-day build: `234000` rows per symbol at `1s`, `46800` rows per symbol at `5s`, and `7800` rows per symbol at `30s`; combined files should have five times those counts.
+- Record output size, row counts, dates, symbols, and parent/child quality-flag summaries under `raw_audits/`.
+
+Action done:
+
+- Added repeatable verifier `scripts/verify_databento_pilot_build.py` with tests in `tests/test_verify_databento_pilot_build.py`.
+- Pending on the 48GB/write-capable computer: run the verifier against `model_training_sets/pilot_10d_fixed_quality_20260613_173446` and inspect `pilot_build_check.json` before starting labels or training.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
