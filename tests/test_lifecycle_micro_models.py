@@ -149,6 +149,25 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "bootstrap constant"):
             lm.apply_setup_predictions(df30, preds, min_unique_values=3)
 
+    def test_load_bar_csv_close_fill_is_causal_per_symbol(self) -> None:
+        frame = pd.DataFrame([
+            {"Symbol": "AAPL", "Timestamp": self._ts("09:30:00"), "Open": np.nan, "High": np.nan, "Low": np.nan, "Close": np.nan, "Volume": 10, "WAP": np.nan, "Count": 1},
+            {"Symbol": "MSFT", "Timestamp": self._ts("09:30:00"), "Open": 200.0, "High": 200.2, "Low": 199.8, "Close": 200.0, "Volume": 10, "WAP": 200.0, "Count": 1},
+            {"Symbol": "AAPL", "Timestamp": self._ts("09:30:30"), "Open": 101.0, "High": 101.2, "Low": 100.8, "Close": 101.0, "Volume": 10, "WAP": 101.0, "Count": 1},
+            {"Symbol": "MSFT", "Timestamp": self._ts("09:30:30"), "Open": np.nan, "High": np.nan, "Low": np.nan, "Close": np.nan, "Volume": 10, "WAP": np.nan, "Count": 1},
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "bars.csv"
+            frame.to_csv(csv_path, index=False)
+            out = lm.load_bar_csv(str(csv_path), "30s")
+
+        aapl = out[out["Symbol"] == "AAPL"].sort_values("_ts").reset_index(drop=True)
+        msft = out[out["Symbol"] == "MSFT"].sort_values("_ts").reset_index(drop=True)
+        self.assertTrue(pd.isna(aapl.loc[0, "Close"]))
+        self.assertEqual(101.0, aapl.loc[1, "Close"])
+        self.assertEqual(200.0, msft.loc[0, "Close"])
+        self.assertEqual(200.0, msft.loc[1, "Close"])
+
     def test_write_scorecards_writes_route_manifest_schema_hash(self) -> None:
         feature_columns = ["f_30s_ret_1", "f_entry_score_proxy"]
         result = lm.TrainedModelResult(

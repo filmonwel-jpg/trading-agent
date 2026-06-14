@@ -164,11 +164,11 @@ def load_bar_csv(path: str, cadence: str) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = df["Close"] if col in {"Open", "High", "Low", "WAP"} else 0.0
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["Close"] = df["Close"].ffill().bfill()
+    df = df.sort_values(["Symbol", "_ts"]).reset_index(drop=True)
+    df["Close"] = df.groupby("Symbol", sort=False)["Close"].ffill()
     for col in ["Open", "High", "Low", "WAP"]:
         df[col] = df[col].fillna(df["Close"])
     df["Volume"] = df["Volume"].fillna(0.0)
-    df = df.sort_values(["Symbol", "_ts"]).reset_index(drop=True)
     df["Date"] = df["_ts"].dt.strftime("%Y-%m-%d")
     return add_common_features(df, cadence)
 
