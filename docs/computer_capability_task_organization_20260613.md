@@ -357,6 +357,34 @@ Action done:
   - `./mvnw -q test` (`71` Surefire tests, `failures=0`, `errors=0`, `skipped=0`)
 - Stop/go decision: Step 10 first-pass parity is GO for moving to the next controlled blocker. Remaining before any paper/live promotion: record a real live-shaped NDJSON sample during market hours, replay it through `DatabentoHistoricalStreamingBacktester`, persist machine-readable replay parity artifacts, and complete probability-calibration/manifest hardening. Emergency exits/flattening remain outside the entry block and must stay available.
 
+### Step 11 — Lifecycle/micro probability-calibration manifest hardening
+
+Action plan:
+
+- Add repeatable probability-calibration metrics to the lifecycle/micro trainer before any scorecard can be discussed as paper/live evidence.
+- For every trained classifier, compute held-out Brier score, expected calibration error (ECE), calibration row count, and reliability-bin rows using the same chronological held-out split used for threshold optimization.
+- Persist machine-readable artifacts next to `lifecycle_micro_scorecard.csv`: a `calibration_manifest.json` and `calibration_reliability.csv` that identify the calibration method, split convention, bins, per-model metrics, warnings, and artifact names.
+- Surface Brier/ECE in `lifecycle_micro_scorecard.csv` and include calibration metadata in `lifecycle_micro_route_manifest.json` so downstream promotion-gate checks can reject uncalibrated or poorly calibrated bundles.
+- Keep the result research-only until a future controlled step fits and exports an explicit isotonic/Platt/post-hoc calibrator where needed, freezes the internal holdout, and validates threshold stability/trade-count gates on the 48GB machine.
+
+Action done:
+
+- 2026-06-14 implementation is complete in branch code for lifecycle/micro calibration metrics and manifest artifacts. This is calibration measurement/manifest hardening only; it does not make any bundle paper/live promotable.
+- Extended `train_lifecycle_micro_models.py` with `calibration_report(...)`, which computes Brier score, ECE, and fixed reliability bins from finite held-out probabilities clipped to `[0,1]`.
+- Extended `TrainedModelResult`, `train_binary_model(...)`, and `write_scorecards(...)` so every trained lifecycle/micro classifier now records `brier_score`, `ece`, `calibration_rows`, and reliability-bin rows.
+- New/updated emitted artifacts from lifecycle/micro training:
+  - `lifecycle_micro_scorecard.csv` now includes `brier_score`, `ece`, and `calibration_rows`.
+  - `lifecycle_micro_route_manifest.json` now includes a per-model `calibration` object with raw-probability method, Brier/ECE, row count, and reliability artifact reference.
+  - `calibration_manifest.json` records schema version `lifecycle_micro_calibration_v1`, method `raw_random_forest_probability_no_posthoc_calibrator`, chronological held-out split convention, artifact names, per-model metrics, `errors=[]`, and a research-only warning that no isotonic/Platt post-hoc calibrator is exported yet.
+  - `calibration_reliability.csv` records per-model reliability-bin rows.
+- Added regression coverage in `tests/test_lifecycle_micro_models.py` for direct Brier/ECE/bin calculation, no-ONNX training-time calibration population, and scorecard/route/calibration artifact emission.
+- Validation run on this computer passed:
+  - `python3 -m py_compile train_lifecycle_micro_models.py tests/test_lifecycle_micro_models.py`
+  - `python3 tests/test_lifecycle_micro_models.py` (`11` tests)
+  - `python3 -m unittest discover -s tests -p 'test*.py' -v` (`37` tests)
+  - `./mvnw -q test` (`71` Surefire tests, `failures=0`, `errors=0`, `skipped=0`)
+- Stop/go decision: Step 11 first-pass calibration manifest hardening is GO for running the next 48GB-machine lifecycle/micro smoke so the real 10-day artifacts include calibration reports. Still NO paper/live promotion until post-hoc calibration/frozen-holdout threshold-stability gates, recorded-event replay parity, and paper/shadow drift checks pass.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 1. Use the fixed builders only; old `20260523` staged datasets are pre-fix artifacts.

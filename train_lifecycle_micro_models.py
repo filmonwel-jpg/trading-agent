@@ -16,7 +16,7 @@ import math
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -76,6 +76,10 @@ class TrainedModelResult:
     threshold: float
     precision: float
     recall: float
+    brier_score: float
+    ece: float
+    calibration_rows: int
+    calibration_bins: list[dict[str, object]]
     pred_pos_rate: float
     label_pos_rate: float
     rows: int
@@ -766,6 +770,48 @@ def optimize_threshold(y_true: np.ndarray, probas: np.ndarray, model_kind: str) 
     return best[0], max(best[1], 0.0), best[2], best[3]
 
 
+def calibration_report(y_true: np.ndarray, probas: np.ndarray, *, bins: int = 10) -> dict[str, object]:
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(probas, dtype=float)
+    mask = np.isfinite(y) & np.isfinite(p)
+    y = y[mask]
+    p = np.clip(p[mask], 0.0, 1.0)
+    if len(y) == 0:
+        return {"rows": 0, "brier_score": math.nan, "ece": math.nan, "bins": []}
+
+    brier = float(np.mean((p - y) ** 2))
+    edges = np.linspace(0.0, 1.0, int(bins) + 1)
+    reliability_bins: list[dict[str, object]] = []
+    ece = 0.0
+    for index in range(int(bins)):
+        low = float(edges[index])
+        high = float(edges[index + 1])
+        if index == int(bins) - 1:
+            bin_mask = (p >= low) & (p <= high)
+        else:
+            bin_mask = (p >= low) & (p < high)
+        count = int(bin_mask.sum())
+        if count:
+            mean_pred = float(p[bin_mask].mean())
+            observed = float(y[bin_mask].mean())
+            abs_error = abs(mean_pred - observed)
+            ece += (count / len(y)) * abs_error
+        else:
+            mean_pred = math.nan
+            observed = math.nan
+            abs_error = math.nan
+        reliability_bins.append({
+            "bin_index": index,
+            "prob_min": low,
+            "prob_max": high,
+            "rows": count,
+            "mean_predicted_probability": mean_pred,
+            "observed_positive_rate": observed,
+            "abs_calibration_error": abs_error,
+        })
+    return {"rows": int(len(y)), "brier_score": brier, "ece": float(ece), "bins": reliability_bins}
+
+
 def export_onnx(model: RandomForestClassifier, feature_count: int, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     initial_type = [("float_input", FloatTensorType([None, feature_count]))]
@@ -791,6 +837,7 @@ def train_binary_model(df: pd.DataFrame, label_col: str, name: str, filename: st
     model.fit(X[train_idx], y[train_idx])
     test_proba = model.predict_proba(X[test_idx])[:, 1]
     threshold, precision, recall, pred_pos_rate = optimize_threshold(y[test_idx], test_proba, model_kind)
+    calibration = calibration_report(y[test_idx], test_proba, bins=10)
     export_path = output_dir / filename
     if not no_onnx:
         export_onnx(model, len(feature_cols), export_path)
@@ -801,6 +848,10 @@ def train_binary_model(df: pd.DataFrame, label_col: str, name: str, filename: st
         threshold=threshold,
         precision=precision,
         recall=recall,
+        brier_score=float(calibration["brier_score"]),
+        ece=float(calibration["ece"]),
+        calibration_rows=int(calibration["rows"]),
+        calibration_bins=list(calibration["bins"]),
         pred_pos_rate=pred_pos_rate,
         label_pos_rate=float(y.mean()),
         rows=len(data),
@@ -961,6 +1012,8 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
     rows = []
     route = []
     feature_schema = {}
+    reliability_rows = []
+    calibration_metrics = []
     for r in results:
         schema_hash = feature_schema_hash(r.feature_columns)
         rows.append({
@@ -972,6 +1025,9 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "threshold": r.threshold,
             "precision": r.precision,
             "recall": r.recall,
+            "brier_score": r.brier_score,
+            "ece": r.ece,
+            "calibration_rows": r.calibration_rows,
             "pred_pos_rate": r.pred_pos_rate,
             "feature_count": r.feature_count,
             "feature_schema_sha256": schema_hash,
@@ -981,6 +1037,13 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "model": r.name,
             "model_path": r.exported_to,
             "threshold": r.threshold,
+            "calibration": {
+                "method": "raw_random_forest_probability_no_posthoc_calibrator",
+                "brier_score": r.brier_score,
+                "ece": r.ece,
+                "rows": r.calibration_rows,
+                "reliability_artifact": "calibration_reliability.csv",
+            },
             "feature_count": r.feature_count,
             "feature_schema_sha256": schema_hash,
             "feature_columns": r.feature_columns,
@@ -990,7 +1053,39 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "feature_schema_sha256": schema_hash,
             "feature_columns": r.feature_columns,
         }
+        calibration_metrics.append({
+            "model": r.name,
+            "filename": r.filename,
+            "method": "raw_random_forest_probability_no_posthoc_calibrator",
+            "rows": r.calibration_rows,
+            "brier_score": r.brier_score,
+            "ece": r.ece,
+            "threshold": r.threshold,
+        })
+        for bin_row in r.calibration_bins:
+            row = {"model": r.name, "filename": r.filename}
+            row.update(bin_row)
+            reliability_rows.append(row)
     pd.DataFrame(rows).to_csv(output_dir / "lifecycle_micro_scorecard.csv", index=False)
+    pd.DataFrame(reliability_rows).to_csv(output_dir / "calibration_reliability.csv", index=False)
+    calibration_manifest = {
+        "schema_version": "lifecycle_micro_calibration_v1",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "method": "raw_random_forest_probability_no_posthoc_calibrator",
+        "holdout_split": "chronological_last_20_percent_from_train_test_split_time",
+        "bins": 10,
+        "errors": [],
+        "warnings": [
+            "Metrics describe raw RandomForest predict_proba outputs; no isotonic/Platt post-hoc calibrator is exported yet. Treat bundles as research-only until calibration and holdout gates pass."
+        ],
+        "artifacts": {
+            "scorecard_csv": "lifecycle_micro_scorecard.csv",
+            "reliability_csv": "calibration_reliability.csv",
+            "route_manifest_json": "lifecycle_micro_route_manifest.json",
+        },
+        "models": calibration_metrics,
+    }
+    (output_dir / "calibration_manifest.json").write_text(json.dumps(calibration_manifest, indent=2), encoding="utf-8")
     (output_dir / "lifecycle_micro_route_manifest.json").write_text(json.dumps(route, indent=2), encoding="utf-8")
     feature_schema_json = json.dumps(feature_schema, indent=2, sort_keys=True)
     (output_dir / "feature_schema.json").write_text(feature_schema_json, encoding="utf-8")
@@ -1073,6 +1168,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 

@@ -168,6 +168,62 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertEqual(200.0, msft.loc[0, "Close"])
         self.assertEqual(200.0, msft.loc[1, "Close"])
 
+    def test_calibration_report_computes_brier_ece_and_bins(self) -> None:
+        report = lm.calibration_report(
+            np.asarray([0, 0, 1, 1], dtype=int),
+            np.asarray([0.10, 0.20, 0.80, 0.90], dtype=float),
+            bins=2,
+        )
+
+        self.assertEqual(4, report["rows"])
+        self.assertAlmostEqual(0.025, report["brier_score"])
+        self.assertAlmostEqual(0.15, report["ece"])
+        self.assertEqual(2, len(report["bins"]))
+        self.assertEqual(2, report["bins"][0]["rows"])
+        self.assertAlmostEqual(0.15, report["bins"][0]["mean_predicted_probability"])
+        self.assertAlmostEqual(0.0, report["bins"][0]["observed_positive_rate"])
+        self.assertEqual(2, report["bins"][1]["rows"])
+        self.assertAlmostEqual(0.85, report["bins"][1]["mean_predicted_probability"])
+        self.assertAlmostEqual(1.0, report["bins"][1]["observed_positive_rate"])
+
+    def test_train_binary_model_populates_calibration_metrics(self) -> None:
+        rows = []
+        base_ts = pd.Timestamp("2026-05-21 09:30:00", tz="America/New_York")
+        for i in range(80):
+            timestamp = (base_ts + pd.Timedelta(seconds=30 * i)).strftime("%Y%m%d %H:%M:%S America/New_York")
+            rows.append({
+                "Symbol": "AAPL",
+                "Date": "2026-05-21",
+                "Timestamp": timestamp,
+                "f_30s_ret_1": i / 100.0,
+                "f_30s_spread_bps": (i % 5) / 10.0,
+                "f_entry_score_proxy": 0.20 + (i % 9) / 20.0,
+                "Label_Long_ExitLifecycle": 1 if i % 4 == 0 or i % 9 == 0 else 0,
+            })
+        frame = pd.DataFrame(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = lm.train_binary_model(
+                frame,
+                "Label_Long_ExitLifecycle",
+                "longExitLifecycleAi",
+                "long_exit_lifecycle.onnx",
+                "lifecycle",
+                Path(tmp),
+                min_rows=20,
+                random_state=7,
+                no_onnx=True,
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(16, result.calibration_rows)
+        self.assertEqual(10, len(result.calibration_bins))
+        self.assertTrue(np.isfinite(result.brier_score))
+        self.assertTrue(np.isfinite(result.ece))
+        self.assertGreaterEqual(result.brier_score, 0.0)
+        self.assertGreaterEqual(result.ece, 0.0)
+
     def test_write_scorecards_writes_route_manifest_schema_hash(self) -> None:
         feature_columns = ["f_30s_ret_1", "f_entry_score_proxy"]
         result = lm.TrainedModelResult(
@@ -176,6 +232,18 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
             threshold=0.62,
             precision=0.71,
             recall=0.44,
+            brier_score=0.18,
+            ece=0.07,
+            calibration_rows=120,
+            calibration_bins=[{
+                "bin_index": 0,
+                "prob_min": 0.0,
+                "prob_max": 0.1,
+                "rows": 12,
+                "mean_predicted_probability": 0.04,
+                "observed_positive_rate": 0.08,
+                "abs_calibration_error": 0.04,
+            }],
             pred_pos_rate=0.12,
             label_pos_rate=0.10,
             rows=500,
@@ -190,11 +258,21 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
             lm.write_scorecards(out, [result])
             route = json.loads((out / "lifecycle_micro_route_manifest.json").read_text(encoding="utf-8"))
             feature_schema = json.loads((out / "feature_schema.json").read_text(encoding="utf-8"))
+            calibration_manifest = json.loads((out / "calibration_manifest.json").read_text(encoding="utf-8"))
+            reliability = pd.read_csv(out / "calibration_reliability.csv")
 
         expected_hash = lm.feature_schema_hash(feature_columns)
         self.assertEqual(expected_hash, route[0]["feature_schema_sha256"])
         self.assertEqual(feature_columns, route[0]["feature_columns"])
+        self.assertAlmostEqual(0.18, route[0]["calibration"]["brier_score"])
+        self.assertAlmostEqual(0.07, route[0]["calibration"]["ece"])
         self.assertEqual(expected_hash, feature_schema["longExitLifecycleAi"]["feature_schema_sha256"])
+        self.assertEqual("lifecycle_micro_calibration_v1", calibration_manifest["schema_version"])
+        self.assertEqual([], calibration_manifest["errors"])
+        self.assertEqual("longExitLifecycleAi", calibration_manifest["models"][0]["model"])
+        self.assertIn("reliability_csv", calibration_manifest["artifacts"])
+        self.assertEqual("longExitLifecycleAi", reliability.iloc[0]["model"])
+        self.assertAlmostEqual(0.04, reliability.iloc[0]["abs_calibration_error"])
 
     @staticmethod
     def _ts(clock: str) -> str:
@@ -232,6 +310,5 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
 
