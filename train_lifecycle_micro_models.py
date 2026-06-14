@@ -590,7 +590,7 @@ def build_lifecycle_rows(df30: pd.DataFrame, max_entry_events: int = 0, max_entr
                 mae = 0.0
                 end_i = min(entry_i + LIFECYCLE_HORIZON_30S, len(group) - 1)
                 entry_features = {
-                    # BOOTSTRAP PLACEHOLDER — replace with walk-forward 30s model score before promotion.
+                    # Legacy Java schema name; with --setup-predictions-csv this is the real OOF setup probability.
                     "f_entry_score_proxy": setup_score_proxy(setup_prob),
                     "f_entry_side_long": 1.0 if side == "long" else 0.0,
                     "f_entry_side_short": 1.0 if side == "short" else 0.0,
@@ -691,7 +691,7 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
                         "Symbol": symbol,
                         "Timestamp": micro.at[mi, "Timestamp"],
                         "Date": micro.at[mi, "Date"],
-                        # BOOTSTRAP PLACEHOLDER — replace with walk-forward 30s model score before promotion.
+                        # Legacy Java schema name; with --setup-predictions-csv this is the real OOF setup probability.
                         "f_setup_score_proxy": setup_score_proxy(setup_prob),
                         "f_seconds_since_arm": (micro.at[mi, "_ts"] - arm_start).total_seconds(),
                     })

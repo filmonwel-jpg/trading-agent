@@ -306,11 +306,16 @@ Action done:
 - Added manifest output next to the prediction CSV with coverage, fold, feature-column, unique-probability, and error summaries.
 - Updated `train_lifecycle_micro_models.py` with `--setup-predictions-csv`, default fail-fast behavior, and research-only `--allow-bootstrap-setup-proxy` override.
 - Lifecycle/micro staging now drops unscored early rows explicitly and validates that retained rows have finite, non-constant, non-bootstrap setup probabilities before creating lifecycle/micro rows.
+- 48GB/write-capable computer validation completed on 2026-06-14 against `model_training_sets/pilot_10d_fixed_quality_20260613_173446`:
+  - `generate_walk_forward_setup_predictions.py` wrote `raw_audits/setup_predictions_10d_20260613.csv` and `raw_audits/setup_predictions_10d_20260613.manifest.json` with `errors=[]`, `warnings=[]`, `row_count=35685`, `trainable_oof_rows=28780`, and `trainable_oof_frac=0.806501331091495`.
+  - Long and short setup folds both had `folds_ok=8`, `coverage_frac=0.806501331091495`, and high unique-probability counts (`28647` long, `28736` short in the generator manifest; joined lifecycle summary rounded to `28648`/`28738`).
+  - `train_lifecycle_micro_models.py --setup-predictions-csv ... --max-entry-events 2000 --no-onnx` retained `28780` joined 30s rows, dropped `10220` intentionally unscored early rows, trained all six lifecycle/micro smoke models, and wrote `raw_audits/lifecycle_micro_setup_smoke_20260613/lifecycle_micro_scorecard.csv` plus `lifecycle_micro_route_manifest.json`.
+  - Audit bundle copied to `raw_audits/c3_c4_10d_smoke_20260614_002956` with the setup manifest, lifecycle/micro route manifest, and scorecard.
 - Added regression tests:
   - `tests/test_generate_walk_forward_setup_predictions.py`
   - expanded `tests/test_lifecycle_micro_models.py`.
 - Local validation passed with `python3 -m py_compile generate_walk_forward_setup_predictions.py tests/test_generate_walk_forward_setup_predictions.py train_lifecycle_micro_models.py tests/test_lifecycle_micro_models.py` and the corresponding unit tests.
-- Pending on the 48GB/write-capable computer: run `generate_walk_forward_setup_predictions.py` against `model_training_sets/pilot_10d_fixed_quality_20260613_173446/combined/combined_30s.csv`, write outputs under external `data_lake_v2`, then run lifecycle/micro with `--setup-predictions-csv` only as an infrastructure smoke test.
+- Decision: C3/C4 infrastructure smoke is complete for the fixed-quality 10-day baseline. Treat these 10-day lifecycle/micro metrics as infrastructure evidence only, not paper/live promotion evidence.
 
 ### Step 10 — Live/backtester sanity parity requirements
 
