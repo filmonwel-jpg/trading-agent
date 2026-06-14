@@ -15,6 +15,7 @@ import train_lifecycle_micro_models as lm
 class LifecycleMicroRowBuilderTest(unittest.TestCase):
     def setUp(self) -> None:
         lm._ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED = False
+        lm.ALLOW_BOOTSTRAP_SETUP_PROXY = False
 
     def test_side_aware_entry_fill_uses_quotes_and_slippage(self) -> None:
         closes = np.asarray([100.0], dtype=float)
@@ -99,8 +100,54 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertFalse(long_lifecycle.empty)
         self.assertFalse(long_entry.empty)
         self.assertAlmostEqual(0.42, long_lifecycle.iloc[0]["f_entry_score_proxy"])
-        self.assertTrue((long_entry["f_setup_score_proxy"] == 0.42).all())
+        np.testing.assert_allclose(long_entry["f_setup_score_proxy"].to_numpy(dtype=float), 0.42)
         self.assertFalse(lm._ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED)
+
+    def test_missing_setup_probability_fails_by_default(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Missing real out-of-fold setup probability"):
+            lm.setup_score_proxy(None)
+
+    def test_apply_setup_predictions_retains_only_oof_rows_and_validates_variation(self) -> None:
+        df30 = self._bars_30s([
+            {"Timestamp": self._ts("09:30:00"), "Open": 100.0, "High": 100.2, "Low": 99.9, "Close": 100.0, "Label_Long_Entry": 1, "Label_Short_Entry": 0},
+            {"Timestamp": self._ts("09:30:30"), "Open": 100.0, "High": 100.4, "Low": 99.8, "Close": 100.2, "Label_Long_Entry": 0, "Label_Short_Entry": 0},
+            {"Timestamp": self._ts("09:31:00"), "Open": 100.2, "High": 100.6, "Low": 100.0, "Close": 100.4, "Label_Long_Entry": 0, "Label_Short_Entry": 0},
+        ])
+        preds = pd.DataFrame({
+            "Symbol": ["AAPL", "AAPL", "AAPL"],
+            "Timestamp": [self._ts("09:30:00"), self._ts("09:30:30"), self._ts("09:31:00")],
+            "f_long_setup_prob": [0.21, 0.37, 0.63],
+            "f_short_setup_prob": [0.71, 0.53, 0.41],
+            "long_setup_fold_id": [1, 1, 2],
+            "short_setup_fold_id": [1, 1, 2],
+            "is_oof_setup_prediction": [1, 1, 1],
+        })
+        preds = self._prediction_frame(preds)
+
+        out = lm.apply_setup_predictions(df30, preds, min_unique_values=3)
+
+        self.assertEqual(3, len(out))
+        self.assertEqual([0.21, 0.37, 0.63], out["f_long_setup_prob"].round(2).tolist())
+        self.assertEqual([0.71, 0.53, 0.41], out["f_short_setup_prob"].round(2).tolist())
+
+    def test_apply_setup_predictions_rejects_constant_bootstrap_scores(self) -> None:
+        df30 = self._bars_30s([
+            {"Timestamp": self._ts("09:30:00"), "Open": 100.0, "High": 100.2, "Low": 99.9, "Close": 100.0, "Label_Long_Entry": 1, "Label_Short_Entry": 0},
+            {"Timestamp": self._ts("09:30:30"), "Open": 100.0, "High": 100.4, "Low": 99.8, "Close": 100.2, "Label_Long_Entry": 0, "Label_Short_Entry": 0},
+            {"Timestamp": self._ts("09:31:00"), "Open": 100.2, "High": 100.6, "Low": 100.0, "Close": 100.4, "Label_Long_Entry": 0, "Label_Short_Entry": 0},
+        ])
+        preds = self._prediction_frame(pd.DataFrame({
+            "Symbol": ["AAPL", "AAPL", "AAPL"],
+            "Timestamp": [self._ts("09:30:00"), self._ts("09:30:30"), self._ts("09:31:00")],
+            "f_long_setup_prob": [1.0, 1.0, 1.0],
+            "f_short_setup_prob": [1.0, 1.0, 1.0],
+            "long_setup_fold_id": [1, 1, 2],
+            "short_setup_fold_id": [1, 1, 2],
+            "is_oof_setup_prediction": [1, 1, 1],
+        }))
+
+        with self.assertRaisesRegex(ValueError, "bootstrap constant"):
+            lm.apply_setup_predictions(df30, preds, min_unique_values=3)
 
     def test_write_scorecards_writes_route_manifest_schema_hash(self) -> None:
         feature_columns = ["f_30s_ret_1", "f_entry_score_proxy"]
@@ -146,6 +193,8 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
     def _bars(rows: list[dict], cadence: str, with_regime: bool) -> pd.DataFrame:
         frame = pd.DataFrame(rows)
         frame.insert(0, "Symbol", "AAPL")
+        if cadence == "30s" and "f_entry_prob" not in frame.columns:
+            frame["f_entry_prob"] = 0.42
         frame["Volume"] = frame.get("Volume", 1000.0)
         frame["WAP"] = frame.get("WAP", frame["Close"])
         frame["Count"] = frame.get("Count", 1.0)
@@ -153,6 +202,13 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         frame["Date"] = frame["_ts"].dt.strftime("%Y-%m-%d")
         out = lm.add_common_features(frame, cadence)
         return lm.assign_simple_regime(out) if with_regime else out
+
+    @staticmethod
+    def _prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.copy()
+        out["Symbol"] = out["Symbol"].astype(str).str.upper()
+        out["_setup_ts"] = lm.parse_timestamp(out["Timestamp"])
+        return out
 
 
 if __name__ == "__main__":

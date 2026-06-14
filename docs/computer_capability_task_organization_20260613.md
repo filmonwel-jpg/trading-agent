@@ -295,7 +295,22 @@ Action plan:
 
 Action done:
 
-- Pending.
+- Implemented first-pass C3/C4 infrastructure in branch code.
+- Added `generate_walk_forward_setup_predictions.py`, which reads a combined/per-symbol 30s dataset, computes the same 30s feature/label preparation path used by `train_30s_models.py`, trains rolling prior-day setup models, and emits one audit row per prepared 30s bar with:
+  - `Symbol`, `Timestamp`, `Date`, `Label_Long_Entry`, `Label_Short_Entry`
+  - `f_long_setup_prob`, `f_short_setup_prob`
+  - `long_setup_fold_id`, `short_setup_fold_id`
+  - `f_long_setup_threshold`, `f_short_setup_threshold`
+  - `f_long_setup_threshold_margin`, `f_short_setup_threshold_margin`
+  - side-specific train/test day counts and `is_oof_setup_prediction`.
+- Added manifest output next to the prediction CSV with coverage, fold, feature-column, unique-probability, and error summaries.
+- Updated `train_lifecycle_micro_models.py` with `--setup-predictions-csv`, default fail-fast behavior, and research-only `--allow-bootstrap-setup-proxy` override.
+- Lifecycle/micro staging now drops unscored early rows explicitly and validates that retained rows have finite, non-constant, non-bootstrap setup probabilities before creating lifecycle/micro rows.
+- Added regression tests:
+  - `tests/test_generate_walk_forward_setup_predictions.py`
+  - expanded `tests/test_lifecycle_micro_models.py`.
+- Local validation passed with `python3 -m py_compile generate_walk_forward_setup_predictions.py tests/test_generate_walk_forward_setup_predictions.py train_lifecycle_micro_models.py tests/test_lifecycle_micro_models.py` and the corresponding unit tests.
+- Pending on the 48GB/write-capable computer: run `generate_walk_forward_setup_predictions.py` against `model_training_sets/pilot_10d_fixed_quality_20260613_173446/combined/combined_30s.csv`, write outputs under external `data_lake_v2`, then run lifecycle/micro with `--setup-predictions-csv` only as an infrastructure smoke test.
 
 ### Step 10 — Live/backtester sanity parity requirements
 

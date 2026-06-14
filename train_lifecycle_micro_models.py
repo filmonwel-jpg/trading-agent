@@ -50,6 +50,8 @@ ENTRY_FILL_MODE = os.getenv("ENTRY_FILL_MODE", "next_open").strip().lower()
 ENTRY_SLIPPAGE_BPS = float(os.getenv("ENTRY_SLIPPAGE_BPS", "2.0"))
 EXIT_SLIPPAGE_BPS = float(os.getenv("EXIT_SLIPPAGE_BPS", "2.0"))
 ENTRY_SCORE_PROXY_BOOTSTRAP = 1.0  # Remove once walk-forward 30s setup scoring is active.
+ALLOW_BOOTSTRAP_SETUP_PROXY = os.getenv("ALLOW_BOOTSTRAP_SETUP_PROXY", "0").strip().lower() in {"1", "true", "yes", "on"}
+MIN_SETUP_SCORE_UNIQUE_VALUES = int(os.getenv("MIN_SETUP_SCORE_UNIQUE_VALUES", "3"))
 
 _ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED = False
 
@@ -108,6 +110,22 @@ def parse_args() -> argparse.Namespace:
         help="Maximum labeled setup events expanded per symbol/side. 0 means expand every setup event.",
     )
     parser.add_argument("--staging-dir", default="", help="Directory for streamed intermediate lifecycle/micro datasets.")
+    parser.add_argument(
+        "--setup-predictions-csv",
+        default="",
+        help="OOF 30s setup predictions from generate_walk_forward_setup_predictions.py. Required unless --allow-bootstrap-setup-proxy is used.",
+    )
+    parser.add_argument(
+        "--allow-bootstrap-setup-proxy",
+        action="store_true",
+        help="Research-only override allowing constant bootstrap setup proxies when no OOF setup predictions are supplied.",
+    )
+    parser.add_argument(
+        "--min-setup-score-unique-values",
+        type=int,
+        default=MIN_SETUP_SCORE_UNIQUE_VALUES,
+        help="Minimum unique finite setup-score values required per side after joining OOF setup predictions.",
+    )
     parser.add_argument("--min-rows", type=int, default=200, help="Minimum rows required to train a model.")
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--no-onnx", action="store_true", help="Train and score but do not export ONNX.")
@@ -175,9 +193,17 @@ def warn_bootstrap_score_proxy_once() -> None:
 
 def setup_score_proxy(setup_prob: float | None) -> float:
     if setup_prob is None:
+        if not ALLOW_BOOTSTRAP_SETUP_PROXY:
+            raise ValueError(
+                "Missing real out-of-fold setup probability. Run generate_walk_forward_setup_predictions.py "
+                "and pass --setup-predictions-csv, or use --allow-bootstrap-setup-proxy for research-only smoke tests."
+            )
         warn_bootstrap_score_proxy_once()
         return ENTRY_SCORE_PROXY_BOOTSTRAP
-    return float(setup_prob)
+    value = float(setup_prob)
+    if not np.isfinite(value):
+        raise ValueError("Setup probability is not finite; refusing to stage lifecycle/micro rows.")
+    return value
 
 
 def extract_setup_probability(row: pd.Series, side: str) -> float | None:
@@ -198,6 +224,120 @@ def extract_setup_probability(row: pd.Series, side: str) -> float | None:
         if pd.notna(value) and np.isfinite(float(value)):
             return float(value)
     return None
+
+
+def load_setup_predictions(path: str) -> pd.DataFrame:
+    pred_path = Path(path).expanduser()
+    if not pred_path.exists():
+        raise FileNotFoundError(f"Setup predictions CSV not found: {pred_path}")
+    pred = pd.read_csv(pred_path)
+    required = {
+        "Symbol",
+        "Timestamp",
+        "f_long_setup_prob",
+        "f_short_setup_prob",
+        "long_setup_fold_id",
+        "short_setup_fold_id",
+    }
+    missing = sorted(required - set(pred.columns))
+    if missing:
+        raise ValueError(f"Setup predictions CSV missing required columns: {missing}")
+    pred["Symbol"] = pred["Symbol"].astype(str).str.strip().str.upper().replace("", "SINGLE")
+    pred["_setup_ts"] = parse_timestamp(pred["Timestamp"])
+    for col in [
+        "f_long_setup_prob",
+        "f_short_setup_prob",
+        "f_long_setup_threshold",
+        "f_short_setup_threshold",
+        "f_long_setup_threshold_margin",
+        "f_short_setup_threshold_margin",
+    ]:
+        if col in pred.columns:
+            pred[col] = pd.to_numeric(pred[col], errors="coerce")
+    if "is_oof_setup_prediction" not in pred.columns:
+        pred["is_oof_setup_prediction"] = (
+            pred["f_long_setup_prob"].notna() & pred["f_short_setup_prob"].notna()
+        ).astype(int)
+    pred["is_oof_setup_prediction"] = pd.to_numeric(pred["is_oof_setup_prediction"], errors="coerce").fillna(0).astype(int)
+    keep_cols = [
+        "Symbol",
+        "_setup_ts",
+        "f_long_setup_prob",
+        "f_short_setup_prob",
+        "f_long_setup_threshold",
+        "f_short_setup_threshold",
+        "f_long_setup_threshold_margin",
+        "f_short_setup_threshold_margin",
+        "long_setup_fold_id",
+        "short_setup_fold_id",
+        "is_oof_setup_prediction",
+    ]
+    keep_cols = [col for col in keep_cols if col in pred.columns]
+    pred = pred[keep_cols].drop_duplicates(["Symbol", "_setup_ts"], keep="last")
+    return pred
+
+
+def setup_prediction_side_summary(df30: pd.DataFrame, side: str) -> tuple[dict[str, object], pd.Series]:
+    col = f"f_{side}_setup_prob"
+    if col not in df30.columns:
+        raise ValueError(f"Missing joined setup prediction column: {col}")
+    values = pd.to_numeric(df30[col], errors="coerce")
+    finite = values[np.isfinite(values)]
+    return {
+        "finite_count": int(len(finite)),
+        "missing_count": int(len(df30) - len(finite)),
+        "unique_values": int(finite.round(8).nunique()) if len(finite) else 0,
+        "min": float(finite.min()) if len(finite) else None,
+        "max": float(finite.max()) if len(finite) else None,
+        "mean": float(finite.mean()) if len(finite) else None,
+    }, finite
+
+
+def validate_setup_prediction_columns(df30: pd.DataFrame, min_unique_values: int) -> dict[str, object]:
+    summary: dict[str, object] = {"rows": int(len(df30)), "min_unique_values": int(min_unique_values), "sides": {}}
+    errors: list[str] = []
+    for side in ["long", "short"]:
+        side_summary, finite = setup_prediction_side_summary(df30, side)
+        summary["sides"][side] = side_summary
+        if side_summary["missing_count"] > 0:
+            errors.append(f"{side} setup predictions missing for {side_summary['missing_count']} retained rows")
+        if side_summary["unique_values"] < min_unique_values:
+            errors.append(f"{side} setup predictions have {side_summary['unique_values']} unique values, need >= {min_unique_values}")
+        if side_summary["unique_values"] == 1 and len(finite) and float(finite.iloc[0]) == ENTRY_SCORE_PROXY_BOOTSTRAP:
+            errors.append(f"{side} setup predictions look like bootstrap constant {ENTRY_SCORE_PROXY_BOOTSTRAP}")
+    summary["errors"] = errors
+    if errors:
+        raise ValueError("Invalid OOF setup predictions: " + "; ".join(errors))
+    return summary
+
+
+def apply_setup_predictions(df30: pd.DataFrame, setup_predictions: pd.DataFrame | None, min_unique_values: int) -> pd.DataFrame:
+    if setup_predictions is None:
+        if ALLOW_BOOTSTRAP_SETUP_PROXY:
+            warn_bootstrap_score_proxy_once()
+            return df30
+        raise ValueError(
+            "--setup-predictions-csv is required by default. Generate OOF setup scores with "
+            "generate_walk_forward_setup_predictions.py or pass --allow-bootstrap-setup-proxy for research-only smoke tests."
+        )
+    merged = df30.merge(
+        setup_predictions,
+        how="left",
+        left_on=["Symbol", "_ts"],
+        right_on=["Symbol", "_setup_ts"],
+        validate="many_to_one",
+    )
+    matched = merged["is_oof_setup_prediction"].fillna(0).astype(int).eq(1)
+    retained = merged[matched].copy()
+    dropped = len(merged) - len(retained)
+    if retained.empty:
+        raise ValueError("No 30s rows retained after joining OOF setup predictions.")
+    if dropped:
+        print(f"OOF_SETUP_JOIN dropped_unscored_30s_rows={dropped} retained_rows={len(retained)}")
+    retained = retained.drop(columns=[col for col in ["_setup_ts"] if col in retained.columns])
+    summary = validate_setup_prediction_columns(retained, min_unique_values=min_unique_values)
+    print("OOF_SETUP_JOIN summary=" + json.dumps(summary, sort_keys=True))
+    return retained.reset_index(drop=True)
 
 
 def first_available_price_array(df: pd.DataFrame, names: Iterable[str]) -> np.ndarray | None:
@@ -751,6 +891,8 @@ def build_streamed_staging_datasets(
     max_staged_rows_per_symbol_per_model: int,
     max_entry_events_per_symbol_side: int,
     random_state: int,
+    setup_predictions: pd.DataFrame | None,
+    min_setup_score_unique_values: int,
 ) -> dict[str, Path]:
     dataset_paths = {
         "long_lifecycle": staging_dir / "long_lifecycle_rows.csv",
@@ -772,6 +914,7 @@ def build_streamed_staging_datasets(
             break
         print(f"STREAM symbol={symbol} pair={index}/{len(pairs)} 30s={path30.name} 5s={path5.name}", flush=True)
         df30 = assign_simple_regime(ensure_entry_labels(load_bar_csv(str(path30), "30s")))
+        df30 = apply_setup_predictions(df30, setup_predictions, min_unique_values=min_setup_score_unique_values)
         symbol_entries = int(df30["Label_Long_Entry"].sum()) + int(df30["Label_Short_Entry"].sum())
         per_symbol_cap = 0 if max_entry_events <= 0 else remaining
 
@@ -855,13 +998,16 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
 
 
 def main() -> None:
+    global ALLOW_BOOTSTRAP_SETUP_PROXY
     args = parse_args()
+    ALLOW_BOOTSTRAP_SETUP_PROXY = bool(args.allow_bootstrap_setup_proxy or ALLOW_BOOTSTRAP_SETUP_PROXY)
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir).expanduser() if args.output_dir else DEFAULT_MODEL_EXPORTS_ROOT / f"lifecycle_micro_{run_tag}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     input_30s = Path(args.input_30s_csv).expanduser()
     input_5s = Path(args.input_5s_csv).expanduser()
+    setup_predictions = load_setup_predictions(args.setup_predictions_csv) if args.setup_predictions_csv else None
     pairs = discover_symbol_pairs(input_30s, input_5s)
     if pairs:
         staging_dir = Path(args.staging_dir).expanduser() if args.staging_dir else output_dir / "staged_lifecycle_micro_rows"
@@ -873,6 +1019,8 @@ def main() -> None:
             args.max_staged_rows_per_symbol_per_model,
             args.max_entry_events_per_symbol_side,
             args.random_state,
+            setup_predictions,
+            args.min_setup_score_unique_values,
         )
         datasets = [
             (load_staged_training_frame(staged["long_lifecycle"], args.max_train_rows_per_model, args.random_state + 101), "Label_Long_ExitLifecycle", "longExitLifecycleAi", "long_exit_lifecycle.onnx", "lifecycle"),
@@ -885,6 +1033,7 @@ def main() -> None:
     else:
         print(f"Loading 30s data: {args.input_30s_csv}")
         df30 = assign_simple_regime(ensure_entry_labels(load_bar_csv(args.input_30s_csv, "30s")))
+        df30 = apply_setup_predictions(df30, setup_predictions, min_unique_values=args.min_setup_score_unique_values)
         print(f"Loading 5s data: {args.input_5s_csv}")
         df5 = load_bar_csv(args.input_5s_csv, "5s")
 
