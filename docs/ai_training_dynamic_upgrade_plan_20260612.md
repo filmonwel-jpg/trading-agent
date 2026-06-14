@@ -1294,6 +1294,46 @@ Replay report requirements:
 - decision parity for arms, entries, holds, exits, and guard exits,
 - explanation of every mismatch above tolerance.
 
+### 7. Mirror offline sanity gates in live and backtester routes
+
+The offline pilot has now passed a sequence of machine-checkable gates: source hashes, DBN decode audits, paired-date selection, pre-build file checks, fixed-quality 10-day build, post-build artifact verification, and quality-sanity validation. Live and backtester routes must implement equivalent gates before any model bundle is considered paper/live promotable.
+
+Required implementation surface:
+
+- `scripts/databento_live_normalizer.py`: emit live-shaped bars with the same quality/provenance fields as offline buckets.
+- `scripts/databento_historical_streamer.py`: emit replay bars with the same event schema as live, including timestamp provenance and quality fields.
+- `src/main/java/com/calgary/fili/trader/bot/trader/DatabentoEvent.java`: add fields for quality/provenance/schema metadata so Java can validate them instead of ignoring them.
+- `src/main/java/com/calgary/fili/trader/bot/trader/IBKRTrader.java`: consume quality fields, update feed-health counters, and block new entries when feature/quality contracts fail.
+- `src/main/java/com/calgary/fili/trader/bot/trader/DatabentoLiveGateway.java` and `DatabentoFeedHealth.java`: surface parse, schema, staleness, bar-count, and quality-contract failures in health/status endpoints.
+- `src/main/java/com/calgary/fili/trader/testers/DatabentoHistoricalStreamingBacktester.java`: write replay/backtest sanity artifacts equivalent to offline verifier outputs.
+- `src/main/java/com/calgary/fili/trader/testers/DatabentoHistoricalReplayProvider.java`: preserve quality columns when replaying combined CSV outputs; never aggregate by future state.
+
+Live route must add:
+
+1. Startup preflight manifest with dataset/schema/stype, symbol universe, option parents, quality thresholds, model bundle ID, feature schema hash, clock source, as-of lag tolerance, and output/log root.
+2. NDJSON event schema version and timestamp provenance (`ts_event`, `ts_recv` or local arrival timestamp, `barEpochSec`, source dataset/schema, historical/live flag).
+3. The same quality fields used offline: `DataQualityFlags`, `ChildDataQualityFlagUnion`, `TradeSecondsPresent`, `QuoteUpdateSecondsPresent`, `QuoteStateSecondsValid`, `SyntheticSeconds`, `TradeCoverage`, `QuoteUpdateCoverage`, `QuoteStateCoverage`, `SyntheticCoverage`, `QuoteAgeMsMean`, `QuoteAgeMsMax`, `ValidSpreadCoverage`, `LockedCrossedSeconds`, and `QualityScore`.
+4. Forward-fill-only state handling. Live code may carry past-known bid/ask/close forward while it remains within staleness tolerance, but it must never use future/next-row state to repair current bars.
+5. Runtime sanity counters by symbol/cadence: expected bars, seen bars, missing bars, stale/no-quote/synthetic/locked-crossed counts, parent-child flag diff fraction, quality-score distribution, feature-vector rejection count, and model-inference skip reason.
+6. Fail-safe behavior: schema mismatch, missing quality fields, low quality score, or excessive staleness should block new entries and emit diagnostics; flatten/emergency-exit paths must remain available.
+
+Backtester/replay route must add:
+
+1. Replay source manifest/hashes and date-window contract, equivalent to the offline `source_inventory_hashes_*` and `pilot_dates_*` artifacts.
+2. Event-count and cadence-count summaries equivalent to `pilot_build_check_*` and `pilot_quality_sanity_*` outputs.
+3. Strict timestamp/as-of checks proving no replay event or option/equity state from the future is visible at a decision timestamp.
+4. Feature-vector parity reports comparing replay-generated vectors against the offline fixed-quality dataset for the same symbol/timestamp where available.
+5. Decision-parity reports comparing arms, entries, holds, exits, guard exits, scores, thresholds, and skip reasons.
+6. Machine-readable artifacts under the external output root with `errors=[]` required before promotion.
+
+Minimum acceptance criteria before promotion:
+
+- Live and replay both produce sanity JSON/CSV artifacts.
+- `1s` leaf quality may have `DataQualityFlags == ChildDataQualityFlagUnion`; `5s`/`30s` parent quality must be threshold-derived and must not be a blind child-union copy.
+- Schema/version/hash mismatches fail fast.
+- Any replay/live mismatch above tolerance is explained and either fixed or explicitly quarantined.
+- The backtester must run on the same live-shaped event path as production; CSV-only backtests are comparison/debug artifacts, not promotion evidence.
+
 ## Next execution plan while new downloads are in progress
 
 This section turns the current-code investigation into the next concrete plan for organizing the incoming data, selecting model families, using new feature families, and evolving the live strategy route.

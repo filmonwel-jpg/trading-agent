@@ -1057,6 +1057,45 @@ Run backtests in three modes:
   - trade quality score.
 - If total PnL improves only by taking far fewer trades, report that separately.
 
+### Sanity parity required before live/paper promotion
+
+The June 13 fixed-quality Databento pilot established a repeatable sanity-gate sequence: source hashes, DBN decode audits, paired-date manifest, prebuild source-file checks, fixed-quality build verification, and quality-sanity validation. The live and backtester paths must mirror those controls before any upgraded model bundle can be treated as paper/live promotable.
+
+Implementation requirements:
+
+1. **Shared event contract**
+   - Extend `DatabentoEvent.java` and the Python emitters (`scripts/databento_live_normalizer.py`, `scripts/databento_historical_streamer.py`) so live and replay events can carry the same quality/provenance fields used in the offline 1s/5s/30s build.
+   - Required fields include `DataQualityFlags`, `ChildDataQualityFlagUnion`, `TradeCoverage`, `QuoteUpdateCoverage`, `QuoteStateCoverage`, `SyntheticCoverage`, `QuoteAgeMsMean`, `QuoteAgeMsMax`, `ValidSpreadCoverage`, `LockedCrossedSeconds`, `QualityScore`, event schema version, source dataset/schema, and timestamp provenance.
+
+2. **No-lookahead replay/live aggregation**
+   - Live, historical streamer, and `DatabentoHistoricalReplayProvider` aggregation must be forward-fill-only from already observed state.
+   - No future `bfill()`, next-row quote repair, or end-of-bucket lookahead may be used to populate an earlier decision timestamp.
+   - Replay must assert that OPRA/equity state used for a decision has `ts_event`/arrival time at or before that decision timestamp within the documented tolerance.
+
+3. **Live startup preflight**
+   - Before trading starts, write a machine-readable manifest containing dataset/schema/stype, symbol universe, option parents, quality thresholds, feature schema hash, model bundle ID, Databento clock assumptions, and output/log root.
+   - If required quality fields, feature-schema hashes, or model manifest fields are missing, block new entries and keep only flatten/emergency exits available.
+
+4. **Runtime sanity counters**
+   - `DatabentoFeedHealth` and status endpoints should expose per-symbol/cadence counts for expected bars, seen bars, missing bars, stale/no-quote/synthetic/locked-crossed states, parent-child quality diff fraction, feature-vector reject counts, and model-inference skip reasons.
+   - These counters should be persisted to session artifacts so live sessions can be replayed and audited.
+
+5. **Backtester sanity artifacts**
+   - `DatabentoHistoricalStreamingBacktester.java` must write replay source manifests, event-count summaries, quality-sanity summaries, feature-vector schema summaries, and decision-parity summaries under the configured external output root.
+   - A replay/backtest run is promotion-eligible only if its sanity artifact reports `errors=[]` and all mismatches above tolerance are explained.
+
+6. **Decision parity gate**
+   - A recorded live-shaped NDJSON stream must be replayed through the backtester.
+   - The report must compare bucket boundaries, quality fields, feature vectors, setup/entry/exit scores, thresholds, arms, entries, holds, exits, guard exits, and skip reasons.
+   - Any mismatch above tolerance blocks promotion until fixed or quarantined.
+
+Acceptance for the upgraded runtime path:
+
+- `1s` leaf quality may have `DataQualityFlags == ChildDataQualityFlagUnion`.
+- `5s`/`30s` parent quality must be threshold-derived and must not be a blind child-flag union.
+- Live and replay both produce sanity JSON/CSV outputs similar to `pilot_build_check_*` and `pilot_quality_sanity_*`.
+- CSV-only historical comparisons remain useful for debugging, but promotion requires the live-shaped event/replay path.
+
 ---
 
 ## Phase 6 — Model Promotion and Runtime Rollout

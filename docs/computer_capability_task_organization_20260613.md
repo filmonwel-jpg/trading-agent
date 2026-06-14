@@ -297,6 +297,31 @@ Action done:
 
 - Pending.
 
+### Step 10 — Live/backtester sanity parity requirements
+
+Action plan:
+
+- Before any C1/C2-fixed bundle is considered for paper/live, make the live route and replay/backtester route prove the same sanity properties that the offline pilot has now proven.
+- Treat the following files as the first implementation surface:
+  - Live Python producer: `scripts/databento_live_normalizer.py`.
+  - Live Java event contract: `src/main/java/com/calgary/fili/trader/bot/trader/DatabentoEvent.java`.
+  - Live Java consumer/health path: `src/main/java/com/calgary/fili/trader/bot/trader/IBKRTrader.java`, `DatabentoLiveGateway.java`, and `DatabentoFeedHealth.java`.
+  - Historical/replay producer: `scripts/databento_historical_streamer.py`.
+  - Streaming backtester: `src/main/java/com/calgary/fili/trader/testers/DatabentoHistoricalStreamingBacktester.java`.
+  - CSV/replay helper: `src/main/java/com/calgary/fili/trader/testers/DatabentoHistoricalReplayProvider.java`.
+- Extend the live/replay NDJSON event contract so every emitted bar can carry the same sanity fields used offline: `DataQualityFlags`, `ChildDataQualityFlagUnion`, `TradeSecondsPresent`, `QuoteUpdateSecondsPresent`, `QuoteStateSecondsValid`, `SyntheticSeconds`, `TradeCoverage`, `QuoteUpdateCoverage`, `QuoteStateCoverage`, `SyntheticCoverage`, `QuoteAgeMsMean`, `QuoteAgeMsMax`, `ValidSpreadCoverage`, `LockedCrossedSeconds`, `QualityScore`, timestamp provenance, and schema/version metadata.
+- Make live and replay aggregation forward-fill only from already observed state; do not introduce any future `bfill()` or next-row quote/price fallback in Java, Python live normalizer, historical streamer, or replay provider.
+- Add live startup preflight that records the feed/model/schema contract: dataset, schema, stype, symbol universe, option parents, model bundle ID, feature schema hash, quality-threshold constants, clock source, as-of lag tolerance, and output/log root.
+- Add live session sanity counters by symbol and cadence: expected/seen bar count, missing seconds/bars, no-trade/no-quote/synthetic/stale/locked-crossed counts, parent-child flag diff fraction, quality-score distribution, and feature-vector rejected count.
+- Add runtime safety behavior: low-quality or schema-mismatch state should block new entries and write diagnostics; it should not silently use malformed feature vectors. Emergency exits/flattening must remain available.
+- Add backtester/replay artifacts equivalent to the offline checks: replay source manifest/hashes, replay date window, event-count summary, feature-vector schema summary, quality-sanity summary, and decision-parity report.
+- Add recorded-event replay promotion gate: record a live-shaped NDJSON stream, replay it through `DatabentoHistoricalStreamingBacktester`, and compare bucket boundaries, quality fields, feature vectors, model scores, and decisions against live/backtest expectations.
+- Acceptance criteria for this step: live and backtester both emit machine-readable sanity JSON/CSV artifacts with `errors=[]`; `1s` parent/child flags are expected to match, while `5s`/`30s` parent flags must be threshold-derived and not blind child-union copies; replay must prove no lookahead by timestamp/as-of checks.
+
+Action done:
+
+- Documented requirements only. Implementation is pending and must happen before any paper/live promotion of a C1/C2-fixed or `mbp-1`/`tcbbo`-expanded bundle.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 1. Use the fixed builders only; old `20260523` staged datasets are pre-fix artifacts.
