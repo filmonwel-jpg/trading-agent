@@ -243,7 +243,27 @@ Action plan:
 Action done:
 
 - Added repeatable verifier `scripts/verify_databento_pilot_build.py` with tests in `tests/test_verify_databento_pilot_build.py`.
-- Pending on the 48GB/write-capable computer: run the verifier against `model_training_sets/pilot_10d_fixed_quality_20260613_173446` and inspect `pilot_build_check.json` before starting labels or training.
+- Completed on the 48GB/write-capable computer under `raw_audits/pilot_build_check_20260613_220839`.
+- `scripts/verify_databento_pilot_build.py` returned `PILOT_BUILD_CHECK=PASS` for `model_training_sets/pilot_10d_fixed_quality_20260613_173446`.
+- Verification summary: `errors=[]`, `warnings=[]`, `assessment_report_rows=5`, `file_summary_count=18`, `expected_days=10`, `expected_symbols=[TSLA,TQQQ,NVDA,SPY,QQQ]`, and `total_output_gib=1.354`.
+- Verification artifacts:
+  - `raw_audits/pilot_build_check_20260613_220839/pilot_build_check.json`
+  - `raw_audits/pilot_build_check_20260613_220839/pilot_build_file_summary.csv`
+- Decision: the fixed-quality 10-day baseline artifact is structurally valid. Do not start model training yet; inspect quality distributions and then proceed to C3/C4 setup-prediction blockers.
+
+### Step 8 — Fixed-quality baseline quality sanity review
+
+Action plan:
+
+- Inspect `pilot_build_file_summary.csv` from `raw_audits/pilot_build_check_20260613_220839`.
+- Confirm `DataQualityFlags` and `ChildDataQualityFlagUnion` are not accidentally identical everywhere for `5s`/`30s` outputs.
+- Confirm quality metric columns are populated across combined and per-symbol files.
+- Review per-symbol row counts, date coverage, and parent/child quality-flag values before using this build for labels or training.
+- If the sanity review is clean, treat `model_training_sets/pilot_10d_fixed_quality_20260613_173446` as the first C1/C2-fixed baseline dataset for downstream label/prediction infrastructure testing only.
+
+Action done:
+
+- Pending. The next command should read and summarize `raw_audits/pilot_build_check_20260613_220839/pilot_build_file_summary.csv` on the 48GB/write-capable computer.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
