@@ -312,6 +312,7 @@ Action done:
   - `train_lifecycle_micro_models.py --setup-predictions-csv ... --max-entry-events 2000 --no-onnx` retained `28780` joined 30s rows, dropped `10220` intentionally unscored early rows, trained all six lifecycle/micro smoke models, and wrote `raw_audits/lifecycle_micro_setup_smoke_20260613/lifecycle_micro_scorecard.csv` plus `lifecycle_micro_route_manifest.json`.
   - Audit bundle copied to `raw_audits/c3_c4_10d_smoke_20260614_002956` with the setup manifest, lifecycle/micro route manifest, and scorecard.
   - Durable setup-prediction run copied under `model_training_sets/setup_oof_fixed_quality_20260614_003310`, writing `oof_setup_predictions.csv` and `oof_setup_predictions.manifest.json` with the same clean gates: `errors=[]`, `warnings=[]`, `row_count=35685`, `trainable_oof_rows=28780`, and `trainable_oof_frac=0.806501331091495`.
+  - Durable lifecycle/micro smoke using that setup OOF artifact wrote `model_training_sets/lifecycle_micro_fixed_quality_setup_oof_20260614_004734/lifecycle_micro_scorecard.csv` and `lifecycle_micro_route_manifest.json`; it retained the same `28780` joined 30s rows, dropped the same `10220` intentionally unscored early rows, and trained all six smoke routes with ONNX export disabled.
 - Added regression tests:
   - `tests/test_generate_walk_forward_setup_predictions.py`
   - expanded `tests/test_lifecycle_micro_models.py`.
