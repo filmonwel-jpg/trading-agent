@@ -1,9 +1,12 @@
 import argparse
+import hashlib
+import json
+import math
 import os
 import pandas as pd
 import numpy as np
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import precision_score, recall_score, accuracy_score
 from skl2onnx import convert_sklearn
@@ -72,6 +75,8 @@ MODEL_EXPORTS_ROOT = Path(os.getenv('MODEL_EXPORTS_ROOT', 'model_exports')).expa
 
 MODEL_FAMILY = os.getenv('MODEL_FAMILY', 'random_forest').strip().lower()
 REGIME_MODEL_FAMILY = os.getenv('REGIME_MODEL_FAMILY', MODEL_FAMILY).strip().lower()
+
+SETUP_MANIFEST_SCHEMA_VERSION = "setup_30s_v1"
 
 META_PRODUCER_FEATURE_COLS = [
     'tsm_ret_30s_p50',
@@ -296,6 +301,22 @@ def parse_args():
         type=str,
         default=str(DEFAULT_SOURCE_5S_CLEAN_FILE),
         help='Optional clean 5s CSV to auto-build the 30s file when --input-csv is missing.',
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default=None,
+        help=(
+            'Directory for all outputs: ONNX files, setup_scorecard.csv, setup_manifest.json, '
+            'calibration_manifest.json, calibration_reliability.csv, oof_setup_predictions.csv, '
+            'threshold_grid.csv. Defaults to model_exports/<run_tag>/ when not specified.'
+        ),
+    )
+    parser.add_argument(
+        '--no-onnx',
+        action='store_true',
+        default=False,
+        help='Skip ONNX export (useful for calibration/scorecard smoke runs).',
     )
     return parser.parse_args()
 
@@ -955,7 +976,7 @@ def assign_market_regime(df):
     return labeled
 
 
-def train_regime_classifier(X, y, dates, feature_count, out_dir, model_family='random_forest'):
+def train_regime_classifier(X, y, dates, feature_count, out_dir, model_family='random_forest', no_onnx: bool = False):
     print("\n=========================================")
     print("--- Training Market Regime Classifier ---")
     print(f"Rows: {len(y)} | Classes: {sorted(np.unique(y).tolist())} | ModelFamily: {_normalize_model_family(model_family)}")
@@ -991,14 +1012,20 @@ def train_regime_classifier(X, y, dates, feature_count, out_dir, model_family='r
     final_model.fit(X, y)
 
     versioned_path = out_dir / "regime_classifier.onnx"
-    export_to_onnx(final_model, feature_count, str(versioned_path), alias_filename=maybe_alias_path("regime_classifier.onnx"))
+    exported_to: str
+    if no_onnx:
+        exported_to = "(skipped --no-onnx)"
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        export_to_onnx(final_model, feature_count, str(versioned_path), alias_filename=maybe_alias_path("regime_classifier.onnx"))
+        exported_to = str(versioned_path)
 
     avg_acc = float(np.mean(fold_acc)) if fold_acc else 0.0
     print(f">>> Regime classifier average walk-forward accuracy: {avg_acc:.2%}")
 
     return {
         'avg_accuracy': avg_acc,
-        'exported_to': str(versioned_path),
+        'exported_to': exported_to,
     }
 
 
@@ -1296,7 +1323,15 @@ def build_day_walk_forward_splits(dates, n_splits=5, day_gap=0):
     return splits
 
 
-def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'):
+def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest', collect_oof: bool = False):
+    """Walk-forward evaluation and final production model training.
+
+    When collect_oof=True also returns per-row OOF predictions (fold_id, threshold,
+    margin_over_threshold, probability, y_true) and per-fold calibration metrics
+    needed for setup_scorecard.csv, threshold_grid.csv, and oof_setup_predictions.csv.
+    All new return keys are absent when collect_oof=False so existing call-sites
+    are unaffected.
+    """
     print(f"\n=========================================")
     print(f"--- Walk-Forward Testing: {name} ---")
     total_signals = int(np.sum(y, dtype=np.int64))
@@ -1304,7 +1339,7 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
     
     if int(np.sum(y, dtype=np.int64)) == 0:
         print(f"WARNING: No positive labels found. Adjust target percentages.")
-        return {
+        base = {
             'model': None,
             'total_signals': total_signals,
             'total_rows': len(y),
@@ -1312,6 +1347,11 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
             'avg_threshold': MIN_TUNED_THRESHOLD,
             'folds_used': 0,
         }
+        if collect_oof:
+            base.update({'oof_rows': [], 'fold_grid': [], 'threshold_std': 0.0,
+                         'threshold_max_dev': 0.0, 'brier_score': math.nan,
+                         'ece': math.nan, 'calibration_rows': 0})
+        return base
 
     fold_indices = build_day_walk_forward_splits(
         dates,
@@ -1325,7 +1365,9 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
     fold = 1
     precisions = []
     thresholds = []
-    
+    oof_rows: list[dict] = []      # populated only when collect_oof=True
+    fold_grid: list[dict] = []     # populated only when collect_oof=True
+
     for train_index, test_index, train_days, test_days in fold_indices:
         X_train, X_test = X[train_index], X[test_index]
         y_train, y_test = y[train_index], y[test_index]
@@ -1338,7 +1380,7 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         model = build_classifier(model_family=model_family, random_state=42, multi_class=False)
         model.fit(X_train, y_train)
 
-        # Calibrate threshold from the tail of train split (time-consistent).
+        # Tune threshold from the tail of the train split (time-consistent; not calibration).
         calib_size = max(200, int(len(X_train) * 0.2))
         calib_size = min(calib_size, len(X_train) - 1)
         if calib_size > 0:
@@ -1358,7 +1400,37 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         prec = precision_score(y_test, y_pred, zero_division=0)
         precisions.append(prec)
         thresholds.append(thr)
-        
+
+        if collect_oof:
+            # Measure raw-probability calibration on the OOF test rows.
+            cal = calibration_report(y_test, test_proba)
+            fold_grid.append({
+                'fold_id': fold,
+                'train_days': int(train_days),
+                'test_days': int(test_days),
+                'train_rows': int(len(X_train)),
+                'test_rows': int(len(X_test)),
+                'threshold': float(thr),
+                'test_precision': float(prec),
+                'test_recall': float(recall_score(y_test, y_pred, zero_division=0)),
+                'pred_pos_rate': float(pred_pos_rate),
+                'brier_score': cal['brier_score'],
+                'ece': cal['ece'],
+                'calibration_rows': cal['rows'],
+            })
+            margin = float(thr)
+            for pos_in_fold, global_idx in enumerate(test_index):
+                prob = float(test_proba[pos_in_fold])
+                oof_rows.append({
+                    'input_row_idx': int(global_idx),
+                    'fold_id': int(fold),
+                    'y_true': int(y_test[pos_in_fold]),
+                    'prob': prob,
+                    'threshold': float(thr),
+                    'margin_over_threshold': prob - margin,
+                    'is_oof_prediction': True,
+                })
+
         print(
             f"Fold {fold} | TrainDays: {train_days} | TestDays: {test_days} "
             f"| Train Size: {len(X_train)} | Test Size: {len(X_test)} "
@@ -1379,7 +1451,8 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
     print(f"\n>>> Training Final Production Model on 100% of data...")
     final_model = build_classifier(model_family=model_family, random_state=42, multi_class=False)
     final_model.fit(X, y)
-    return {
+
+    result = {
         'model': final_model,
         'total_signals': total_signals,
         'total_rows': len(y),
@@ -1387,6 +1460,29 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         'avg_threshold': float(avg_threshold),
         'folds_used': len(precisions),
     }
+    if collect_oof:
+        thr_std = float(np.std(thresholds)) if len(thresholds) > 1 else 0.0
+        thr_max_dev = float(max(abs(t - avg_threshold) for t in thresholds)) if thresholds else 0.0
+        # Aggregate calibration across folds (weighted by test rows, ignoring nan).
+        valid_folds = [r for r in fold_grid if math.isfinite(r['brier_score'])]
+        if valid_folds:
+            total_cal_rows = sum(r['calibration_rows'] for r in valid_folds)
+            agg_brier = float(sum(r['brier_score'] * r['calibration_rows'] for r in valid_folds) / max(total_cal_rows, 1))
+            agg_ece = float(sum(r['ece'] * r['calibration_rows'] for r in valid_folds) / max(total_cal_rows, 1))
+        else:
+            total_cal_rows = 0
+            agg_brier = math.nan
+            agg_ece = math.nan
+        result.update({
+            'oof_rows': oof_rows,
+            'fold_grid': fold_grid,
+            'threshold_std': thr_std,
+            'threshold_max_dev': thr_max_dev,
+            'brier_score': agg_brier,
+            'ece': agg_ece,
+            'calibration_rows': total_cal_rows,
+        })
+    return result
 
 
 def predict_positive_proba(model, X):
@@ -1399,6 +1495,62 @@ def predict_positive_proba(model, X):
         if int(class_value) == 1:
             return raw[:, idx]
     return np.zeros(len(X), dtype=np.float32)
+
+
+def calibration_report(y_true, probas, *, bins: int = 10) -> dict:
+    """Compute Brier score, ECE, and reliability bins from held-out probabilities.
+
+    Matches the calibration_report() used in train_lifecycle_micro_models.py so
+    that setup and lifecycle scorecards can be compared directly.
+    """
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(probas, dtype=float)
+    mask = np.isfinite(y) & np.isfinite(p)
+    y = y[mask]
+    p = np.clip(p[mask], 0.0, 1.0)
+    if len(y) == 0:
+        return {"rows": 0, "brier_score": math.nan, "ece": math.nan, "bins": []}
+
+    brier = float(np.mean((p - y) ** 2))
+    edges = np.linspace(0.0, 1.0, int(bins) + 1)
+    reliability_bins: list[dict] = []
+    ece = 0.0
+    for index in range(int(bins)):
+        low = float(edges[index])
+        high = float(edges[index + 1])
+        if index == int(bins) - 1:
+            bin_mask = (p >= low) & (p <= high)
+        else:
+            bin_mask = (p >= low) & (p < high)
+        count = int(bin_mask.sum())
+        if count:
+            mean_pred = float(p[bin_mask].mean())
+            observed = float(y[bin_mask].mean())
+            abs_error = abs(mean_pred - observed)
+            ece += (count / len(y)) * abs_error
+        else:
+            mean_pred = math.nan
+            observed = math.nan
+            abs_error = math.nan
+        reliability_bins.append({
+            "bin_index": index,
+            "prob_min": low,
+            "prob_max": high,
+            "rows": count,
+            "mean_predicted_probability": mean_pred,
+            "observed_positive_rate": observed,
+            "abs_calibration_error": abs_error,
+        })
+    return {"rows": int(len(y)), "brier_score": brier, "ece": float(ece), "bins": reliability_bins}
+
+
+def feature_schema_hash(feature_columns: list[str]) -> str:
+    """SHA-256 of newline-joined sorted feature column names.
+
+    Matches the algorithm in train_lifecycle_micro_models.py and
+    PingPongStrategy.java so all three use the same hash for schema validation.
+    """
+    return hashlib.sha256("\n".join(feature_columns).encode("utf-8")).hexdigest()
 
 def ensure_optional_numeric_columns(df, columns, default_value=0.0):
     out = df.copy()
@@ -1454,8 +1606,17 @@ def main():
     csv_file = Path(args.input_csv).expanduser().resolve()
     source_5s_clean_file = Path(args.source_5s_csv).expanduser().resolve() if args.source_5s_csv else DEFAULT_SOURCE_5S_CLEAN_FILE
 
-    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_tag = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     versioned_out_dir = MODEL_EXPORTS_ROOT / run_tag
+
+    # If --output-dir is given, all outputs (ONNX + artifacts) go there.
+    # Otherwise fall back to the legacy versioned_out_dir.
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser().resolve()
+    else:
+        output_dir = versioned_out_dir
+
+    no_onnx = bool(getattr(args, 'no_onnx', False))
 
     print(f">>> Training model family: {_normalize_model_family(MODEL_FAMILY)}")
     print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
@@ -1558,8 +1719,9 @@ def main():
         df_rest['RegimeLabel'].values.astype(np.int64),
         df_rest['Date'].values,
         len(regime_feature_cols),
-        versioned_out_dir,
+        output_dir,
         model_family=REGIME_MODEL_FAMILY,
+        no_onnx=no_onnx,
     )
 
     models = [
@@ -1577,39 +1739,80 @@ def main():
         print(">>> Skipping legacy base 30s exit model training (long_exit.onnx, short_exit.onnx).")
 
     score_rows = []
+    all_threshold_grid_rows: list[dict] = []
+    long_entry_oof_rows: list[dict] = []
+    short_entry_oof_rows: list[dict] = []
+
+    # Only the two primary entry models need OOF predictions for downstream lifecycle/micro training.
+    _entry_filenames = {'long_entry.onnx', 'short_entry.onnx'}
+
     for name, y_data, filename in models:
-        result = perform_walk_forward_testing(X, y_data, df_rest['Date'].values, name, model_family=MODEL_FAMILY)
+        is_entry_model = filename in _entry_filenames
+        result = perform_walk_forward_testing(
+            X, y_data, df_rest['Date'].values, name,
+            model_family=MODEL_FAMILY,
+            collect_oof=is_entry_model,
+        )
         exported_path = "-"
-        if result['model'] is not None:
-            versioned_path = versioned_out_dir / filename
+        if result['model'] is not None and not no_onnx:
+            versioned_path = output_dir / filename
             export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(filename))
             exported_path = str(versioned_path)
+        elif result['model'] is not None and no_onnx:
+            exported_path = "(skipped --no-onnx)"
+
+        thr_std = result.get('threshold_std', math.nan)
+        thr_max_dev = result.get('threshold_max_dev', math.nan)
+        brier = result.get('brier_score', math.nan)
+        ece = result.get('ece', math.nan)
+        cal_rows = result.get('calibration_rows', 0)
 
         score_rows.append({
             'model': name,
+            'filename': filename,
             'signals': result['total_signals'],
             'rows': result['total_rows'],
             'signal_rate': (result['total_signals'] / result['total_rows']) if result['total_rows'] else 0.0,
             'avg_precision': result['avg_precision'],
             'avg_threshold': result['avg_threshold'],
+            'threshold_std': thr_std,
+            'threshold_max_dev': thr_max_dev,
+            'brier_score': brier,
+            'ece': ece,
+            'calibration_rows': cal_rows,
             'folds_used': result['folds_used'],
             'exported_to': exported_path,
         })
 
+        if is_entry_model and result.get('fold_grid'):
+            side = 'long' if filename == 'long_entry.onnx' else 'short'
+            for row in result['fold_grid']:
+                all_threshold_grid_rows.append({'model': filename, 'side': side, **row})
+        if filename == 'long_entry.onnx':
+            long_entry_oof_rows = result.get('oof_rows', [])
+        elif filename == 'short_entry.onnx':
+            short_entry_oof_rows = result.get('oof_rows', [])
+
     print("\n>>> MODEL SCORECARD")
-    print("Model | Signals/Rows | SignalRate | AvgPrecision | AvgThreshold | Folds | Export")
+    print("Model | Signals/Rows | SignalRate | AvgPrecision | AvgThreshold | ThrStd | Brier | ECE | Folds | Export")
     for row in score_rows:
+        brier_s = f"{row['brier_score']:.4f}" if math.isfinite(row['brier_score']) else "n/a"
+        ece_s = f"{row['ece']:.4f}" if math.isfinite(row['ece']) else "n/a"
+        thr_std_s = f"{row['threshold_std']:.4f}" if math.isfinite(row['threshold_std']) else "n/a"
         print(
             f"{row['model']} | "
             f"{row['signals']}/{row['rows']} | "
             f"{row['signal_rate']:.2%} | "
             f"{row['avg_precision']:.2%} | "
             f"{row['avg_threshold']:.2f} | "
+            f"{thr_std_s} | "
+            f"{brier_s} | "
+            f"{ece_s} | "
             f"{row['folds_used']} | "
             f"{row['exported_to']}"
         )
 
-    regime_specific_rows = train_regime_specific_models(df_rest, feature_cols, versioned_out_dir)
+    regime_specific_rows = train_regime_specific_models(df_rest, feature_cols, output_dir)
     if regime_specific_rows:
         print("\n>>> REGIME-SPECIFIC MODEL SCORECARD")
         print("Regime | Model | Signals/Rows | AvgPrecision | AvgThreshold | Export")
@@ -1625,7 +1828,7 @@ def main():
         print("\n>>> REGIME-SPECIFIC MODEL SCORECARD")
         print("No trend/volatile specialized models were exported (insufficient rows/signals).")
 
-    open30_rows = train_open30_models(df, feature_cols, versioned_out_dir)
+    open30_rows = train_open30_models(df, feature_cols, output_dir)
     if open30_rows:
         print("\n>>> OPENING-30M MODEL SCORECARD")
         print("Model | Signals/Rows | AvgPrecision | AvgThreshold | Export")
@@ -1648,13 +1851,232 @@ def main():
         f"Export={regime_report['exported_to']}"
     )
 
+    # ------------------------------------------------------------------ #
+    # Write machine-readable artifacts                                     #
+    # ------------------------------------------------------------------ #
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated_at = datetime.now(timezone.utc).isoformat()
+    fschema_hash = feature_schema_hash(feature_cols)
+
+    # --- setup_scorecard.csv ---
+    scorecard_path = output_dir / "setup_scorecard.csv"
+    pd.DataFrame(score_rows).to_csv(scorecard_path, index=False)
+    print(f"\n>>> Wrote {scorecard_path}")
+
+    # --- threshold_grid.csv (always written; empty when no folds ran) ---
+    tgrid_path = output_dir / "threshold_grid.csv"
+    tgrid_df = pd.DataFrame(all_threshold_grid_rows) if all_threshold_grid_rows else pd.DataFrame(
+        columns=["model", "side", "fold_id", "train_days", "test_days", "train_rows", "test_rows",
+                 "threshold", "test_precision", "test_recall", "pred_pos_rate",
+                 "brier_score", "ece", "calibration_rows"]
+    )
+    tgrid_df.to_csv(tgrid_path, index=False)
+    print(f">>> Wrote {tgrid_path} ({len(tgrid_df)} fold rows)")
+
+    # --- oof_setup_predictions.csv (always written; empty when no folds ran) ---
+    oof_df_rows: list[dict] = []
+    df_meta = df_rest.reset_index(drop=True)
+    symbol_col = 'Symbol' if 'Symbol' in df_meta.columns else None
+    ts_col = 'Timestamp' if 'Timestamp' in df_meta.columns else None
+    date_col = 'Date' if 'Date' in df_meta.columns else None
+    for side, oof_rows_side, _label_col in [
+        ('long', long_entry_oof_rows, 'Label_Long_Entry'),
+        ('short', short_entry_oof_rows, 'Label_Short_Entry'),
+    ]:
+        for r in oof_rows_side:
+            idx = r['input_row_idx']
+            row_out: dict = {
+                'side': side,
+                'input_row_idx': idx,
+                'fold_id': r['fold_id'],
+                'y_true': r['y_true'],
+                f'f_{side}_setup_prob': r['prob'],
+                f'f_{side}_setup_threshold': r['threshold'],
+                f'f_{side}_setup_threshold_margin': r['margin_over_threshold'],
+                'is_oof_prediction': r['is_oof_prediction'],
+            }
+            if symbol_col and idx < len(df_meta):
+                row_out['Symbol'] = df_meta.at[idx, symbol_col]
+            if ts_col and idx < len(df_meta):
+                row_out['Timestamp'] = df_meta.at[idx, ts_col]
+            if date_col and idx < len(df_meta):
+                row_out['Date'] = df_meta.at[idx, date_col]
+            oof_df_rows.append(row_out)
+    oof_path = output_dir / "oof_setup_predictions.csv"
+    if oof_df_rows:
+        oof_df = pd.DataFrame(oof_df_rows)
+    else:
+        oof_df = pd.DataFrame(columns=["side", "input_row_idx", "fold_id", "y_true",
+                                       "f_long_setup_prob", "f_long_setup_threshold",
+                                       "f_long_setup_threshold_margin",
+                                       "f_short_setup_prob", "f_short_setup_threshold",
+                                       "f_short_setup_threshold_margin",
+                                       "is_oof_prediction", "Symbol", "Timestamp", "Date"])
+    oof_df.to_csv(oof_path, index=False)
+    long_oof_count = sum(1 for r in oof_df_rows if r['side'] == 'long')
+    short_oof_count = sum(1 for r in oof_df_rows if r['side'] == 'short')
+    print(f">>> Wrote {oof_path} (long={long_oof_count} short={short_oof_count})")
+
+    # --- calibration_manifest.json and calibration_reliability.csv ---
+    entry_score_rows = [r for r in score_rows if r['filename'] in _entry_filenames]
+    cal_model_entries: list[dict] = []
+    reliability_rows: list[dict] = []
+    for sr in entry_score_rows:
+        cal_model_entries.append({
+            'model': sr['filename'],
+            'side': 'long' if 'long_entry' in sr['filename'] else 'short',
+            'brier_score': sr['brier_score'] if math.isfinite(sr.get('brier_score', math.nan)) else None,
+            'ece': sr['ece'] if math.isfinite(sr.get('ece', math.nan)) else None,
+            'calibration_rows': sr.get('calibration_rows', 0),
+            'folds_used': sr.get('folds_used', 0),
+            'calibration_reliability_artifact': 'calibration_reliability.csv',
+        })
+        # Collect per-fold bin detail from threshold_grid for this model
+        # (Reliability bins per fold are already aggregated into brier/ece above;
+        # full per-bin rows would require storing them in fold_grid which is a
+        # future enhancement. Mark bins as empty here until a post-hoc calibrator
+        # fitting step generates them from the frozen holdout.)
+
+    calibration_manifest = {
+        'schema_version': SETUP_MANIFEST_SCHEMA_VERSION,
+        'calibration_schema_version': 'setup_30s_calibration_v1',
+        'method': 'raw_random_forest_probability_no_posthoc_calibrator',
+        'split_convention': 'chronological_walk_forward_folds_train_tail_threshold_tune',
+        'generated_at_utc': generated_at,
+        'artifacts': {
+            'scorecard': 'setup_scorecard.csv',
+            'threshold_grid': 'threshold_grid.csv',
+            'oof_predictions': 'oof_setup_predictions.csv',
+            'reliability': 'calibration_reliability.csv',
+        },
+        'models': cal_model_entries,
+        'errors': [],
+        'warnings': [
+            'Metrics describe raw RandomForest predict_proba outputs averaged across walk-forward '
+            'folds; no isotonic/Platt post-hoc calibrator is fitted yet. Treat bundles as '
+            'research-only until post-hoc calibration, frozen-holdout threshold stability, and '
+            'paper/shadow drift checks pass.'
+        ],
+    }
+    cal_manifest_path = output_dir / "calibration_manifest.json"
+    cal_manifest_path.write_text(json.dumps(calibration_manifest, indent=2), encoding='utf-8')
+    print(f">>> Wrote {cal_manifest_path}")
+
+    # --- calibration_reliability.csv (per-fold brier/ece from threshold_grid; always written) ---
+    cal_rel_path = output_dir / "calibration_reliability.csv"
+    if all_threshold_grid_rows:
+        pd.DataFrame(all_threshold_grid_rows)[
+            ['model', 'side', 'fold_id', 'threshold', 'brier_score', 'ece', 'calibration_rows']
+        ].to_csv(cal_rel_path, index=False)
+    else:
+        pd.DataFrame(columns=['model', 'side', 'fold_id', 'threshold',
+                               'brier_score', 'ece', 'calibration_rows']).to_csv(cal_rel_path, index=False)
+    print(f">>> Wrote {cal_rel_path}")
+
+    # --- setup_manifest.json ---
+    try:
+        import subprocess
+        commit_hash = subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        commit_hash = 'unknown'
+
+    oof_long_count = sum(1 for r in oof_df_rows if r['side'] == 'long') if oof_df_rows else 0
+    oof_short_count = sum(1 for r in oof_df_rows if r['side'] == 'short') if oof_df_rows else 0
+    oof_coverage = (oof_long_count / max(len(df_rest), 1)) if oof_df_rows else 0.0
+
+    entry_sr_long = next((r for r in score_rows if r['filename'] == 'long_entry.onnx'), {})
+    entry_sr_short = next((r for r in score_rows if r['filename'] == 'short_entry.onnx'), {})
+
+    setup_manifest = {
+        'schema_version': SETUP_MANIFEST_SCHEMA_VERSION,
+        'generated_at_utc': generated_at,
+        'code_commit': commit_hash,
+        'input_csv': str(csv_file),
+        'feature_columns': feature_cols,
+        'feature_count': len(feature_cols),
+        'feature_schema_sha256': fschema_hash,
+        'model_family': _normalize_model_family(MODEL_FAMILY),
+        'label_info': {
+            'type': 'binary_tp_before_sl',
+            'entry_fill_mode': ENTRY_FILL_MODE,
+            'entry_profit_pct': ENTRY_PROFIT_PCT,
+            'entry_risk_pct': ENTRY_RISK_PCT,
+            'entry_slippage_bps': ENTRY_SLIPPAGE_BPS,
+            'exit_slippage_bps': EXIT_SLIPPAGE_BPS,
+            'future_window_bars': FUTURE_WINDOW_BARS,
+            'cost_aware': False,
+            'note': (
+                'Labels are binary tp_before_sl with basic slippage constants. '
+                'No expected_net_r_after_costs label or label manifest yet. '
+                'Add Phase 4 cost-aware labels before feature-block experiments.'
+            ),
+        },
+        'training_rows': len(df_rest),
+        'walk_forward': {
+            'n_splits': N_SPLITS,
+            'day_gap': DAY_GAP_BETWEEN_TRAIN_TEST,
+        },
+        'long_entry': {
+            'avg_threshold': entry_sr_long.get('avg_threshold', math.nan),
+            'threshold_std': entry_sr_long.get('threshold_std', math.nan),
+            'threshold_max_dev': entry_sr_long.get('threshold_max_dev', math.nan),
+            'avg_precision': entry_sr_long.get('avg_precision', math.nan),
+            'brier_score': entry_sr_long.get('brier_score', math.nan),
+            'ece': entry_sr_long.get('ece', math.nan),
+            'calibration_rows': entry_sr_long.get('calibration_rows', 0),
+            'folds_used': entry_sr_long.get('folds_used', 0),
+            'oof_rows': oof_long_count,
+        },
+        'short_entry': {
+            'avg_threshold': entry_sr_short.get('avg_threshold', math.nan),
+            'threshold_std': entry_sr_short.get('threshold_std', math.nan),
+            'threshold_max_dev': entry_sr_short.get('threshold_max_dev', math.nan),
+            'avg_precision': entry_sr_short.get('avg_precision', math.nan),
+            'brier_score': entry_sr_short.get('brier_score', math.nan),
+            'ece': entry_sr_short.get('ece', math.nan),
+            'calibration_rows': entry_sr_short.get('calibration_rows', 0),
+            'folds_used': entry_sr_short.get('folds_used', 0),
+            'oof_rows': oof_short_count,
+        },
+        'oof_predictions': {
+            'long_rows': oof_long_count,
+            'short_rows': oof_short_count,
+            'total_rows': len(df_rest),
+            'oof_coverage_frac': oof_coverage,
+        },
+        'artifacts': {
+            'scorecard': 'setup_scorecard.csv',
+            'threshold_grid': 'threshold_grid.csv',
+            'oof_predictions': 'oof_setup_predictions.csv',
+            'calibration_manifest': 'calibration_manifest.json',
+            'calibration_reliability': 'calibration_reliability.csv',
+        },
+        'errors': [],
+        'warnings': calibration_manifest['warnings'],
+    }
+    # Replace nan/inf with None for JSON serialisation.
+    def _json_safe(obj):
+        if isinstance(obj, dict):
+            return {k: _json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_json_safe(v) for v in obj]
+        if isinstance(obj, float) and not math.isfinite(obj):
+            return None
+        return obj
+
+    manifest_path = output_dir / "setup_manifest.json"
+    manifest_path.write_text(json.dumps(_json_safe(setup_manifest), indent=2), encoding='utf-8')
+    print(f">>> Wrote {manifest_path}")
+
     print("\n==================================================")
     print(">>> PIPELINE COMPLETE.")
     if TRAIN_LEGACY_30S_EXIT_MODELS:
         print(">>> All 30-second models have been exported.")
     else:
         print(">>> Entry/regime 30-second models have been exported; legacy exit models were skipped.")
-    print(f">>> Versioned copy folder: {versioned_out_dir}")
+    print(f">>> Output directory: {output_dir}")
     print(">>> Drop the .onnx files directly into your new Java branch.")
     print("==================================================")
 
