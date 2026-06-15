@@ -742,7 +742,27 @@ Follow-up hardening after reviewing the run:
 - Code has been hardened so raw/no-op is part of the candidate set and can win selection when it outperforms fitted Platt/isotonic calibrators.
 - Added regression coverage to force fitted calibrators to be worse and assert that `selected_method == raw`.
 - Validation on this computer after the fix: `py_compile` OK and `tests/test_lifecycle_micro_models.py` now has `14` tests OK.
-- Recommendation: after pulling the raw-selection fix on the 48GB machine, rerun `bash scripts/run_lifecycle_micro_posthoc_calibration_20260615.sh` once more before treating the selected-method fields in `calibration_manifest.json`, `lifecycle_micro_scorecard.csv`, or `posthoc_calibrators.json` as the current Phase 5 artifact. The run remains research-only regardless of the rerun because day-dominance, threshold-stability, trade-count, full-window, cost-aware-label, and replay/paper gates are still open.
+
+Corrected 48GB-machine rerun after pulling commit `10e7bf9`:
+
+- Output directory: `model_training_sets/lifecycle_micro_posthoc_calibration_20260615_170924`
+- Manifest summary: `errors=[]`, `model_count=6`, `posthoc_calibrators_exists=True`.
+- OOF setup join again succeeded: `dropped_unscored_30s_rows=21000`, `retained_rows=18000`, long unique values `17901`, short unique values `17919`.
+- Required Phase 5 artifacts again written: scorecard, route manifest, raw calibration manifest/reliability, posthoc comparison/reliability, posthoc calibrators, feature schema/hash, and `train.log`.
+- The raw-selection fix worked: `longExitLifecycleAi` and `shortExitLifecycleAi` now report `posthoc=raw`, matching their best frozen-holdout Brier/ECE rows in the comparison CSV.
+
+Selected methods from the corrected rerun:
+
+| Model | Selected method | Selected Brier | Selected threshold | Frozen rows | Key issue |
+|---|---|---:|---:|---:|---|
+| `longExitLifecycleAi` | raw | 0.085120 | 0.62 | 6597 | `max_predicted_day_fraction=1.00000` |
+| `shortExitLifecycleAi` | raw | 0.129457 | 0.68 | 6623 | `max_predicted_day_fraction=1.00000` |
+| `longMicroEntryAi` | sigmoid | 0.136396 | 0.50 | 2299 | predicted positives `0`; not useful yet |
+| `shortMicroEntryAi` | sigmoid | 0.135049 | 0.70 | 2355 | `max_predicted_day_fraction=1.00000`; Brier/ECE disagree with isotonic |
+| `longMicroExitGuardAi` | isotonic | 0.082384 | 0.60 | 2026 | `max_predicted_day_fraction=1.00000` despite calibration gain |
+| `shortMicroExitGuardAi` | isotonic | 0.134292 | 0.60 | 2338 | `max_predicted_day_fraction=0.52862` remains above the configured 0.40 gate |
+
+- Stop/go decision: **GO for Phase 5 research artifacts** — post-hoc comparison, selected-method metadata, reliability tables, calibrator parameters, and frozen-holdout fingerprints now exist and are internally consistent for the 10-day smoke. Still **NO-GO for paper/live promotion** because day-dominance, threshold-stability, sufficient trade-count/PnL, cost-aware labels, full-window training, runtime calibration application, replay parity, and paper/shadow drift gates remain open.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
