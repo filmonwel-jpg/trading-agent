@@ -797,6 +797,26 @@ python3 scripts/check_lifecycle_posthoc_gates.py \
 
 Expected result for the 10-day corrected Phase 5 smoke: `POSTHOC_PROMOTION_GATE=FAIL`. This is expected because day dominance is still too high and `longMicroEntryAi` has zero selected predicted positives.
 
+48GB-machine Step 16 result on 2026-06-15:
+
+- Ran against `model_training_sets/lifecycle_micro_posthoc_calibration_20260615_170924`.
+- Wrote:
+  - `posthoc_promotion_gate_rows.csv`
+  - `posthoc_promotion_gate_report.json`
+- Overall result: `POSTHOC_PROMOTION_GATE=FAIL`.
+- Per-route gate rows:
+
+| Model | Selected method | Predicted positives | Max predicted day fraction | Gate status | Main failure |
+|---|---|---:|---:|---|---|
+| `longExitLifecycleAi` | raw | 1716 | 1.00000 | FAIL | day dominance |
+| `shortExitLifecycleAi` | raw | 1290 | 1.00000 | FAIL | day dominance |
+| `longMicroEntryAi` | sigmoid | 0 | 0.00000 | FAIL | predicted positives below minimum |
+| `shortMicroEntryAi` | sigmoid | 58 | 1.00000 | FAIL | day dominance |
+| `longMicroExitGuardAi` | isotonic | 222 | 1.00000 | FAIL | day dominance |
+| `shortMicroExitGuardAi` | isotonic | 297 | 0.52862 | FAIL | day dominance above `0.40` cap |
+
+- Stop/go decision: **Correct FAIL**. The checker is doing its job. The 10-day smoke now has explicit machine-readable evidence that Phase 5 calibration artifacts exist but cannot be promoted. Do not relax this gate to pass a short pilot. Next blockers are threshold-stability/stable-island reporting, cost-aware labels, full-window training, runtime calibration application, replay parity, and paper/shadow checks.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
