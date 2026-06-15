@@ -646,6 +646,79 @@ Action done:
 - Note: the existing manifest uses key `rows` for calibration sample count, so the original verification print showed `rows=None` when asking for `calibration_rows`. Commit after this verification adds `calibration_rows` as an alias while preserving `rows` for backward compatibility.
 - Stop/go decision: **GO** — Step 14 artifact verification passed. The pipeline is valid as infrastructure smoke evidence. Still **NO-GO** for paper/live promotion until post-hoc calibration, cost-aware labels, threshold-stability/day-dominance gates, full-window training, and replay/live parity gates are complete.
 
+### Step 15 — Phase 5 first-pass post-hoc lifecycle/micro calibration
+
+Action plan:
+
+- Add controlled post-hoc probability calibration to `train_lifecycle_micro_models.py` without changing default raw-probability behavior.
+- Use a chronological three-way split: base-train rows first, calibrator-fit rows next, frozen-holdout rows last. The frozen holdout must not fit either the classifier or the calibrator.
+- Compare raw probabilities against Platt/sigmoid and isotonic calibrated probabilities on the frozen holdout using Brier score, ECE, reliability bins, selected-threshold precision/recall, and predicted-positive count.
+- Preserve machine-readable artifacts with model exports/manifests: comparison CSV, reliability CSV, calibrator JSON, route-manifest calibration metadata, and holdout fingerprint hashes.
+- Keep calibrated artifacts explicitly research-only until the 48GB machine reruns the pipeline on the frozen dataset and the later promotion gates pass.
+
+Action done:
+
+- Implemented opt-in Phase 5 flags in `train_lifecycle_micro_models.py`:
+  - `--posthoc-calibration none|sigmoid|isotonic|both`
+  - `--posthoc-calibration-frac`
+  - `--frozen-holdout-frac`
+  - `--min-frozen-holdout-rows`
+  - `--min-holdout-predictions`
+  - `--max-day-dominance-frac`
+- Added frozen chronological split helper, holdout fingerprinting, Platt/sigmoid calibrator fitting, isotonic calibrator fitting, calibrated-probability application, raw-vs-calibrated comparison metrics, and research-only gate warnings.
+- Added/extended artifacts:
+  - `posthoc_calibration_comparison.csv`
+  - `posthoc_calibration_reliability.csv`
+  - `posthoc_calibrators.json`
+  - `lifecycle_micro_scorecard.csv` posthoc columns
+  - `lifecycle_micro_route_manifest.json` posthoc metadata
+  - `calibration_manifest.json` posthoc artifact references and per-model posthoc metadata
+- Added regression coverage in `tests/test_lifecycle_micro_models.py` for:
+  - final chronological holdout freezing,
+  - post-hoc calibrator fitting on a synthetic lifecycle route,
+  - comparison CSV / calibrator JSON / calibration-manifest persistence.
+- Validation on this computer:
+  - `python3 -m py_compile train_lifecycle_micro_models.py` ✓
+  - `python3 -m unittest discover -s tests -p 'test_lifecycle_micro_models.py' -v` → `13` tests OK ✓
+  - `python3 -m unittest discover -s tests -v` → `56` tests OK ✓
+- Stop/go decision: **GO for 48GB calibrated rerun**, **NO-GO for paper/live promotion**. This step adds code and local synthetic validation only. It does not prove calibrated thresholds are stable or promotable.
+
+Recommended 48GB-machine calibrated rerun command:
+
+```zsh
+cd /path/to/trading-agent-main
+
+export LAKE_ROOT="/path/to/writeable/data_lake_v2"
+export PILOT_BUILD_ROOT="$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446"
+export SETUP_OUT_DIR="$LAKE_ROOT/model_training_sets/setup_30s_fixed_quality_20260615_124546"
+export RUN_ID="lifecycle_micro_posthoc_calibration_$(date +%Y%m%d_%H%M%S)"
+export LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/$RUN_ID"
+
+python3 train_lifecycle_micro_models.py \
+  --input-30s-csv "$PILOT_BUILD_ROOT/combined/combined_30s.csv" \
+  --input-5s-csv "$PILOT_BUILD_ROOT/combined/combined_5s.csv" \
+  --setup-predictions-csv "$SETUP_OUT_DIR/oof_setup_predictions.csv" \
+  --output-dir "$LIFECYCLE_OUT_DIR" \
+  --posthoc-calibration both \
+  --posthoc-calibration-frac 0.20 \
+  --frozen-holdout-frac 0.20 \
+  --min-frozen-holdout-rows 500 \
+  --min-holdout-predictions 20 \
+  --max-day-dominance-frac 0.40 \
+  --no-onnx 2>&1 | tee "$LIFECYCLE_OUT_DIR.train.log"
+
+ls -la "$LIFECYCLE_OUT_DIR"
+python3 - <<'PY'
+import json, os, pandas as pd
+out = os.environ['LIFECYCLE_OUT_DIR']
+manifest = json.load(open(os.path.join(out, 'calibration_manifest.json')))
+comparison = pd.read_csv(os.path.join(out, 'posthoc_calibration_comparison.csv'))
+print('errors:', manifest.get('errors'))
+print('model_count:', len(manifest.get('models', [])))
+print(comparison[['model','calibration_method','brier_score','ece','threshold','predicted_positive_count','max_predicted_day_fraction']].to_string(index=False))
+PY
+```
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.

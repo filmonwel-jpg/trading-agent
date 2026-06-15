@@ -224,6 +224,78 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertGreaterEqual(result.brier_score, 0.0)
         self.assertGreaterEqual(result.ece, 0.0)
 
+    def test_chronological_three_way_split_freezes_final_holdout(self) -> None:
+        train_idx, calibration_idx, holdout_idx = lm.chronological_three_way_split(
+            100,
+            calibration_frac=0.20,
+            holdout_frac=0.20,
+        )
+
+        self.assertEqual(60, len(train_idx))
+        self.assertEqual(20, len(calibration_idx))
+        self.assertEqual(20, len(holdout_idx))
+        self.assertLess(train_idx.max(), calibration_idx.min())
+        self.assertLess(calibration_idx.max(), holdout_idx.min())
+        self.assertEqual(80, int(holdout_idx.min()))
+
+    def test_train_binary_model_posthoc_calibration_artifacts(self) -> None:
+        rows = []
+        base_ts = pd.Timestamp("2026-05-21 09:30:00", tz="America/New_York")
+        for i in range(180):
+            timestamp = (base_ts + pd.Timedelta(seconds=30 * i)).strftime("%Y%m%d %H:%M:%S America/New_York")
+            rows.append({
+                "Symbol": "AAPL",
+                "Date": (base_ts + pd.Timedelta(seconds=30 * i)).strftime("%Y-%m-%d"),
+                "Timestamp": timestamp,
+                "f_30s_ret_1": (i % 17) / 17.0,
+                "f_30s_spread_bps": (i % 7) / 10.0,
+                "f_entry_score_proxy": 0.10 + (i % 11) / 12.0,
+                "Label_Long_ExitLifecycle": 1 if (i % 4 == 0 or i % 9 == 0 or i > 150) else 0,
+            })
+        frame = pd.DataFrame(rows)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            result = lm.train_binary_model(
+                frame,
+                "Label_Long_ExitLifecycle",
+                "longExitLifecycleAi",
+                "long_exit_lifecycle.onnx",
+                "lifecycle",
+                out,
+                min_rows=50,
+                random_state=7,
+                no_onnx=True,
+                posthoc_calibration="both",
+                posthoc_calibration_frac=0.20,
+                frozen_holdout_frac=0.20,
+                min_frozen_holdout_rows=1,
+                min_holdout_predictions=0,
+                max_day_dominance_frac=1.0,
+            )
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertIsNotNone(result.posthoc_calibration)
+            posthoc = result.posthoc_calibration or {}
+            self.assertEqual(True, posthoc["enabled"])
+            self.assertIn(posthoc["selected_method"], {"sigmoid", "isotonic", "raw"})
+            self.assertEqual(36, posthoc["calibration_fit_rows"])
+            self.assertEqual(36, posthoc["frozen_holdout_rows"])
+            self.assertEqual(64, len(posthoc["holdout_fingerprint_sha256"]))
+
+            lm.write_scorecards(out, [result])
+            comparison = pd.read_csv(out / "posthoc_calibration_comparison.csv")
+            calibrators = json.loads((out / "posthoc_calibrators.json").read_text(encoding="utf-8"))
+            manifest = json.loads((out / "calibration_manifest.json").read_text(encoding="utf-8"))
+
+        self.assertIn("raw", set(comparison["calibration_method"]))
+        self.assertGreaterEqual(len(comparison), 2)
+        self.assertGreaterEqual(len(calibrators["models"]), 1)
+        self.assertEqual("raw_random_forest_probability_with_posthoc_sigmoid_isotonic_comparison", manifest["method"])
+        self.assertEqual("chronological_base_train_then_calibration_then_frozen_holdout", manifest["holdout_split"])
+        self.assertEqual(True, manifest["models"][0]["posthoc"]["enabled"])
+        self.assertIn("posthoc_calibrators_json", manifest["artifacts"])
+
     def test_write_scorecards_writes_route_manifest_schema_hash(self) -> None:
         feature_columns = ["f_30s_ret_1", "f_entry_score_proxy"]
         result = lm.TrainedModelResult(
