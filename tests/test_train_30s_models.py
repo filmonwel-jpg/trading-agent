@@ -96,7 +96,7 @@ class TestPerformWalkForwardOof(unittest.TestCase):
         X, y, dates, n = self._make_dataset()
         result = t30.perform_walk_forward_testing(X, y, dates, "test_with_oof", collect_oof=True)
         for key in ("oof_rows", "fold_grid", "brier_score", "ece", "calibration_rows",
-                    "threshold_std", "threshold_max_dev"):
+                    "calibration_reliability_rows", "threshold_std", "threshold_max_dev"):
             self.assertIn(key, result)
 
     def test_oof_rows_cover_test_folds(self):
@@ -125,6 +125,17 @@ class TestPerformWalkForwardOof(unittest.TestCase):
         for fg in result["fold_grid"]:
             for f in ("fold_id", "threshold", "brier_score", "ece", "calibration_rows"):
                 self.assertIn(f, fg)
+
+    def test_calibration_reliability_rows_have_bins(self):
+        X, y, dates, _ = self._make_dataset()
+        result = t30.perform_walk_forward_testing(X, y, dates, "reliability", collect_oof=True)
+        rows = result["calibration_reliability_rows"]
+        self.assertGreater(len(rows), 0)
+        for row in rows[:5]:
+            for f in ("fold_id", "bin_index", "prob_min", "prob_max", "rows",
+                      "mean_predicted_probability", "observed_positive_rate",
+                      "abs_calibration_error"):
+                self.assertIn(f, row)
 
 
 class TestMainArtifacts(unittest.TestCase):
@@ -230,6 +241,13 @@ class TestMainArtifacts(unittest.TestCase):
             cal = json.loads((out_dir / "calibration_manifest.json").read_text())
             self.assertEqual(cal["errors"], [])
             self.assertIn("models", cal)
+
+            # Reliability CSV uses lifecycle-compatible reliability-bin schema
+            rel = pd.read_csv(out_dir / "calibration_reliability.csv")
+            for col in ("model", "side", "fold_id", "bin_index", "prob_min", "prob_max",
+                        "rows", "mean_predicted_probability", "observed_positive_rate",
+                        "abs_calibration_error"):
+                self.assertIn(col, rel.columns, f"calibration_reliability missing column {col}")
 
             # OOF predictions file: wide format — one row per bar, both long/short columns present
             oof = pd.read_csv(out_dir / "oof_setup_predictions.csv")

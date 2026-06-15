@@ -1164,6 +1164,9 @@ def main() -> None:
     write_scorecards(output_dir, results)
     print(f"WROTE {output_dir / 'lifecycle_micro_scorecard.csv'}")
     print(f"WROTE {output_dir / 'lifecycle_micro_route_manifest.json'}")
+    print(f"WROTE {output_dir / 'calibration_manifest.json'}")
+    print(f"WROTE {output_dir / 'calibration_reliability.csv'}")
+    print(f"WROTE {output_dir / 'feature_schema.json'}")
 
 
 if __name__ == "__main__":

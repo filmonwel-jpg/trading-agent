@@ -1358,7 +1358,8 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         if collect_oof:
             base.update({'oof_rows': [], 'fold_grid': [], 'threshold_std': 0.0,
                          'threshold_max_dev': 0.0, 'brier_score': math.nan,
-                         'ece': math.nan, 'calibration_rows': 0})
+                         'ece': math.nan, 'calibration_rows': 0,
+                         'calibration_reliability_rows': []})
         return base
 
     fold_indices = build_day_walk_forward_splits(
@@ -1375,6 +1376,7 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
     thresholds = []
     oof_rows: list[dict] = []      # populated only when collect_oof=True
     fold_grid: list[dict] = []     # populated only when collect_oof=True
+    calibration_reliability_rows: list[dict] = []  # populated only when collect_oof=True
 
     for train_index, test_index, train_days, test_days in fold_indices:
         X_train, X_test = X[train_index], X[test_index]
@@ -1426,6 +1428,8 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
                 'ece': cal['ece'],
                 'calibration_rows': cal['rows'],
             })
+            for bin_row in cal.get('bins', []):
+                calibration_reliability_rows.append({'fold_id': int(fold), **bin_row})
             margin = float(thr)
             for pos_in_fold, global_idx in enumerate(test_index):
                 prob = float(test_proba[pos_in_fold])
@@ -1484,6 +1488,7 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
         result.update({
             'oof_rows': oof_rows,
             'fold_grid': fold_grid,
+            'calibration_reliability_rows': calibration_reliability_rows,
             'threshold_std': thr_std,
             'threshold_max_dev': thr_max_dev,
             'brier_score': agg_brier,
@@ -1748,6 +1753,7 @@ def main():
 
     score_rows = []
     all_threshold_grid_rows: list[dict] = []
+    all_calibration_reliability_rows: list[dict] = []
     long_entry_oof_rows: list[dict] = []
     short_entry_oof_rows: list[dict] = []
 
@@ -1796,6 +1802,8 @@ def main():
             side = 'long' if filename == 'long_entry.onnx' else 'short'
             for row in result['fold_grid']:
                 all_threshold_grid_rows.append({'model': filename, 'side': side, **row})
+            for row in result.get('calibration_reliability_rows', []):
+                all_calibration_reliability_rows.append({'model': filename, 'side': side, **row})
         if filename == 'long_entry.onnx':
             long_entry_oof_rows = result.get('oof_rows', [])
         elif filename == 'short_entry.onnx':
@@ -1940,14 +1948,14 @@ def main():
     else:
         oof_df = pd.DataFrame(columns=_wide_cols)
     oof_df.to_csv(oof_path, index=False)
-    oof_long_count = int(oof_df['is_oof_setup_prediction'].sum()) if _wide_rows else 0
-    oof_short_count = oof_long_count  # symmetric: both sides required for flag to be 1
-    print(f">>> Wrote {oof_path} (total_rows={len(oof_df)} oof_rows={oof_long_count})")
+    oof_long_count = int(oof_df['f_long_setup_prob'].notna().sum()) if _wide_rows else 0
+    oof_short_count = int(oof_df['f_short_setup_prob'].notna().sum()) if _wide_rows else 0
+    oof_paired_count = int(oof_df['is_oof_setup_prediction'].sum()) if _wide_rows else 0
+    print(f">>> Wrote {oof_path} (total_rows={len(oof_df)} paired_oof_rows={oof_paired_count})")
 
     # --- calibration_manifest.json and calibration_reliability.csv ---
     entry_score_rows = [r for r in score_rows if r['filename'] in _entry_filenames]
     cal_model_entries: list[dict] = []
-    reliability_rows: list[dict] = []
     for sr in entry_score_rows:
         cal_model_entries.append({
             'model': sr['filename'],
@@ -1989,15 +1997,15 @@ def main():
     cal_manifest_path.write_text(json.dumps(calibration_manifest, indent=2), encoding='utf-8')
     print(f">>> Wrote {cal_manifest_path}")
 
-    # --- calibration_reliability.csv (per-fold brier/ece from threshold_grid; always written) ---
+    # --- calibration_reliability.csv (per-fold reliability bins; always written) ---
     cal_rel_path = output_dir / "calibration_reliability.csv"
-    if all_threshold_grid_rows:
-        pd.DataFrame(all_threshold_grid_rows)[
-            ['model', 'side', 'fold_id', 'threshold', 'brier_score', 'ece', 'calibration_rows']
-        ].to_csv(cal_rel_path, index=False)
+    rel_cols = ['model', 'side', 'fold_id', 'bin_index', 'prob_min', 'prob_max',
+                'rows', 'mean_predicted_probability', 'observed_positive_rate',
+                'abs_calibration_error']
+    if all_calibration_reliability_rows:
+        pd.DataFrame(all_calibration_reliability_rows)[rel_cols].to_csv(cal_rel_path, index=False)
     else:
-        pd.DataFrame(columns=['model', 'side', 'fold_id', 'threshold',
-                               'brier_score', 'ece', 'calibration_rows']).to_csv(cal_rel_path, index=False)
+        pd.DataFrame(columns=rel_cols).to_csv(cal_rel_path, index=False)
     print(f">>> Wrote {cal_rel_path}")
 
     # --- setup_manifest.json ---
@@ -2009,7 +2017,7 @@ def main():
     except Exception:
         commit_hash = 'unknown'
 
-    oof_coverage = oof_long_count / max(len(df_rest), 1)
+    oof_coverage = oof_paired_count / max(len(df_rest), 1)
 
     entry_sr_long = next((r for r in score_rows if r['filename'] == 'long_entry.onnx'), {})
     entry_sr_short = next((r for r in score_rows if r['filename'] == 'short_entry.onnx'), {})
@@ -2068,6 +2076,7 @@ def main():
         'oof_predictions': {
             'long_rows': oof_long_count,
             'short_rows': oof_short_count,
+            'paired_rows': oof_paired_count,
             'total_rows': len(df_rest),
             'oof_coverage_frac': oof_coverage,
         },
@@ -2097,12 +2106,15 @@ def main():
 
     print("\n==================================================")
     print(">>> PIPELINE COMPLETE.")
-    if TRAIN_LEGACY_30S_EXIT_MODELS:
+    if no_onnx:
+        print(">>> ONNX export disabled (--no-onnx); scorecard/calibration/OOF artifacts were written only.")
+    elif TRAIN_LEGACY_30S_EXIT_MODELS:
         print(">>> All 30-second models have been exported.")
     else:
         print(">>> Entry/regime 30-second models have been exported; legacy exit models were skipped.")
     print(f">>> Output directory: {output_dir}")
-    print(">>> Drop the .onnx files directly into your new Java branch.")
+    if not no_onnx:
+        print(">>> Drop the .onnx files directly into your new Java branch.")
     print("==================================================")
 
 if __name__ == "__main__":
