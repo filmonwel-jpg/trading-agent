@@ -231,11 +231,16 @@ class TestMainArtifacts(unittest.TestCase):
             self.assertEqual(cal["errors"], [])
             self.assertIn("models", cal)
 
-            # OOF predictions file must exist with expected columns even when empty
+            # OOF predictions file: wide format — one row per bar, both long/short columns present
             oof = pd.read_csv(out_dir / "oof_setup_predictions.csv")
-            for col in ("side", "fold_id", "y_true", "f_long_setup_prob",
-                        "f_long_setup_threshold", "f_long_setup_threshold_margin"):
+            for col in ("Symbol", "Timestamp", "f_long_setup_prob", "long_setup_fold_id",
+                        "f_long_setup_threshold", "f_long_setup_threshold_margin",
+                        "f_short_setup_prob", "short_setup_fold_id",
+                        "is_oof_setup_prediction"):
                 self.assertIn(col, oof.columns, f"oof missing column {col}")
+            # side and fold_id (narrow format) must NOT be present
+            self.assertNotIn("side", oof.columns, "oof must be wide format — 'side' column not expected")
+            self.assertNotIn("fold_id", oof.columns, "oof must be wide format — bare 'fold_id' not expected")
 
             # No ONNX files (--no-onnx)
             onnx_files = list(out_dir.glob("*.onnx"))

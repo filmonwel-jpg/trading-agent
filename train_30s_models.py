@@ -1881,49 +1881,68 @@ def main():
     tgrid_df.to_csv(tgrid_path, index=False)
     print(f">>> Wrote {tgrid_path} ({len(tgrid_df)} fold rows)")
 
-    # --- oof_setup_predictions.csv (always written; empty when no folds ran) ---
-    oof_df_rows: list[dict] = []
+    # --- oof_setup_predictions.csv (wide format: one row per bar in df_rest) ---
+    # Build lookup dicts keyed by input_row_idx so we can join both sides per bar.
     df_meta = df_rest.reset_index(drop=True)
     symbol_col = 'Symbol' if 'Symbol' in df_meta.columns else None
     ts_col = 'Timestamp' if 'Timestamp' in df_meta.columns else None
     date_col = 'Date' if 'Date' in df_meta.columns else None
-    for side, oof_rows_side, _label_col in [
-        ('long', long_entry_oof_rows, 'Label_Long_Entry'),
-        ('short', short_entry_oof_rows, 'Label_Short_Entry'),
-    ]:
-        for r in oof_rows_side:
-            idx = r['input_row_idx']
-            row_out: dict = {
-                'side': side,
-                'input_row_idx': idx,
-                'fold_id': r['fold_id'],
-                'y_true': r['y_true'],
-                f'f_{side}_setup_prob': r['prob'],
-                f'f_{side}_setup_threshold': r['threshold'],
-                f'f_{side}_setup_threshold_margin': r['margin_over_threshold'],
-                'is_oof_prediction': r['is_oof_prediction'],
-            }
-            if symbol_col and idx < len(df_meta):
-                row_out['Symbol'] = df_meta.at[idx, symbol_col]
-            if ts_col and idx < len(df_meta):
-                row_out['Timestamp'] = df_meta.at[idx, ts_col]
-            if date_col and idx < len(df_meta):
-                row_out['Date'] = df_meta.at[idx, date_col]
-            oof_df_rows.append(row_out)
+    _long_oof_by_idx: dict[int, dict] = {r['input_row_idx']: r for r in long_entry_oof_rows}
+    _short_oof_by_idx: dict[int, dict] = {r['input_row_idx']: r for r in short_entry_oof_rows}
+
+    _wide_cols = [
+        'Symbol', 'Timestamp', 'Date', 'Label_Long_Entry', 'Label_Short_Entry',
+        'f_long_setup_prob', 'long_setup_fold_id',
+        'f_long_setup_threshold', 'f_long_setup_threshold_margin',
+        'f_short_setup_prob', 'short_setup_fold_id',
+        'f_short_setup_threshold', 'f_short_setup_threshold_margin',
+        'is_oof_setup_prediction',
+    ]
+    _wide_rows: list[dict] = []
+    for _idx in range(len(df_meta)):
+        lr = _long_oof_by_idx.get(_idx)
+        sr = _short_oof_by_idx.get(_idx)
+        row_w: dict = {}
+        if symbol_col:
+            row_w['Symbol'] = df_meta.at[_idx, symbol_col]
+        if ts_col:
+            row_w['Timestamp'] = df_meta.at[_idx, ts_col]
+        if date_col:
+            row_w['Date'] = df_meta.at[_idx, date_col]
+        row_w['Label_Long_Entry'] = (
+            df_meta.at[_idx, 'Label_Long_Entry'] if 'Label_Long_Entry' in df_meta.columns else float('nan')
+        )
+        row_w['Label_Short_Entry'] = (
+            df_meta.at[_idx, 'Label_Short_Entry'] if 'Label_Short_Entry' in df_meta.columns else float('nan')
+        )
+        # Long side: NaN / -1 when bar was never in an OOF test fold
+        row_w['f_long_setup_prob'] = lr['prob'] if lr else float('nan')
+        row_w['long_setup_fold_id'] = int(lr['fold_id']) if lr else -1
+        row_w['f_long_setup_threshold'] = lr['threshold'] if lr else float('nan')
+        row_w['f_long_setup_threshold_margin'] = lr['margin_over_threshold'] if lr else float('nan')
+        # Short side
+        row_w['f_short_setup_prob'] = sr['prob'] if sr else float('nan')
+        row_w['short_setup_fold_id'] = int(sr['fold_id']) if sr else -1
+        row_w['f_short_setup_threshold'] = sr['threshold'] if sr else float('nan')
+        row_w['f_short_setup_threshold_margin'] = sr['margin_over_threshold'] if sr else float('nan')
+        # Only mark as OOF prediction when BOTH long and short have a prediction
+        row_w['is_oof_setup_prediction'] = 1 if (lr is not None and sr is not None) else 0
+        _wide_rows.append(row_w)
+
     oof_path = output_dir / "oof_setup_predictions.csv"
-    if oof_df_rows:
-        oof_df = pd.DataFrame(oof_df_rows)
+    if _wide_rows:
+        oof_df = pd.DataFrame(_wide_rows)
+        # Enforce column order, adding any missing as NaN
+        for _c in _wide_cols:
+            if _c not in oof_df.columns:
+                oof_df[_c] = float('nan')
+        oof_df = oof_df[[c for c in _wide_cols if c in oof_df.columns]]
     else:
-        oof_df = pd.DataFrame(columns=["side", "input_row_idx", "fold_id", "y_true",
-                                       "f_long_setup_prob", "f_long_setup_threshold",
-                                       "f_long_setup_threshold_margin",
-                                       "f_short_setup_prob", "f_short_setup_threshold",
-                                       "f_short_setup_threshold_margin",
-                                       "is_oof_prediction", "Symbol", "Timestamp", "Date"])
+        oof_df = pd.DataFrame(columns=_wide_cols)
     oof_df.to_csv(oof_path, index=False)
-    long_oof_count = sum(1 for r in oof_df_rows if r['side'] == 'long')
-    short_oof_count = sum(1 for r in oof_df_rows if r['side'] == 'short')
-    print(f">>> Wrote {oof_path} (long={long_oof_count} short={short_oof_count})")
+    oof_long_count = int(oof_df['is_oof_setup_prediction'].sum()) if _wide_rows else 0
+    oof_short_count = oof_long_count  # symmetric: both sides required for flag to be 1
+    print(f">>> Wrote {oof_path} (total_rows={len(oof_df)} oof_rows={oof_long_count})")
 
     # --- calibration_manifest.json and calibration_reliability.csv ---
     entry_score_rows = [r for r in score_rows if r['filename'] in _entry_filenames]
@@ -1990,9 +2009,7 @@ def main():
     except Exception:
         commit_hash = 'unknown'
 
-    oof_long_count = sum(1 for r in oof_df_rows if r['side'] == 'long') if oof_df_rows else 0
-    oof_short_count = sum(1 for r in oof_df_rows if r['side'] == 'short') if oof_df_rows else 0
-    oof_coverage = (oof_long_count / max(len(df_rest), 1)) if oof_df_rows else 0.0
+    oof_coverage = oof_long_count / max(len(df_rest), 1)
 
     entry_sr_long = next((r for r in score_rows if r['filename'] == 'long_entry.onnx'), {})
     entry_sr_short = next((r for r in score_rows if r['filename'] == 'short_entry.onnx'), {})
