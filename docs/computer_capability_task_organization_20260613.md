@@ -422,7 +422,34 @@ Action done:
 - Added `--output-dir`, `--no-onnx`, `calibration_report()`, `feature_schema_hash()`, `collect_oof` option in `perform_walk_forward_testing()`, six unconditional artifact files in `main()`.
 - Added `tests/test_train_30s_models.py` with 12 tests; full suite 49 tests OK (up from 37).
 - Committed as `e077a2b`.
-- Stop/go decision: **GO to run Step 12 smoke on the 48GB machine** with the command below. Treat results as infrastructure smoke evidence only — same scope as lifecycle Steps 9-11. The `oof_setup_predictions.csv` output is the key artifact; pass it to the lifecycle/micro trainer on the next full-window rerun to replace `generate_walk_forward_setup_predictions.py`.
+
+- 2026-06-15 Step 12 smoke run completed on the 48GB machine after pulling commit `e077a2b`.
+- Run ID: `setup_30s_fixed_quality_20260615_124546`
+- Output directory: `/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/setup_30s_fixed_quality_20260615_124546`
+- Input: `pilot_10d_fixed_quality_20260613_173446/combined/combined_30s.csv` (39000 rows, all kept after regular-session filter).
+- After soft separation (>=10:00 ET): 35685 rows.
+- Feature count: 61 (30 base + 27 news zero-signal + 4 regime-prob).
+- Regime distribution: choppy 26.95%, trend 27.17%, volatile 45.88%.
+- WARNING (expected): Net R after costs is 1.07, below `MIN_NET_R_MULTIPLE=1.20`. Labels are cost-naive binary for now.
+
+**Main entry model scorecard** (5 walk-forward folds each):
+
+| Model | Signals/Rows | SignalRate | AvgPrecision | AvgThreshold | ThrStd | Brier | ECE |
+|---|---|---|---|---|---|---|---|
+| LONG ENTRY | 5202/35685 | 14.58% | 16.21% | 0.68 | 0.0126 | 0.1912 | 0.2274 |
+| SHORT ENTRY | 5475/35685 | 15.34% | 7.03% | 0.68 | 0.0427 | 0.1816 | 0.2023 |
+
+All six artifact files verified present:
+- `setup_scorecard.csv` ✓
+- `setup_manifest.json` ✓ (`schema_version: setup_30s_v1`, `feature_count: 61`)
+- `calibration_manifest.json` ✓
+- `calibration_reliability.csv` ✓
+- `threshold_grid.csv` ✓ (10 fold rows)
+- `oof_setup_predictions.csv` ✓ (`oof_long_rows: 18000`, `oof_short_rows: 18000`)
+
+**Bug discovered and fixed (commit `3458d7e`)**: `--no-onnx` was not respected by `train_regime_specific_models()` or `train_open30_models()`. Both functions called `export_to_onnx()` unconditionally, so the 8 regime-specific and open30 ONNX files were exported and `src/main/resources/` canonical models were overwritten on the 48GB machine despite `--no-onnx`. Fixed by adding `no_onnx: bool = False` parameter to both functions and gating `export_to_onnx()`. Added 4 new regression tests (`TestRegimeSpecificNoOnnx`, `TestOpen30NoOnnx`); 53 tests OK. The erroneously written ONNX files on the 48GB machine (`choppy_*.onnx`, `trend_*.onnx`, `volatile_*.onnx`, `open30_*.onnx`) and the overwritten `src/main/resources/` canonical models must be treated as **research-only 10-day smoke artifacts**, not for paper/live promotion.
+
+- Stop/go decision: **GO for the next lifecycle/micro rerun** using `oof_setup_predictions.csv` from this run. Pull commit `3458d7e` on the 48GB machine before the next setup run to ensure `--no-onnx` is fully respected. The `oof_setup_predictions.csv` output is the key artifact; pass it to the lifecycle/micro trainer on the next full-window rerun to replace `generate_walk_forward_setup_predictions.py`.
 
 Exact command for the 48GB machine after pulling commit `e077a2b`:
 
@@ -445,6 +472,8 @@ python3 train_30s_models.py \
   2>&1 | tee "$SETUP_OUT_DIR/train.log"
 ```
 
+**NOTE**: For future reruns, pull commit `3458d7e` first. The `e077a2b` version had a bug where `--no-onnx` was not respected for regime-specific (choppy/trend/volatile) and open30 models; fixed in `3458d7e`.
+
 Optional: add `USE_NEWS_BAR_FEATURES=0` as a prefix env var to suppress zero-signal news feature columns from the baseline feature set. This is recommended for the `baseline_current_v1` experiment to keep the feature count clean.
 
 After the run, verify:
@@ -460,9 +489,47 @@ done
 python3 -c "import json; m=json.load(open('$SETUP_OUT_DIR/setup_manifest.json')); print('schema_version:', m['schema_version']); print('feature_count:', m['feature_count']); print('oof_long_rows:', m['long_entry']['oof_rows']); print('oof_short_rows:', m['short_entry']['oof_rows'])"
 ```
 
+### Step 13 — Lifecycle/micro rerun using train_30s_models.py OOF setup predictions
+
+Action plan:
+
+- Pull commit `3458d7e` on the 48GB machine to get the `--no-onnx` fix before this or any future setup run.
+- Use `oof_setup_predictions.csv` from `setup_30s_fixed_quality_20260615_124546` as the `--setup-predictions-csv` input instead of running `generate_walk_forward_setup_predictions.py`.
+- The OOF file has `oof_long_rows: 18000` and `oof_short_rows: 18000` from 5 walk-forward folds over 35685 non-opening rows. Confirm the lifecycle/micro join retains a comparable number of rows to the Step 9/11 runs (`~28780`).
+- Use the same `--max-entry-events 2000 --no-onnx` flags as Step 11.
+- Verify all lifecycle/micro artifacts are written: `lifecycle_micro_scorecard.csv`, `lifecycle_micro_route_manifest.json`, `calibration_manifest.json`, `calibration_reliability.csv`, and `train.log`.
+- Record Brier/ECE per route and compare against Step 11 values. Any improvement is informational only (still 10-day slice, still research-only).
+- This run retires `generate_walk_forward_setup_predictions.py` as an intermediate step for the pilot pipeline. The `train_30s_models.py --output-dir` run is now the single source for setup OOF predictions.
+
+Action plan command for the 48GB machine after pulling `3458d7e`:
+
+```zsh
+export LAKE_ROOT=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2
+export PILOT_BUILD_ROOT="$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446"
+export SETUP_OOF_CSV="$LAKE_ROOT/model_training_sets/setup_30s_fixed_quality_20260615_124546/oof_setup_predictions.csv"
+
+test -f "$SETUP_OOF_CSV" || { echo "ERROR: oof_setup_predictions.csv not found"; exit 1; }
+
+export LIFECYCLE_RUN_ID="lifecycle_micro_setup30_oof_$(date +%Y%m%d_%H%M%S)"
+export LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/$LIFECYCLE_RUN_ID"
+mkdir -p "$LIFECYCLE_OUT_DIR"
+
+python3 train_lifecycle_micro_models.py \
+  --input-30s-csv "$PILOT_BUILD_ROOT/combined/combined_30s.csv" \
+  --input-5s-csv "$PILOT_BUILD_ROOT/combined/combined_5s.csv" \
+  --setup-predictions-csv "$SETUP_OOF_CSV" \
+  --output-dir "$LIFECYCLE_OUT_DIR" \
+  --max-entry-events 2000 \
+  --no-onnx \
+  2>&1 | tee "$LIFECYCLE_OUT_DIR/train.log"
+```
+
+Action done:
+
+*(to be filled in after 48GB run)*
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
-1. Use the fixed builders only; old `20260523` staged datasets are pre-fix artifacts.
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
 3. Generate out-of-fold 30s setup predictions and join them into lifecycle/micro rows.
 4. Add probability calibration metrics before claiming any paper/live promotion:
