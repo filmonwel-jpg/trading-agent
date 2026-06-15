@@ -582,6 +582,15 @@ Action done:
 
 - Stop/go decision: **Step 13 pipeline is GO** — wide-format OOF setup predictions flow correctly through to lifecycle/micro training. Infrastructure smoke confirms the end-to-end pipeline from `train_30s_models.py → oof_setup_predictions.csv → train_lifecycle_micro_models.py` works. Results are still research-only 10-day pilot evidence. Next steps: verify calibration artifacts on 48GB machine, then move to Phase 5 (post-hoc isotonic/Platt calibration) or Phase 1 (new mbp-1/tcbbo pilot normalizers).
 
+Implementation review follow-up on 2026-06-15:
+
+- Commit `e8c206b` hardened the Step 12/13 implementation after review.
+- `calibration_reliability.csv` from `train_30s_models.py` now contains actual per-fold reliability-bin rows instead of duplicating threshold-grid fold metrics.
+- Setup OOF manifest counts now record side-specific OOF counts and paired rows explicitly.
+- `train_30s_models.py --no-onnx` completion logging no longer says models were exported.
+- `train_lifecycle_micro_models.py` now prints `calibration_manifest.json`, `calibration_reliability.csv`, and `feature_schema.json` in the run log.
+- Validation: `py_compile` OK; `tests/test_train_30s_models.py` now has 17 tests; full Python suite `54` tests OK.
+
 ### Step 14 — Verify lifecycle/micro calibration artifacts and decide next priority
 
 Action plan:
