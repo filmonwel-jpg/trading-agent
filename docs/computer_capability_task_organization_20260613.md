@@ -764,6 +764,39 @@ Selected methods from the corrected rerun:
 
 - Stop/go decision: **GO for Phase 5 research artifacts** — post-hoc comparison, selected-method metadata, reliability tables, calibrator parameters, and frozen-holdout fingerprints now exist and are internally consistent for the 10-day smoke. Still **NO-GO for paper/live promotion** because day-dominance, threshold-stability, sufficient trade-count/PnL, cost-aware labels, full-window training, runtime calibration application, replay parity, and paper/shadow drift gates remain open.
 
+### Step 16 — Artifact-only post-hoc gate report
+
+Action plan:
+
+- Add a repeatable checker that reads an existing lifecycle/micro post-hoc output directory without retraining.
+- Convert manual inspection of `posthoc_calibration_comparison.csv` into machine-readable gate rows and a gate report JSON.
+- Gate at minimum on selected-method consistency, frozen holdout rows, selected predicted-positive count, and max predicted day fraction.
+- Keep this as a research/promotion-gate diagnostic only; do not promote any model from a 10-day smoke.
+
+Action done:
+
+- Added `scripts/check_lifecycle_posthoc_gates.py`.
+- The checker writes:
+  - `posthoc_promotion_gate_rows.csv`
+  - `posthoc_promotion_gate_report.json`
+- Added `tests/test_check_lifecycle_posthoc_gates.py` covering a PASS case and an expected FAIL case.
+
+Run on the corrected Phase 5 output:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+export LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/lifecycle_micro_posthoc_calibration_20260615_170924"
+
+python3 scripts/check_lifecycle_posthoc_gates.py \
+  --output-dir "$LIFECYCLE_OUT_DIR" \
+  --min-frozen-holdout-rows 500 \
+  --min-predicted-positive-count 20 \
+  --max-day-dominance-frac 0.40
+```
+
+Expected result for the 10-day corrected Phase 5 smoke: `POSTHOC_PROMOTION_GATE=FAIL`. This is expected because day dominance is still too high and `longMicroEntryAi` has zero selected predicted positives.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
