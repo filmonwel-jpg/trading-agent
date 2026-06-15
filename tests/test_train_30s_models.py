@@ -9,13 +9,16 @@ Covers:
   when --output-dir is given
 - Backward compat: perform_walk_forward_testing() without collect_oof still
   returns only the original keys
-- --no-onnx suppresses ONNX export
+- --no-onnx suppresses ONNX export for ALL model families:
+  base entry/exit, regime classifier, regime-specific (choppy/trend/volatile),
+  and opening-30m models
 """
 import json
 import math
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import numpy as np
@@ -237,6 +240,130 @@ class TestMainArtifacts(unittest.TestCase):
             # No ONNX files (--no-onnx)
             onnx_files = list(out_dir.glob("*.onnx"))
             self.assertEqual(onnx_files, [], "Expected no ONNX files with --no-onnx")
+
+
+class TestRegimeSpecificNoOnnx(unittest.TestCase):
+    """Regression: --no-onnx must suppress export in train_regime_specific_models()."""
+
+    def _make_regime_df(self, n=200, seed=7):
+        """Minimal DataFrame with required columns for regime-specific training."""
+        rng = np.random.default_rng(seed)
+        dates = np.repeat([f"2026-01-{d+1:02d}" for d in range(10)], n // 10)
+        closes = 100.0 + rng.standard_normal(n).cumsum() * 0.3
+        df = pd.DataFrame({
+            "Timestamp": pd.to_datetime("2026-01-01 10:00:00"),
+            "Date": dates,
+            "Symbol": "TEST",
+            "MarketRegime": rng.choice(["choppy", "trend", "volatile"], n),
+            "Label_Long_Entry": (rng.random(n) > 0.75).astype(int),
+            "Label_Short_Entry": (rng.random(n) > 0.75).astype(int),
+            "Label_Long_Exit": (rng.random(n) > 0.85).astype(int),
+            "Label_Short_Exit": (rng.random(n) > 0.85).astype(int),
+        })
+        return df
+
+    def test_no_onnx_regime_specific_never_calls_export(self):
+        df = self._make_regime_df()
+        feature_cols = [f"f_{i}" for i in range(5)]
+        for col in feature_cols:
+            df[col] = np.random.default_rng(42).random(len(df)).astype(np.float32)
+
+        sentinel = unittest.mock.MagicMock(
+            side_effect=AssertionError("export_to_onnx must not be called with --no-onnx")
+        )
+        # Lower thresholds so training proceeds; assert export never fires.
+        with unittest.mock.patch.object(t30, 'MIN_REGIME_ROWS', 1), \
+             unittest.mock.patch.object(t30, 'MIN_REGIME_SIGNALS', 1), \
+             unittest.mock.patch.object(t30, 'export_to_onnx', sentinel):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                rows = t30.train_regime_specific_models(
+                    df, feature_cols, Path(tmpdir), no_onnx=True
+                )
+        sentinel.assert_not_called()
+        # All exported_to values must reflect skipped status
+        for r in rows:
+            self.assertIn("skipped", r["exported_to"])
+
+    def test_onnx_enabled_regime_specific_calls_export(self):
+        """When no_onnx=False the export function IS called (verify wiring in both directions)."""
+        df = self._make_regime_df()
+        feature_cols = [f"f_{i}" for i in range(5)]
+        for col in feature_cols:
+            df[col] = np.random.default_rng(42).random(len(df)).astype(np.float32)
+
+        call_log = []
+        def fake_export(model, fc, filename, alias_filename=None):
+            call_log.append(filename)
+
+        with unittest.mock.patch.object(t30, 'MIN_REGIME_ROWS', 1), \
+             unittest.mock.patch.object(t30, 'MIN_REGIME_SIGNALS', 1), \
+             unittest.mock.patch.object(t30, 'export_to_onnx', fake_export):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                rows = t30.train_regime_specific_models(
+                    df, feature_cols, Path(tmpdir), no_onnx=False
+                )
+        self.assertGreater(len(call_log), 0, "export_to_onnx should be called when no_onnx=False")
+
+
+class TestOpen30NoOnnx(unittest.TestCase):
+    """Regression: --no-onnx must suppress export in train_open30_models()."""
+
+    def _make_open30_df(self, n=200, seed=13):
+        rng = np.random.default_rng(seed)
+        # All rows in the 09:30–09:59 window so open30 filter passes.
+        ts = pd.date_range("2026-01-01 09:30:00", periods=n, freq="30s")
+        dates = [t.strftime("%Y-%m-%d") for t in ts]
+        df = pd.DataFrame({
+            "Timestamp": ts,
+            "Date": dates,
+            "Symbol": "TEST",
+            "Hour": ts.hour,
+            "Minute": ts.minute,
+            "Label_Long_Entry": (rng.random(n) > 0.75).astype(int),
+            "Label_Short_Entry": (rng.random(n) > 0.75).astype(int),
+            "Label_Long_Exit": (rng.random(n) > 0.85).astype(int),
+            "Label_Short_Exit": (rng.random(n) > 0.85).astype(int),
+        })
+        return df
+
+    def test_no_onnx_open30_never_calls_export(self):
+        df = self._make_open30_df()
+        feature_cols = [f"f_{i}" for i in range(5)]
+        for col in feature_cols:
+            df[col] = np.random.default_rng(42).random(len(df)).astype(np.float32)
+
+        sentinel = unittest.mock.MagicMock(
+            side_effect=AssertionError("export_to_onnx must not be called with --no-onnx")
+        )
+        with unittest.mock.patch.object(t30, 'MIN_OPEN30_ROWS', 1), \
+             unittest.mock.patch.object(t30, 'MIN_OPEN30_SIGNALS', 1), \
+             unittest.mock.patch.object(t30, 'export_to_onnx', sentinel):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                rows = t30.train_open30_models(
+                    df, feature_cols, Path(tmpdir), no_onnx=True
+                )
+        sentinel.assert_not_called()
+        for r in rows:
+            self.assertIn("skipped", r["exported_to"])
+
+    def test_onnx_enabled_open30_calls_export(self):
+        df = self._make_open30_df()
+        feature_cols = [f"f_{i}" for i in range(5)]
+        for col in feature_cols:
+            df[col] = np.random.default_rng(42).random(len(df)).astype(np.float32)
+
+        call_log = []
+        def fake_export(model, fc, filename, alias_filename=None):
+            call_log.append(filename)
+
+        with unittest.mock.patch.object(t30, 'MIN_OPEN30_ROWS', 1), \
+             unittest.mock.patch.object(t30, 'MIN_OPEN30_SIGNALS', 1), \
+             unittest.mock.patch.object(t30, 'export_to_onnx', fake_export):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                rows = t30.train_open30_models(
+                    df, feature_cols, Path(tmpdir), no_onnx=False
+                )
+        self.assertGreater(len(call_log), 0, "export_to_onnx should be called when no_onnx=False")
 
 
 if __name__ == "__main__":

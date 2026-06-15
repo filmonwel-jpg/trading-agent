@@ -1048,7 +1048,7 @@ def build_regime_feature_subset(df, all_feature_cols):
     return subset
 
 
-def train_regime_specific_models(df, feature_cols, out_dir):
+def train_regime_specific_models(df, feature_cols, out_dir, no_onnx: bool = False):
     model_specs = [
         ("LONG ENTRY (Dip Buyer)", "Label_Long_Entry", "long_entry.onnx"),
         ("SHORT ENTRY (Rip Seller)", "Label_Short_Entry", "short_entry.onnx"),
@@ -1093,7 +1093,11 @@ def train_regime_specific_models(df, feature_cols, out_dir):
                 continue
 
             versioned_path = out_dir / versioned_name
-            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(resources_name))
+            if no_onnx:
+                exported_to = "(skipped --no-onnx)"
+            else:
+                export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(resources_name))
+                exported_to = str(versioned_path)
 
             summary_rows.append({
                 'regime': regime_name,
@@ -1102,13 +1106,13 @@ def train_regime_specific_models(df, feature_cols, out_dir):
                 'rows': result['total_rows'],
                 'avg_precision': result['avg_precision'],
                 'avg_threshold': result['avg_threshold'],
-                'exported_to': str(versioned_path),
+                'exported_to': exported_to,
             })
 
     return summary_rows
 
 
-def train_open30_models(df, feature_cols, out_dir):
+def train_open30_models(df, feature_cols, out_dir, no_onnx: bool = False):
     model_specs = [
         ("LONG ENTRY (Dip Buyer)", "Label_Long_Entry", "open30_long_entry.onnx"),
         ("SHORT ENTRY (Rip Seller)", "Label_Short_Entry", "open30_short_entry.onnx"),
@@ -1155,7 +1159,11 @@ def train_open30_models(df, feature_cols, out_dir):
             continue
 
         versioned_path = out_dir / filename
-        export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(filename))
+        if no_onnx:
+            exported_to = "(skipped --no-onnx)"
+        else:
+            export_to_onnx(result['model'], len(feature_cols), str(versioned_path), alias_filename=maybe_alias_path(filename))
+            exported_to = str(versioned_path)
 
         summary_rows.append({
             'model': model_name,
@@ -1163,7 +1171,7 @@ def train_open30_models(df, feature_cols, out_dir):
             'rows': result['total_rows'],
             'avg_precision': result['avg_precision'],
             'avg_threshold': result['avg_threshold'],
-            'exported_to': str(versioned_path),
+            'exported_to': exported_to,
         })
 
     return summary_rows
@@ -1812,7 +1820,7 @@ def main():
             f"{row['exported_to']}"
         )
 
-    regime_specific_rows = train_regime_specific_models(df_rest, feature_cols, output_dir)
+    regime_specific_rows = train_regime_specific_models(df_rest, feature_cols, output_dir, no_onnx=no_onnx)
     if regime_specific_rows:
         print("\n>>> REGIME-SPECIFIC MODEL SCORECARD")
         print("Regime | Model | Signals/Rows | AvgPrecision | AvgThreshold | Export")
@@ -1828,7 +1836,7 @@ def main():
         print("\n>>> REGIME-SPECIFIC MODEL SCORECARD")
         print("No trend/volatile specialized models were exported (insufficient rows/signals).")
 
-    open30_rows = train_open30_models(df, feature_cols, output_dir)
+    open30_rows = train_open30_models(df, feature_cols, output_dir, no_onnx=no_onnx)
     if open30_rows:
         print("\n>>> OPENING-30M MODEL SCORECARD")
         print("Model | Signals/Rows | AvgPrecision | AvgThreshold | Export")
