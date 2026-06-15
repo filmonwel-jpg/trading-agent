@@ -615,13 +615,36 @@ print('schema_version:', m.get('schema_version'))
 print('errors:', m.get('errors'))
 print('model_count:', len(m.get('models', [])))
 for r in m.get('models', []):
-    print(f\"  {r['model']}: brier={r.get('brier_score')} ece={r.get('ece')} rows={r.get('calibration_rows')}\")
+    rows = r.get('calibration_rows', r.get('rows'))
+    print(f"  {r['model']}: brier={r.get('brier_score')} ece={r.get('ece')} rows={rows}")
 "
 ```
 
 Action done:
 
-*(to be filled in after verification)*
+- 2026-06-15 Step 14 verification completed on the 48GB machine for `lifecycle_micro_setup30_oof_20260615_131900`.
+- Required files present:
+  - `calibration_manifest.json` ✓
+  - `calibration_reliability.csv` ✓
+  - `feature_schema.json` ✓
+  - `feature_schema.sha256` ✓
+  - `lifecycle_micro_route_manifest.json` ✓
+  - `lifecycle_micro_scorecard.csv` ✓
+  - `train.log` ✓
+- Calibration manifest: `schema_version=lifecycle_micro_calibration_v1`, `errors=[]`, `model_count=6` ✓
+- Raw-probability Brier/ECE metrics from the setup-OOF lifecycle/micro smoke:
+
+| Route | Brier | ECE |
+|---|---:|---:|
+| longExitLifecycleAi | 0.08998221566430302 | 0.04873342874122435 |
+| shortExitLifecycleAi | 0.15042817360250915 | 0.08845588817022396 |
+| longMicroEntryAi | 0.14619443208228028 | 0.08849331526695946 |
+| shortMicroEntryAi | 0.08660043789889454 | 0.052517958287303046 |
+| longMicroExitGuardAi | 0.08716045350325542 | 0.06815129182722955 |
+| shortMicroExitGuardAi | 0.16015057256614065 | 0.10085371071999 |
+
+- Note: the existing manifest uses key `rows` for calibration sample count, so the original verification print showed `rows=None` when asking for `calibration_rows`. Commit after this verification adds `calibration_rows` as an alias while preserving `rows` for backward compatibility.
+- Stop/go decision: **GO** — Step 14 artifact verification passed. The pipeline is valid as infrastructure smoke evidence. Still **NO-GO** for paper/live promotion until post-hoc calibration, cost-aware labels, threshold-stability/day-dominance gates, full-window training, and replay/live parity gates are complete.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 

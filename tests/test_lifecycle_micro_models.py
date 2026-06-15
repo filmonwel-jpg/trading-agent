@@ -270,6 +270,8 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertEqual("lifecycle_micro_calibration_v1", calibration_manifest["schema_version"])
         self.assertEqual([], calibration_manifest["errors"])
         self.assertEqual("longExitLifecycleAi", calibration_manifest["models"][0]["model"])
+        self.assertEqual(120, calibration_manifest["models"][0]["rows"])
+        self.assertEqual(120, calibration_manifest["models"][0]["calibration_rows"])
         self.assertIn("reliability_csv", calibration_manifest["artifacts"])
         self.assertEqual("longExitLifecycleAi", reliability.iloc[0]["model"])
         self.assertAlmostEqual(0.04, reliability.iloc[0]["abs_calibration_error"])

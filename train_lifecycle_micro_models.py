@@ -1058,6 +1058,7 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "filename": r.filename,
             "method": "raw_random_forest_probability_no_posthoc_calibrator",
             "rows": r.calibration_rows,
+            "calibration_rows": r.calibration_rows,
             "brier_score": r.brier_score,
             "ece": r.ece,
             "threshold": r.threshold,
