@@ -685,100 +685,25 @@ Action done:
 
 Recommended 48GB-machine calibrated rerun command:
 
+Use the script below instead of pasting a long heredoc into interactive `zsh`. On the 48GB Mac, interactive `zsh` may not treat `#` as a comment; pasting comment lines with backticked run IDs can accidentally execute text such as `setup_30s_fixed_quality_20260615_124546` as a command. If the prompt is stuck at `>`, press `Ctrl-C`, open a fresh terminal, and use this shorter command sequence.
+
 ```zsh
-set -euo pipefail
-
-export REPO_DIR="/Users/filmonghezehey/trading-agent/worktrees/databento"
-export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
-
-export PILOT_BUILD_ROOT="$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446"
-
-# Use the corrected setup run. The earlier `setup_30s_fixed_quality_20260615_124546`
-# was created before the OOF schema fix and should not be used for lifecycle/micro.
-export SETUP_OUT_DIR="$LAKE_ROOT/model_training_sets/setup_30s_fixed_quality_20260615_144107"
-
-export RUN_ID="lifecycle_micro_posthoc_calibration_$(date +%Y%m%d_%H%M%S)"
-export LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/$RUN_ID"
-
-cd "$REPO_DIR"
-
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
 git fetch origin ai-training-dynamic-upgrade-20260612
 git checkout ai-training-dynamic-upgrade-20260612
 git pull --ff-only
 git --no-pager log --oneline -1
-
-test -f "$PILOT_BUILD_ROOT/combined/combined_30s.csv" || { echo "ERROR: missing $PILOT_BUILD_ROOT/combined/combined_30s.csv"; exit 1; }
-test -f "$PILOT_BUILD_ROOT/combined/combined_5s.csv" || { echo "ERROR: missing $PILOT_BUILD_ROOT/combined/combined_5s.csv"; exit 1; }
-test -f "$SETUP_OUT_DIR/oof_setup_predictions.csv" || { echo "ERROR: missing $SETUP_OUT_DIR/oof_setup_predictions.csv"; exit 1; }
-
-python3 - <<'PY'
-import os
-import pandas as pd
-
-path = os.path.join(os.environ["SETUP_OUT_DIR"], "oof_setup_predictions.csv")
-required = {
-    "Symbol",
-    "Timestamp",
-    "f_long_setup_prob",
-    "f_short_setup_prob",
-    "long_setup_fold_id",
-    "short_setup_fold_id",
-    "is_oof_setup_prediction",
-}
-cols = set(pd.read_csv(path, nrows=5).columns)
-missing = sorted(required - cols)
-if missing:
-    raise SystemExit(f"ERROR: setup OOF CSV is not lifecycle-compatible; missing columns: {missing}\npath={path}")
-print("OOF schema OK:", path)
-PY
-
-mkdir -p "$LIFECYCLE_OUT_DIR"
-
-python3 -u train_lifecycle_micro_models.py \
-  --input-30s-csv "$PILOT_BUILD_ROOT/combined/combined_30s.csv" \
-  --input-5s-csv "$PILOT_BUILD_ROOT/combined/combined_5s.csv" \
-  --setup-predictions-csv "$SETUP_OUT_DIR/oof_setup_predictions.csv" \
-  --output-dir "$LIFECYCLE_OUT_DIR" \
-  --posthoc-calibration both \
-  --posthoc-calibration-frac 0.20 \
-  --frozen-holdout-frac 0.20 \
-  --min-frozen-holdout-rows 500 \
-  --min-holdout-predictions 20 \
-  --max-day-dominance-frac 0.40 \
-  --no-onnx 2>&1 | tee "$LIFECYCLE_OUT_DIR/train.log"
-
-ls -la "$LIFECYCLE_OUT_DIR"
-
-python3 - <<'PY'
-import json
-import os
-import pandas as pd
-
-out = os.environ["LIFECYCLE_OUT_DIR"]
-manifest_path = os.path.join(out, "calibration_manifest.json")
-comparison_path = os.path.join(out, "posthoc_calibration_comparison.csv")
-calibrators_path = os.path.join(out, "posthoc_calibrators.json")
-
-manifest = json.load(open(manifest_path))
-comparison = pd.read_csv(comparison_path)
-
-print("output_dir:", out)
-print("errors:", manifest.get("errors"))
-print("model_count:", len(manifest.get("models", [])))
-print("posthoc_calibrators_exists:", os.path.exists(calibrators_path))
-
-cols = [
-    "model",
-    "calibration_method",
-    "brier_score",
-    "ece",
-    "threshold",
-    "predicted_positive_count",
-    "max_predicted_day_fraction",
-]
-print(comparison[cols].to_string(index=False))
-PY
+bash scripts/run_lifecycle_micro_posthoc_calibration_20260615.sh
 ```
+
+Default paths embedded in the runner:
+
+- `LAKE_ROOT=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2`
+- `PILOT_BUILD_ROOT=$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446`
+- `SETUP_OUT_DIR=$LAKE_ROOT/model_training_sets/setup_30s_fixed_quality_20260615_144107`
+- `LIFECYCLE_OUT_DIR=$LAKE_ROOT/model_training_sets/lifecycle_micro_posthoc_calibration_<timestamp>`
+
+The script writes `train.log`, verifies the setup OOF schema before training, and prints the post-hoc comparison table after training.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
