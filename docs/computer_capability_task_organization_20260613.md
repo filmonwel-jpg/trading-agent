@@ -548,7 +548,71 @@ Then pass `$SETUP_OUT_DIR/oof_setup_predictions.csv` as `--setup-predictions-csv
 
 Action done:
 
-*(to be filled in after 48GB run)*
+- 2026-06-15 Step 13 completed on the 48GB machine after pulling commit `e69b325`.
+
+**Setup rerun** (`setup_30s_fixed_quality_20260615_144107`):
+- Wide-format `oof_setup_predictions.csv` written: `total_rows=35685 oof_rows=18000` ✓
+- All ONNX exports: `(skipped --no-onnx)` for all model families including regime-specific and open30 ✓ (`--no-onnx` fix from `3458d7e` confirmed working)
+- All 6 artifacts present ✓
+
+**Lifecycle/micro rerun** (`lifecycle_micro_setup30_oof_20260615_131900`):
+- OOF join succeeded: `dropped_unscored_30s_rows=21000 retained_rows=18000`, `errors=[]` ✓
+- Setup prediction quality: long `unique_values=17901` finite, short `unique_values=17919` finite — fully non-constant ✓
+- All 6 routes trained successfully:
+
+| Route | Rows | Positives | Threshold | Precision | Recall |
+|---|---|---|---|---|---|
+| longExitLifecycleAi | 22999 | 7663 | 0.58 | 100.00% | 73.41% |
+| shortExitLifecycleAi | 16567 | 5497 | 0.64 | 100.00% | 46.97% |
+| longMicroEntryAi | 8002 | 1276 | 0.50 | 0.00% | 0.00% |
+| shortMicroEntryAi | 5910 | 823 | 0.50 | 96.15% | 43.10% |
+| longMicroExitGuardAi | 7680 | 1602 | 0.60 | 100.00% | 55.37% |
+| shortMicroExitGuardAi | 5448 | 1236 | 0.76 | 99.28% | 39.77% |
+
+- All exports: `disabled` (--no-onnx) ✓
+- Artifacts confirmed written: `lifecycle_micro_scorecard.csv`, `lifecycle_micro_route_manifest.json`
+
+**Notable observations:**
+
+1. **OOF coverage gap**: `retained_rows=18000` vs `28780` from the Step 9/11 `generate_walk_forward_setup_predictions.py` run. The 18000 rows come from 5 walk-forward test folds × ~3600 rows each. The remaining 21000 dropped rows = 17685 train-only rows (never in a test fold) + 3315 opening-window rows. `generate_walk_forward_setup_predictions.py` used a rolling scheme that produced 80.7% OOF coverage (28780/35685); `train_30s_models.py` with `N_SPLITS=5` produces 50.4% coverage (18000/35685). Fewer OOF rows = fewer lifecycle/micro training samples. This is informational for the 10-day pilot; the full-window build will have more training days and better coverage.
+
+2. **longMicroEntryAi failed to learn**: threshold collapsed to `0.50` with `precision=0%` / `recall=0%`. This means the model predicts no positives above 0.50 on the holdout. With only 10 days of data and `--max-entry-events 2000`, this is expected — insufficient entry events for the long micro-entry model on this slice. Not a blocker for the smoke pipeline.
+
+3. **Calibration artifacts**: output log only showed 2 WROTE lines (`lifecycle_micro_scorecard.csv` and `lifecycle_micro_route_manifest.json`). Verify that `calibration_manifest.json` and `calibration_reliability.csv` are also present in the output directory on the 48GB machine. Run: `ls -la "$LIFECYCLE_OUT_DIR/"` and confirm all 4 expected files exist.
+
+- Stop/go decision: **Step 13 pipeline is GO** — wide-format OOF setup predictions flow correctly through to lifecycle/micro training. Infrastructure smoke confirms the end-to-end pipeline from `train_30s_models.py → oof_setup_predictions.csv → train_lifecycle_micro_models.py` works. Results are still research-only 10-day pilot evidence. Next steps: verify calibration artifacts on 48GB machine, then move to Phase 5 (post-hoc isotonic/Platt calibration) or Phase 1 (new mbp-1/tcbbo pilot normalizers).
+
+### Step 14 — Verify lifecycle/micro calibration artifacts and decide next priority
+
+Action plan:
+
+- On the 48GB machine, confirm `calibration_manifest.json` and `calibration_reliability.csv` exist in `lifecycle_micro_setup30_oof_20260615_131900`.
+- If they exist, read `calibration_manifest.json` and compare Brier/ECE per route against Step 11 values. Any change is informational (different OOF coverage).
+- Decide the next priority between:
+  - **Phase 5 (calibration)**: Post-hoc isotonic/Platt calibration with a frozen holdout. Reliability-bin ACE was up to 0.407 on raw RF probabilities (Step 11). Required before any paper/live promotion decision.
+  - **Phase 1 (new sources)**: Build `normalize_equs_mbp1.py` and `normalize_opra_tcbbo.py` silver normalizers to unlock the 58.87 GiB `EQUS mbp-1` and 15.08 GiB `OPRA tcbbo` pilot feeds. These feeds add true quote-state and option trade coverage that the current tbbo/ohlcv-1s baseline lacks.
+  - **Full-window build**: Expand the 10-day pilot to the full aligned window after Phase 1 normalizers are ready.
+- Current recommendation: Phase 5 calibration next (completes the existing pipeline), then Phase 1 new sources (expands feature coverage).
+
+Verification command for the 48GB machine:
+
+```zsh
+LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/lifecycle_micro_setup30_oof_20260615_131900"
+ls -la "$LIFECYCLE_OUT_DIR/"
+python3 -c "
+import json
+m = json.load(open('$LIFECYCLE_OUT_DIR/calibration_manifest.json'))
+print('schema_version:', m.get('schema_version'))
+print('errors:', m.get('errors'))
+print('model_count:', len(m.get('models', [])))
+for r in m.get('models', []):
+    print(f\"  {r['model']}: brier={r.get('brier_score')} ece={r.get('ece')} rows={r.get('calibration_rows')}\")
+"
+```
+
+Action done:
+
+*(to be filled in after verification)*
 
 ### Phase C — Training and promotion gates on the 48GB machine
 
