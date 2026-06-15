@@ -388,6 +388,78 @@ Action done:
 - 2026-06-14 reliability-bin inspection completed on the 48GB artifacts. Selected-threshold bins were very sparse for every route (`14`, `1`, `14`, `4`, `5`, and `10` rows respectively), with threshold-bin absolute calibration error ranging from `0.1328` to `0.4070`. Worst non-empty bins also showed large raw-probability gaps, including `longMicroEntryAi` bin `6` with `3` rows and `0.6104` absolute error, `shortMicroEntryAi` bin `5` with `4` rows and `0.4070` absolute error, and `shortMicroExitGuardAi` bin `5` with `7` rows and `0.4070` absolute error.
 - Stop/go decision: Step 11 durable 10-day calibration-artifact rerun and reliability-bin inspection are complete. Decision is NO-GO for using raw RandomForest probabilities as promotion evidence and GO for a controlled post-hoc calibration step before threshold-stability work. The next calibration step should compare isotonic/Platt-style calibration on a larger/frozen held-out design and then rerun calibration, threshold-stability, trade-count, and day-dominance gates. Still NO paper/live promotion until post-hoc calibration/frozen-holdout threshold-stability gates, recorded-event replay parity, and paper/shadow drift checks pass.
 
+### Step 12 — 30s setup model Tier-1 upgrade: scorecard, calibration, OOF, and threshold-grid artifacts
+
+Action plan:
+
+- Bring `train_30s_models.py` to the same artifact standard as `train_lifecycle_micro_models.py` after Step 11.
+- Add `--output-dir` and `--no-onnx` flags matching the lifecycle trainer interface.
+- Add `calibration_report()` and `feature_schema_hash()` using the same algorithm as the lifecycle trainer and `PingPongStrategy.java`.
+- Extend `perform_walk_forward_testing()` with optional `collect_oof=True` for the two primary entry models only, collecting per-fold Brier/ECE, per-row OOF predictions, threshold stability metrics, and fold grid. Keep `collect_oof=False` default for all other call sites.
+- Write six artifact files unconditionally when `--output-dir` is given (empty header-only CSV files when no folds ran, never silently absent): `setup_scorecard.csv`, `setup_manifest.json`, `calibration_manifest.json`, `calibration_reliability.csv`, `threshold_grid.csv`, `oof_setup_predictions.csv`.
+- `setup_manifest.json` must record `feature_schema_sha256`, `label_info.cost_aware=false` warning, threshold stability fields, and `oof_coverage_frac`.
+- The `oof_setup_predictions.csv` output from this run replaces the separate `generate_walk_forward_setup_predictions.py` step for the same input CSV. Pass it directly to `train_lifecycle_micro_models.py --setup-predictions-csv` on the next lifecycle/micro rerun.
+- Regime classifier must also respect `--no-onnx`.
+- Add 12 unit tests in `tests/test_train_30s_models.py`.
+- Verify full test suite passes.
+
+Pre-run gap review for the 48GB machine (reviewed 2026-06-15):
+
+| # | Item | Status | Impact |
+|---|---|---|---|
+| G1 | `TRAIN_LEGACY_30S_EXIT_MODELS=0` env var prefix syntax | **CONFIRMED SAFE** — Python reads `os.getenv()` at import time, so the prefix env var is effective. Verified: `exit flag: False` in isolation test. | None |
+| G2 | News features (`USE_NEWS_BAR_FEATURES=1` default) with no news columns in pilot CSV | **CONFIRMED SAFE** — `calculate_features()` uses `_opt_numeric(col, default=0.0)` for every raw news source column. All 27 `f_news_*` feature columns will be created as zero-valued when the Databento-only pilot CSV lacks news source columns. The model trains on zero-signal news features. | Performance only: news block adds 27 zero-constant features. Acceptable for a smoke run; exclude with `USE_NEWS_BAR_FEATURES=0` for a cleaner baseline. |
+| G3 | Exit labels always generated even with `TRAIN_LEGACY_30S_EXIT_MODELS=0` | **CONFIRMED SAFE** — `generate_labels()` always computes and assigns `Label_Long_Exit` and `Label_Short_Exit` regardless of the flag. The flag only controls which models are trained; the models list construction references both exit label columns before filtering, so no KeyError. | None |
+| G4 | `ensure_training_csv_available()` with explicit `--input-csv` | **CONFIRMED SAFE** — the function returns `True` immediately if the file exists, no auto-build attempted. | None |
+| G5 | OOF predictions will be limited or empty on the 10-day pilot window | **EXPECTED** — the 10-day window has few distinct days for reliable walk-forward folds. With the strict `ENTRY_PROFIT_PCT` / `ENTRY_RISK_PCT` thresholds and `MIN_NET_R_MULTIPLE=1.20` (currently generating a warning that net R is only 1.07), the number of positive labels may be zero or near-zero for entry models on random-ish data. The `oof_setup_predictions.csv` and `threshold_grid.csv` will be written as empty-header files in this case. This is the expected smoke behavior. Useful OOF predictions require the full-window build. | Informational only on this smoke run. |
+| G6 | `setup_manifest.json` records `label_info.cost_aware=False` warning | **INFORMATIONAL** — the manifest explicitly flags that labels are binary `tp_before_sl` with basic slippage constants only. No `expected_net_r_after_costs` label or label manifest yet. Any feature-block experiment evaluated against these labels is research-only. | Feature experiments must wait for Phase 4 cost-aware labels. |
+| G7 | `$LAKE_ROOT` and `$PILOT_BUILD_ROOT` must be set before running | **USER ACTION REQUIRED** — these are not set by the code. `PILOT_BUILD_ROOT` should point to `model_training_sets/pilot_10d_fixed_quality_20260613_173446` on the 48GB vault. | Command will fail immediately with `:?` error if unset. |
+| G8 | `combined_30s.csv` must exist at `$PILOT_BUILD_ROOT/combined/combined_30s.csv` | **CONFIRMED PRESENT** — post-build verification of `pilot_10d_fixed_quality_20260613_173446` confirmed the combined file exists with 39000 rows for 5 symbols × 10 days. | None |
+
+Action done:
+
+- 2026-06-15 Tier-1 upgrade implemented in `train_30s_models.py` on this computer. All verified items above are from code inspection and isolation tests, not a live 48GB run.
+- Added `--output-dir`, `--no-onnx`, `calibration_report()`, `feature_schema_hash()`, `collect_oof` option in `perform_walk_forward_testing()`, six unconditional artifact files in `main()`.
+- Added `tests/test_train_30s_models.py` with 12 tests; full suite 49 tests OK (up from 37).
+- Committed as `e077a2b`.
+- Stop/go decision: **GO to run Step 12 smoke on the 48GB machine** with the command below. Treat results as infrastructure smoke evidence only — same scope as lifecycle Steps 9-11. The `oof_setup_predictions.csv` output is the key artifact; pass it to the lifecycle/micro trainer on the next full-window rerun to replace `generate_walk_forward_setup_predictions.py`.
+
+Exact command for the 48GB machine after pulling commit `e077a2b`:
+
+```zsh
+# Set these to match the 48GB machine paths.
+export LAKE_ROOT=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2
+export PILOT_BUILD_ROOT="$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446"
+
+test -f "$PILOT_BUILD_ROOT/combined/combined_30s.csv" || { echo "ERROR: combined_30s.csv not found"; exit 1; }
+
+export SETUP_RUN_ID="setup_30s_fixed_quality_$(date +%Y%m%d_%H%M%S)"
+export SETUP_OUT_DIR="$LAKE_ROOT/model_training_sets/$SETUP_RUN_ID"
+mkdir -p "$SETUP_OUT_DIR"
+
+TRAIN_LEGACY_30S_EXIT_MODELS=0 \
+python3 train_30s_models.py \
+  --input-csv "$PILOT_BUILD_ROOT/combined/combined_30s.csv" \
+  --output-dir "$SETUP_OUT_DIR" \
+  --no-onnx \
+  2>&1 | tee "$SETUP_OUT_DIR/train.log"
+```
+
+Optional: add `USE_NEWS_BAR_FEATURES=0` as a prefix env var to suppress zero-signal news feature columns from the baseline feature set. This is recommended for the `baseline_current_v1` experiment to keep the feature count clean.
+
+After the run, verify:
+
+```zsh
+# All six artifact files must exist (may be empty-header CSVs if no signals).
+for f in setup_scorecard.csv setup_manifest.json calibration_manifest.json \
+          calibration_reliability.csv threshold_grid.csv oof_setup_predictions.csv; do
+  test -f "$SETUP_OUT_DIR/$f" && echo "OK $f" || echo "MISSING $f"
+done
+
+# Check manifest schema version.
+python3 -c "import json; m=json.load(open('$SETUP_OUT_DIR/setup_manifest.json')); print('schema_version:', m['schema_version']); print('feature_count:', m['feature_count']); print('oof_long_rows:', m['long_entry']['oof_rows']); print('oof_short_rows:', m['short_entry']['oof_rows'])"
+```
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 1. Use the fixed builders only; old `20260523` staged datasets are pre-fix artifacts.
