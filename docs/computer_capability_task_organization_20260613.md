@@ -501,7 +501,7 @@ Action plan:
 - Record Brier/ECE per route and compare against Step 11 values. Any improvement is informational only (still 10-day slice, still research-only).
 - This run retires `generate_walk_forward_setup_predictions.py` as an intermediate step for the pilot pipeline. The `train_30s_models.py --output-dir` run is now the single source for setup OOF predictions.
 
-Action plan command for the 48GB machine after pulling `3458d7e`:
+Action plan command for the 48GB machine after pulling `e69b325`:
 
 ```zsh
 export LAKE_ROOT=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2
@@ -523,6 +523,28 @@ python3 train_lifecycle_micro_models.py \
   --no-onnx \
   2>&1 | tee "$LIFECYCLE_OUT_DIR/train.log"
 ```
+
+**NOTE on the OOF CSV from `setup_30s_fixed_quality_20260615_124546`**: this was written by commit `e077a2b` (narrow format, wrong schema). It cannot be used directly as `--setup-predictions-csv` because `train_lifecycle_micro_models.py` requires wide-format columns (`long_setup_fold_id`, `short_setup_fold_id`). You must re-run the setup training with commit `e69b325` to produce the corrected wide-format OOF CSV before running Step 13. Use the following corrected setup rerun command first:
+
+```zsh
+export LAKE_ROOT=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2
+export PILOT_BUILD_ROOT="$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446"
+
+test -f "$PILOT_BUILD_ROOT/combined/combined_30s.csv" || { echo "ERROR: combined_30s.csv not found"; exit 1; }
+
+export SETUP_RUN_ID="setup_30s_fixed_quality_$(date +%Y%m%d_%H%M%S)"
+export SETUP_OUT_DIR="$LAKE_ROOT/model_training_sets/$SETUP_RUN_ID"
+mkdir -p "$SETUP_OUT_DIR"
+
+TRAIN_LEGACY_30S_EXIT_MODELS=0 \
+python3 train_30s_models.py \
+  --input-csv "$PILOT_BUILD_ROOT/combined/combined_30s.csv" \
+  --output-dir "$SETUP_OUT_DIR" \
+  --no-onnx \
+  2>&1 | tee "$SETUP_OUT_DIR/train.log"
+```
+
+Then pass `$SETUP_OUT_DIR/oof_setup_predictions.csv` as `--setup-predictions-csv` to the lifecycle/micro run.
 
 Action done:
 
