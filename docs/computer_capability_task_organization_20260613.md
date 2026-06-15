@@ -705,6 +705,45 @@ Default paths embedded in the runner:
 
 The script writes `train.log`, verifies the setup OOF schema before training, and prints the post-hoc comparison table after training.
 
+48GB-machine run result on 2026-06-15:
+
+- Runner: `scripts/run_lifecycle_micro_posthoc_calibration_20260615.sh`
+- Output directory: `model_training_sets/lifecycle_micro_posthoc_calibration_20260615_165831`
+- Setup OOF source: `model_training_sets/setup_30s_fixed_quality_20260615_144107/oof_setup_predictions.csv`
+- OOF setup join succeeded: `dropped_unscored_30s_rows=21000`, `retained_rows=18000`, `errors=[]`, long unique values `17901`, short unique values `17919`.
+- All six lifecycle/micro routes trained and all ONNX exports stayed disabled.
+- Required Phase 5 artifacts were written:
+  - `lifecycle_micro_scorecard.csv`
+  - `lifecycle_micro_route_manifest.json`
+  - `calibration_manifest.json`
+  - `calibration_reliability.csv`
+  - `posthoc_calibration_comparison.csv`
+  - `posthoc_calibration_reliability.csv`
+  - `posthoc_calibrators.json`
+  - `feature_schema.json`
+  - `feature_schema.sha256`
+  - `train.log`
+- Manifest summary: `errors=[]`, `model_count=6`, `posthoc_calibrators_exists=True`.
+
+Frozen-holdout comparison from `posthoc_calibration_comparison.csv`:
+
+| Model | Best Brier method in comparison | Best Brier | Best ECE method in comparison | Best ECE | Notes |
+|---|---|---:|---|---:|---|
+| `longExitLifecycleAi` | raw | 0.085120 | raw | 0.024624 | Raw beat sigmoid/isotonic; selected-method metadata from this run should be corrected by rerunning after the raw-selection fix. |
+| `shortExitLifecycleAi` | raw | 0.129457 | raw | 0.047756 | Raw beat sigmoid/isotonic; selected-method metadata from this run should be corrected by rerunning after the raw-selection fix. |
+| `longMicroEntryAi` | sigmoid | 0.136396 | sigmoid | 0.066769 | Still predicted zero positives at the selected threshold; not promotion-ready. |
+| `shortMicroEntryAi` | sigmoid | 0.135049 | isotonic | 0.036171 | Brier and ECE disagree; keep comparison artifact, do not promote. |
+| `longMicroExitGuardAi` | isotonic | 0.082384 | isotonic | 0.013965 | Strongest calibration improvement in the 10-day smoke. |
+| `shortMicroExitGuardAi` | isotonic | 0.134292 | isotonic | 0.052617 | Some predicted-positive concentration remains. |
+
+Follow-up hardening after reviewing the run:
+
+- The comparison CSV is valid and useful, but `selected_method` in the first Phase 5 run selected the best fitted calibrator even when raw/no-op probabilities had better frozen-holdout Brier/ECE for the two lifecycle exit routes.
+- Code has been hardened so raw/no-op is part of the candidate set and can win selection when it outperforms fitted Platt/isotonic calibrators.
+- Added regression coverage to force fitted calibrators to be worse and assert that `selected_method == raw`.
+- Validation on this computer after the fix: `py_compile` OK and `tests/test_lifecycle_micro_models.py` now has `14` tests OK.
+- Recommendation: after pulling the raw-selection fix on the 48GB machine, rerun `bash scripts/run_lifecycle_micro_posthoc_calibration_20260615.sh` once more before treating the selected-method fields in `calibration_manifest.json`, `lifecycle_micro_scorecard.csv`, or `posthoc_calibrators.json` as the current Phase 5 artifact. The run remains research-only regardless of the rerun because day-dominance, threshold-stability, trade-count, full-window, cost-aware-label, and replay/paper gates are still open.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.

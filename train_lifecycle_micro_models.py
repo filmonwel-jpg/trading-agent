@@ -1006,6 +1006,7 @@ def fit_posthoc_calibration(
     comparison_rows: list[dict[str, object]] = []
     reliability_rows: list[dict[str, object]] = []
     calibrator_candidates: list[dict[str, object]] = []
+    fitted_calibrator_methods: list[str] = []
     warnings: list[str] = []
 
     raw_row, raw_rel = evaluate_probability_candidate(
@@ -1019,6 +1020,14 @@ def fit_posthoc_calibration(
     )
     comparison_rows.append(raw_row)
     reliability_rows.extend(raw_rel)
+    calibrator_candidates.append({
+        "method": "raw",
+        "parameters": {
+            "method": "raw",
+            "type": "identity_raw_probability_no_posthoc_calibrator",
+        },
+        "metrics": raw_row,
+    })
 
     for method in methods:
         try:
@@ -1037,28 +1046,27 @@ def fit_posthoc_calibration(
             comparison_rows.append(candidate_row)
             reliability_rows.extend(candidate_rel)
             calibrator_candidates.append({"method": method, "parameters": calibrator, "metrics": candidate_row})
+            fitted_calibrator_methods.append(method)
         except Exception as exc:
             warnings.append(f"{method} post-hoc calibrator skipped: {exc}")
 
-    selected = None
-    if calibrator_candidates:
-        selected = min(
-            calibrator_candidates,
-            key=lambda c: (
-                float(c["metrics"].get("brier_score", math.inf)),
-                float(c["metrics"].get("ece", math.inf)),
-            ),
-        )
-        if float(selected["metrics"].get("brier_score", math.inf)) > float(raw_row.get("brier_score", math.inf)):
-            warnings.append("Selected post-hoc calibrator did not improve Brier score versus raw probabilities on frozen holdout.")
-    else:
+    selected = min(
+        calibrator_candidates,
+        key=lambda c: (
+            float(c["metrics"].get("brier_score", math.inf)),
+            float(c["metrics"].get("ece", math.inf)),
+        ),
+    )
+    if selected["method"] == "raw" and fitted_calibrator_methods:
+        warnings.append("Raw/no-op probabilities outperformed fitted post-hoc calibrators on frozen holdout; selected raw.")
+    if not fitted_calibrator_methods:
         warnings.append("No post-hoc calibrator could be fitted; raw probabilities remain the only candidate.")
 
     gate_warnings = []
     frozen_rows = int(len(y_holdout))
     if frozen_rows < int(min_frozen_holdout_rows):
         gate_warnings.append(f"frozen_holdout_rows {frozen_rows} < minimum {int(min_frozen_holdout_rows)}")
-    selected_metrics = selected["metrics"] if selected else raw_row
+    selected_metrics = selected["metrics"]
     if int(selected_metrics.get("predicted_positive_count", 0)) < int(min_holdout_predictions):
         gate_warnings.append(
             f"selected predicted_positive_count {selected_metrics.get('predicted_positive_count', 0)} < minimum {int(min_holdout_predictions)}"
@@ -1075,7 +1083,7 @@ def fit_posthoc_calibration(
         "calibration_fit_rows": int(len(y_calibration)),
         "frozen_holdout_rows": frozen_rows,
         "holdout_fingerprint_sha256": holdout_fingerprint(data, holdout_idx, label_col),
-        "selected_method": selected["method"] if selected else "raw",
+        "selected_method": selected["method"],
         "selected_metrics": selected_metrics,
         "raw_metrics": raw_row,
         "comparison_rows": comparison_rows,

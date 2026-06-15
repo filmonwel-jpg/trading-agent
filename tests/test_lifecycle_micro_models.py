@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import json
 import sys
 import tempfile
@@ -295,6 +296,59 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
         self.assertEqual("chronological_base_train_then_calibration_then_frozen_holdout", manifest["holdout_split"])
         self.assertEqual(True, manifest["models"][0]["posthoc"]["enabled"])
         self.assertIn("posthoc_calibrators_json", manifest["artifacts"])
+
+    def test_posthoc_selection_keeps_raw_when_calibrators_are_worse(self) -> None:
+        class DummyModel:
+            classes_ = np.asarray([0, 1])
+
+            def predict_proba(self, X):
+                p = np.asarray(X[:, 0], dtype=float)
+                return np.column_stack([1.0 - p, p])
+
+        x_cal = np.asarray([[0.02], [0.98], [0.04], [0.96], [0.03], [0.97]], dtype=np.float32)
+        y_cal = np.asarray([0, 1, 0, 1, 0, 1], dtype=int)
+        x_hold = np.asarray([[0.01], [0.99], [0.05], [0.95], [0.08], [0.92]], dtype=np.float32)
+        y_hold = np.asarray([0, 1, 0, 1, 0, 1], dtype=int)
+        data = pd.DataFrame({
+            "Symbol": ["AAPL"] * len(y_hold),
+            "Date": ["2026-05-21"] * len(y_hold),
+            "Timestamp": [f"2026-05-21 09:3{i}:00" for i in range(len(y_hold))],
+            "Label_Long_ExitLifecycle": y_hold,
+        })
+
+        with mock.patch.object(
+            lm,
+            "fit_sigmoid_calibrator",
+            return_value={"method": "sigmoid", "type": "forced_bad", "coef": 0.0, "intercept": 0.0},
+        ), mock.patch.object(
+            lm,
+            "fit_isotonic_calibrator",
+            return_value={"method": "isotonic", "type": "forced_bad", "x_thresholds": [0.0, 1.0], "y_thresholds": [0.5, 0.5]},
+        ):
+            posthoc = lm.fit_posthoc_calibration(
+                model=DummyModel(),
+                x_calibration=x_cal,
+                y_calibration=y_cal,
+                x_holdout=x_hold,
+                y_holdout=y_hold,
+                holdout_dates=data["Date"],
+                data=data,
+                holdout_idx=np.arange(len(y_hold)),
+                label_col="Label_Long_ExitLifecycle",
+                model_kind="lifecycle",
+                mode="both",
+                random_state=7,
+                min_frozen_holdout_rows=1,
+                min_holdout_predictions=0,
+                max_day_dominance_frac=1.0,
+            )
+
+        self.assertEqual("raw", posthoc["selected_method"])
+        self.assertEqual(posthoc["raw_metrics"], posthoc["selected_metrics"])
+        self.assertIn("raw", {c["method"] for c in posthoc["calibrator_candidates"]})
+        self.assertTrue(
+            any("Raw/no-op probabilities outperformed" in warning for warning in posthoc["promotion_gate"]["warnings"])
+        )
 
     def test_write_scorecards_writes_route_manifest_schema_hash(self) -> None:
         feature_columns = ["f_30s_ret_1", "f_entry_score_proxy"]
