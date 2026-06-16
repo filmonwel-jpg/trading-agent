@@ -56,6 +56,7 @@ ALLOW_BOOTSTRAP_SETUP_PROXY = os.getenv("ALLOW_BOOTSTRAP_SETUP_PROXY", "0").stri
 MIN_SETUP_SCORE_UNIQUE_VALUES = int(os.getenv("MIN_SETUP_SCORE_UNIQUE_VALUES", "3"))
 POSTHOC_CALIBRATION_MODE = os.getenv("LIFECYCLE_POSTHOC_CALIBRATION", "none").strip().lower()
 POSTHOC_CALIBRATION_METHODS = {"none", "sigmoid", "isotonic", "both"}
+MIN_STABLE_THRESHOLD_POINTS = int(os.getenv("LIFECYCLE_MIN_STABLE_THRESHOLD_POINTS", "3"))
 
 _ENTRY_SCORE_BOOTSTRAP_WARNING_EMITTED = False
 
@@ -173,6 +174,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=float(os.getenv("LIFECYCLE_MAX_DAY_DOMINANCE_FRAC", "0.40")),
         help="Maximum fraction of frozen-holdout predictions allowed on one day before day-dominance warning.",
+    )
+    parser.add_argument(
+        "--min-stable-threshold-points",
+        type=int,
+        default=MIN_STABLE_THRESHOLD_POINTS,
+        help="Minimum contiguous threshold-grid points around the selected threshold that must pass frozen-holdout count/day-dominance gates.",
     )
     return parser.parse_args()
 
@@ -979,6 +986,95 @@ def evaluate_probability_candidate(
     return row, reliability_rows
 
 
+def threshold_stability_grid(
+    *,
+    method: str,
+    selected_threshold: float,
+    y_holdout: np.ndarray,
+    prob_holdout: np.ndarray,
+    holdout_dates: pd.Series | None,
+    model_kind: str,
+    min_holdout_predictions: int,
+    max_day_dominance_frac: float,
+) -> list[dict[str, object]]:
+    thresholds = [float(t) for t in THRESHOLD_RANGES[model_kind]]
+    rows: list[dict[str, object]] = []
+    dates = pd.Series(holdout_dates).reset_index(drop=True) if holdout_dates is not None else None
+    for index, threshold in enumerate(thresholds):
+        preds = (prob_holdout >= threshold).astype(np.int8)
+        pred_count = int(np.sum(preds, dtype=np.int64))
+        pred_pos_rate = float(preds.mean()) if len(preds) else 0.0
+        if dates is not None and pred_count > 0:
+            day_counts = dates[preds.astype(bool)].value_counts()
+            max_day_fraction = float(day_counts.max() / pred_count) if len(day_counts) else 0.0
+            dominant_day = str(day_counts.index[0]) if len(day_counts) else ""
+        else:
+            max_day_fraction = 0.0
+            dominant_day = ""
+        pass_min_predictions = pred_count >= int(min_holdout_predictions)
+        pass_day_dominance = max_day_fraction <= float(max_day_dominance_frac)
+        rows.append({
+            "calibration_method": method,
+            "threshold_index": index,
+            "threshold": threshold,
+            "is_selected_threshold": bool(abs(threshold - float(selected_threshold)) <= 1e-9),
+            "precision": float(precision_score(y_holdout, preds, zero_division=0)),
+            "recall": float(recall_score(y_holdout, preds, zero_division=0)),
+            "pred_pos_rate": pred_pos_rate,
+            "predicted_positive_count": pred_count,
+            "max_predicted_day_fraction": max_day_fraction,
+            "dominant_day": dominant_day,
+            "pass_min_predicted_positive_count": bool(pass_min_predictions),
+            "pass_max_day_dominance": bool(pass_day_dominance),
+            "eligible_threshold": bool(pass_min_predictions and pass_day_dominance),
+        })
+    return rows
+
+
+def summarize_threshold_stability(
+    *,
+    method: str,
+    selected_threshold: float,
+    grid_rows: list[dict[str, object]],
+    min_stable_threshold_points: int,
+) -> dict[str, object]:
+    if not grid_rows:
+        return {
+            "calibration_method": method,
+            "selected_threshold": float(selected_threshold),
+            "stable_island_points": 0,
+            "pass_stable_threshold_island": False,
+        }
+    thresholds = np.asarray([float(row["threshold"]) for row in grid_rows], dtype=float)
+    selected_index = int(np.argmin(np.abs(thresholds - float(selected_threshold))))
+    eligible = [bool(row.get("eligible_threshold", False)) for row in grid_rows]
+    if not eligible[selected_index]:
+        left = right = selected_index
+        island_points = 0
+    else:
+        left = selected_index
+        while left > 0 and eligible[left - 1]:
+            left -= 1
+        right = selected_index
+        while right + 1 < len(eligible) and eligible[right + 1]:
+            right += 1
+        island_points = right - left + 1
+    selected_row = grid_rows[selected_index]
+    return {
+        "calibration_method": method,
+        "selected_threshold": float(selected_threshold),
+        "nearest_threshold": float(grid_rows[selected_index]["threshold"]),
+        "selected_threshold_index": selected_index,
+        "selected_predicted_positive_count": int(selected_row.get("predicted_positive_count", 0)),
+        "selected_max_predicted_day_fraction": float(selected_row.get("max_predicted_day_fraction", 0.0)),
+        "stable_island_points": int(island_points),
+        "stable_island_threshold_min": float(grid_rows[left]["threshold"]) if island_points else None,
+        "stable_island_threshold_max": float(grid_rows[right]["threshold"]) if island_points else None,
+        "min_stable_threshold_points": int(min_stable_threshold_points),
+        "pass_stable_threshold_island": bool(island_points >= int(min_stable_threshold_points)),
+    }
+
+
 def fit_posthoc_calibration(
     *,
     model: RandomForestClassifier,
@@ -996,6 +1092,7 @@ def fit_posthoc_calibration(
     min_frozen_holdout_rows: int,
     min_holdout_predictions: int,
     max_day_dominance_frac: float,
+    min_stable_threshold_points: int = MIN_STABLE_THRESHOLD_POINTS,
 ) -> dict[str, object]:
     mode = (mode or "none").strip().lower()
     if mode == "none":
@@ -1006,6 +1103,7 @@ def fit_posthoc_calibration(
     comparison_rows: list[dict[str, object]] = []
     reliability_rows: list[dict[str, object]] = []
     calibrator_candidates: list[dict[str, object]] = []
+    holdout_prob_by_method: dict[str, np.ndarray] = {"raw": raw_holdout}
     fitted_calibrator_methods: list[str] = []
     warnings: list[str] = []
 
@@ -1034,6 +1132,7 @@ def fit_posthoc_calibration(
             calibrator = fit_sigmoid_calibrator(raw_cal, y_calibration, random_state) if method == "sigmoid" else fit_isotonic_calibrator(raw_cal, y_calibration)
             cal_prob_select = apply_calibrator(raw_cal, calibrator)
             cal_prob_holdout = apply_calibrator(raw_holdout, calibrator)
+            holdout_prob_by_method[method] = cal_prob_holdout
             candidate_row, candidate_rel = evaluate_probability_candidate(
                 method=method,
                 y_select=y_calibration,
@@ -1076,6 +1175,40 @@ def fit_posthoc_calibration(
             f"selected max_predicted_day_fraction {selected_metrics.get('max_predicted_day_fraction')} > maximum {float(max_day_dominance_frac):.3f}"
         )
 
+    threshold_stability_rows: list[dict[str, object]] = []
+    threshold_stability_summary_rows: list[dict[str, object]] = []
+    for candidate in calibrator_candidates:
+        method = str(candidate["method"])
+        if method not in holdout_prob_by_method:
+            continue
+        metrics = candidate["metrics"]
+        method_grid = threshold_stability_grid(
+            method=method,
+            selected_threshold=float(metrics.get("threshold", 0.0)),
+            y_holdout=y_holdout,
+            prob_holdout=holdout_prob_by_method[method],
+            holdout_dates=holdout_dates,
+            model_kind=model_kind,
+            min_holdout_predictions=min_holdout_predictions,
+            max_day_dominance_frac=max_day_dominance_frac,
+        )
+        threshold_stability_rows.extend(method_grid)
+        threshold_stability_summary_rows.append(summarize_threshold_stability(
+            method=method,
+            selected_threshold=float(metrics.get("threshold", 0.0)),
+            grid_rows=method_grid,
+            min_stable_threshold_points=min_stable_threshold_points,
+        ))
+    selected_threshold_stability = next(
+        (row for row in threshold_stability_summary_rows if row.get("calibration_method") == selected["method"]),
+        {},
+    )
+    if selected_threshold_stability and not selected_threshold_stability.get("pass_stable_threshold_island", False):
+        gate_warnings.append(
+            f"selected stable_threshold_island_points {selected_threshold_stability.get('stable_island_points', 0)} "
+            f"< minimum {int(min_stable_threshold_points)}"
+        )
+
     return {
         "enabled": True,
         "requested_mode": mode,
@@ -1088,6 +1221,9 @@ def fit_posthoc_calibration(
         "raw_metrics": raw_row,
         "comparison_rows": comparison_rows,
         "reliability_rows": reliability_rows,
+        "threshold_stability_rows": threshold_stability_rows,
+        "threshold_stability_summary_rows": threshold_stability_summary_rows,
+        "threshold_stability": selected_threshold_stability,
         "calibrator_candidates": calibrator_candidates,
         "promotion_gate": {
             "promotion_ready": False,
@@ -1123,6 +1259,7 @@ def train_binary_model(
     min_frozen_holdout_rows: int = 200,
     min_holdout_predictions: int = 20,
     max_day_dominance_frac: float = 0.40,
+    min_stable_threshold_points: int = MIN_STABLE_THRESHOLD_POINTS,
 ) -> TrainedModelResult | None:
     if df.empty or label_col not in df.columns:
         print(f"SKIP {name}: empty dataset or missing {label_col}")
@@ -1178,6 +1315,7 @@ def train_binary_model(
             min_frozen_holdout_rows=min_frozen_holdout_rows,
             min_holdout_predictions=min_holdout_predictions,
             max_day_dominance_frac=max_day_dominance_frac,
+            min_stable_threshold_points=min_stable_threshold_points,
         )
     export_path = output_dir / filename
     if not no_onnx:
@@ -1364,6 +1502,8 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
     reliability_rows = []
     posthoc_comparison_rows = []
     posthoc_reliability_rows = []
+    posthoc_threshold_stability_rows = []
+    posthoc_threshold_stability_summary_rows = []
     posthoc_calibrator_models = []
     calibration_metrics = []
     for r in results:
@@ -1408,6 +1548,9 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
                     "selected_metrics": selected_posthoc_metrics,
                     "calibrator_artifact": "posthoc_calibrators.json" if posthoc else "",
                     "comparison_artifact": "posthoc_calibration_comparison.csv" if posthoc else "",
+                    "threshold_stability_artifact": "posthoc_threshold_stability.csv" if posthoc else "",
+                    "threshold_stability_report_artifact": "posthoc_threshold_stability_report.json" if posthoc else "",
+                    "threshold_stability": posthoc.get("threshold_stability", {}) if posthoc else {},
                     "promotion_gate": posthoc.get("promotion_gate", {}) if posthoc else {},
                 },
             },
@@ -1435,6 +1578,15 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
                 posthoc_comparison_rows.append({"model": r.name, "filename": r.filename, **row})
             for row in posthoc.get("reliability_rows", []):
                 posthoc_reliability_rows.append({"model": r.name, "filename": r.filename, **row})
+            for row in posthoc.get("threshold_stability_rows", []):
+                posthoc_threshold_stability_rows.append({"model": r.name, "filename": r.filename, **row})
+            for row in posthoc.get("threshold_stability_summary_rows", []):
+                posthoc_threshold_stability_summary_rows.append({
+                    "model": r.name,
+                    "filename": r.filename,
+                    "selected": row.get("calibration_method") == posthoc.get("selected_method"),
+                    **row,
+                })
             for candidate in posthoc.get("calibrator_candidates", []):
                 posthoc_calibrator_models.append({
                     "model": r.name,
@@ -1461,6 +1613,7 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
                 "calibration_fit_rows": posthoc.get("calibration_fit_rows"),
                 "frozen_holdout_rows": posthoc.get("frozen_holdout_rows"),
                 "holdout_fingerprint_sha256": posthoc.get("holdout_fingerprint_sha256"),
+                "threshold_stability": posthoc.get("threshold_stability", {}),
                 "promotion_gate": posthoc.get("promotion_gate", {}),
             }
         else:
@@ -1476,8 +1629,25 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
         "model", "filename", "calibration_method", "bin_index", "prob_min", "prob_max",
         "rows", "mean_predicted_probability", "observed_positive_rate", "abs_calibration_error",
     ]
+    posthoc_threshold_stability_cols = [
+        "model", "filename", "calibration_method", "threshold_index", "threshold",
+        "is_selected_threshold", "precision", "recall", "pred_pos_rate",
+        "predicted_positive_count", "max_predicted_day_fraction", "dominant_day",
+        "pass_min_predicted_positive_count", "pass_max_day_dominance", "eligible_threshold",
+    ]
     pd.DataFrame(posthoc_comparison_rows, columns=posthoc_comparison_cols).to_csv(output_dir / "posthoc_calibration_comparison.csv", index=False)
     pd.DataFrame(posthoc_reliability_rows, columns=posthoc_reliability_cols).to_csv(output_dir / "posthoc_calibration_reliability.csv", index=False)
+    pd.DataFrame(posthoc_threshold_stability_rows, columns=posthoc_threshold_stability_cols).to_csv(output_dir / "posthoc_threshold_stability.csv", index=False)
+    posthoc_threshold_stability_report = {
+        "schema_version": "lifecycle_micro_posthoc_threshold_stability_v1",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "description": "Frozen-holdout threshold grid plus contiguous eligible-threshold island around each candidate's selected threshold. Eligibility uses the configured minimum predicted-positive count and maximum one-day dominance fraction.",
+        "models": posthoc_threshold_stability_summary_rows,
+        "warnings": [
+            "This is threshold-neighborhood stability on one frozen chronological holdout, not cross-fold stability or live/paper promotion approval."
+        ],
+    }
+    (output_dir / "posthoc_threshold_stability_report.json").write_text(json.dumps(posthoc_threshold_stability_report, indent=2), encoding="utf-8")
     posthoc_calibrators = {
         "schema_version": "lifecycle_micro_posthoc_calibrators_v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -1517,6 +1687,8 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
             "reliability_csv": "calibration_reliability.csv",
             "posthoc_comparison_csv": "posthoc_calibration_comparison.csv",
             "posthoc_reliability_csv": "posthoc_calibration_reliability.csv",
+            "posthoc_threshold_stability_csv": "posthoc_threshold_stability.csv",
+            "posthoc_threshold_stability_report_json": "posthoc_threshold_stability_report.json",
             "posthoc_calibrators_json": "posthoc_calibrators.json",
             "route_manifest_json": "lifecycle_micro_route_manifest.json",
         },
@@ -1610,6 +1782,7 @@ def main() -> None:
             min_frozen_holdout_rows=args.min_frozen_holdout_rows,
             min_holdout_predictions=args.min_holdout_predictions,
             max_day_dominance_frac=args.max_day_dominance_frac,
+            min_stable_threshold_points=args.min_stable_threshold_points,
         )
         if result is not None:
             results.append(result)
@@ -1621,6 +1794,8 @@ def main() -> None:
     print(f"WROTE {output_dir / 'calibration_reliability.csv'}")
     print(f"WROTE {output_dir / 'posthoc_calibration_comparison.csv'}")
     print(f"WROTE {output_dir / 'posthoc_calibration_reliability.csv'}")
+    print(f"WROTE {output_dir / 'posthoc_threshold_stability.csv'}")
+    print(f"WROTE {output_dir / 'posthoc_threshold_stability_report.json'}")
     print(f"WROTE {output_dir / 'posthoc_calibrators.json'}")
     print(f"WROTE {output_dir / 'feature_schema.json'}")
 

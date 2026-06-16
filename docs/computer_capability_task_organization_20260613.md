@@ -815,7 +815,60 @@ Expected result for the 10-day corrected Phase 5 smoke: `POSTHOC_PROMOTION_GATE=
 | `longMicroExitGuardAi` | isotonic | 222 | 1.00000 | FAIL | day dominance |
 | `shortMicroExitGuardAi` | isotonic | 297 | 0.52862 | FAIL | day dominance above `0.40` cap |
 
-- Stop/go decision: **Correct FAIL**. The checker is doing its job. The 10-day smoke now has explicit machine-readable evidence that Phase 5 calibration artifacts exist but cannot be promoted. Do not relax this gate to pass a short pilot. Next blockers are threshold-stability/stable-island reporting, cost-aware labels, full-window training, runtime calibration application, replay parity, and paper/shadow checks.
+- Stop/go decision: **Correct FAIL**. The checker is doing its job. The 10-day smoke now has explicit machine-readable evidence that Phase 5 calibration artifacts exist but cannot be promoted. Do not relax this gate to pass a short pilot. Next blockers are Step 17 threshold-stability artifacts from a rerun, cost-aware labels, full-window training, runtime calibration application, replay parity, and paper/shadow checks.
+
+### Step 17 — Threshold-stability / stable-island reporting
+
+Action plan:
+
+- During post-hoc lifecycle/micro training, evaluate every configured threshold-grid point on the frozen chronological holdout for each candidate probability stream: raw, sigmoid, and isotonic when fitted.
+- Mark each threshold as eligible only when it passes the same frozen-holdout minimum predicted-positive count and max one-day dominance limits used by the promotion-gate checker.
+- Summarize the contiguous eligible-threshold island around each candidate's selected threshold.
+- Keep this as a research gate: it is a one-frozen-holdout threshold-neighborhood stability check, not cross-fold stability, PnL validation, or paper/live approval.
+
+Action done in code:
+
+- `train_lifecycle_micro_models.py` now writes:
+  - `posthoc_threshold_stability.csv`
+  - `posthoc_threshold_stability_report.json`
+- `calibration_manifest.json` and `lifecycle_micro_route_manifest.json` now reference the threshold-stability artifacts.
+- `scripts/check_lifecycle_posthoc_gates.py` now requires a selected-method stable island via `--min-stable-threshold-points` and reports `stable_threshold_island_points` in gate rows.
+- Existing Step 16 outputs cannot be upgraded artifact-only because the frozen-holdout probabilities were not persisted; rerun training to produce Step 17 artifacts.
+
+Rerun the corrected Phase 5 smoke with Step 17 artifacts:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+export SETUP_PREDICTIONS="$LAKE_ROOT/model_training_sets/setup_oof_predictions_20260615_153000/setup_oof_predictions.csv"
+export LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/lifecycle_micro_posthoc_threshold_stability_$(date +%Y%m%d_%H%M%S)"
+
+python3 train_lifecycle_micro_models.py \
+  --input-30s-csv "$LAKE_ROOT/normalized_30s" \
+  --input-5s-csv "$LAKE_ROOT/normalized_5s" \
+  --setup-predictions-csv "$SETUP_PREDICTIONS" \
+  --output-dir "$LIFECYCLE_OUT_DIR" \
+  --posthoc-calibration both \
+  --posthoc-calibration-frac 0.20 \
+  --frozen-holdout-frac 0.20 \
+  --min-frozen-holdout-rows 500 \
+  --min-holdout-predictions 20 \
+  --max-day-dominance-frac 0.40 \
+  --min-stable-threshold-points 3
+```
+
+Then rerun the artifact-only promotion-gate report:
+
+```zsh
+python3 scripts/check_lifecycle_posthoc_gates.py \
+  --output-dir "$LIFECYCLE_OUT_DIR" \
+  --min-frozen-holdout-rows 500 \
+  --min-predicted-positive-count 20 \
+  --max-day-dominance-frac 0.40 \
+  --min-stable-threshold-points 3
+```
+
+Expected result for a short corrected smoke remains `POSTHOC_PROMOTION_GATE=FAIL` unless each selected method has enough frozen-holdout predictions, no excessive single-day dominance, and at least three contiguous eligible threshold-grid points around its selected threshold.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 

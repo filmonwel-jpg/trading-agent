@@ -283,19 +283,28 @@ class LifecycleMicroRowBuilderTest(unittest.TestCase):
             self.assertEqual(36, posthoc["calibration_fit_rows"])
             self.assertEqual(36, posthoc["frozen_holdout_rows"])
             self.assertEqual(64, len(posthoc["holdout_fingerprint_sha256"]))
+            self.assertGreaterEqual(len(posthoc["threshold_stability_rows"]), 16)
+            self.assertIn("stable_island_points", posthoc["threshold_stability"])
 
             lm.write_scorecards(out, [result])
             comparison = pd.read_csv(out / "posthoc_calibration_comparison.csv")
+            stability = pd.read_csv(out / "posthoc_threshold_stability.csv")
+            stability_report = json.loads((out / "posthoc_threshold_stability_report.json").read_text(encoding="utf-8"))
             calibrators = json.loads((out / "posthoc_calibrators.json").read_text(encoding="utf-8"))
             manifest = json.loads((out / "calibration_manifest.json").read_text(encoding="utf-8"))
 
         self.assertIn("raw", set(comparison["calibration_method"]))
         self.assertGreaterEqual(len(comparison), 2)
+        self.assertGreaterEqual(len(stability), 16)
+        self.assertIn("eligible_threshold", stability.columns)
+        self.assertEqual("lifecycle_micro_posthoc_threshold_stability_v1", stability_report["schema_version"])
+        self.assertGreaterEqual(len(stability_report["models"]), 1)
         self.assertGreaterEqual(len(calibrators["models"]), 1)
         self.assertEqual("raw_random_forest_probability_with_posthoc_sigmoid_isotonic_comparison", manifest["method"])
         self.assertEqual("chronological_base_train_then_calibration_then_frozen_holdout", manifest["holdout_split"])
         self.assertEqual(True, manifest["models"][0]["posthoc"]["enabled"])
         self.assertIn("posthoc_calibrators_json", manifest["artifacts"])
+        self.assertIn("posthoc_threshold_stability_report_json", manifest["artifacts"])
 
     def test_posthoc_selection_keeps_raw_when_calibrators_are_worse(self) -> None:
         class DummyModel:

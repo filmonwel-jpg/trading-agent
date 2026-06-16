@@ -15,7 +15,13 @@ SPEC.loader.exec_module(gates)
 
 
 class CheckLifecyclePosthocGatesTest(unittest.TestCase):
-    def _write_artifacts(self, out: Path, score_rows: list[dict], comparison_rows: list[dict]) -> None:
+    def _write_artifacts(
+        self,
+        out: Path,
+        score_rows: list[dict],
+        comparison_rows: list[dict],
+        stability_rows: list[dict] | None = None,
+    ) -> None:
         manifest = {
             "schema_version": "lifecycle_micro_calibration_v1",
             "errors": [],
@@ -31,6 +37,30 @@ class CheckLifecyclePosthocGatesTest(unittest.TestCase):
         (out / "posthoc_calibrators.json").write_text(json.dumps({"models": []}), encoding="utf-8")
         pd.DataFrame(score_rows).to_csv(out / "lifecycle_micro_scorecard.csv", index=False)
         pd.DataFrame(comparison_rows).to_csv(out / "posthoc_calibration_comparison.csv", index=False)
+        if stability_rows is None:
+            stability_rows = [
+                {
+                    "model": row["model"],
+                    "filename": f"{row['model']}.onnx",
+                    "selected": True,
+                    "calibration_method": row["posthoc_selected_method"],
+                    "selected_threshold": 0.62,
+                    "nearest_threshold": 0.62,
+                    "selected_threshold_index": 6,
+                    "selected_predicted_positive_count": 40,
+                    "selected_max_predicted_day_fraction": 0.25,
+                    "stable_island_points": 4,
+                    "stable_island_threshold_min": 0.58,
+                    "stable_island_threshold_max": 0.64,
+                    "min_stable_threshold_points": 3,
+                    "pass_stable_threshold_island": True,
+                }
+                for row in score_rows
+            ]
+        (out / "posthoc_threshold_stability_report.json").write_text(
+            json.dumps({"schema_version": "lifecycle_micro_posthoc_threshold_stability_v1", "models": stability_rows}),
+            encoding="utf-8",
+        )
 
     def test_evaluate_gates_passes_when_selected_method_is_best_and_limits_hold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +135,51 @@ class CheckLifecyclePosthocGatesTest(unittest.TestCase):
         self.assertEqual("FAIL", rows.iloc[0]["gate_status"])
         self.assertIn("predicted_positive_count", rows.iloc[0]["warnings"])
         self.assertIn("max_predicted_day_fraction", rows.iloc[0]["warnings"])
+
+    def test_evaluate_gates_fails_unstable_selected_threshold_island(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self._write_artifacts(
+                out,
+                [{"model": "shortExitLifecycleAi", "posthoc_selected_method": "raw"}],
+                [
+                    {
+                        "model": "shortExitLifecycleAi",
+                        "calibration_method": "raw",
+                        "brier_score": 0.10,
+                        "ece": 0.02,
+                        "threshold": 0.62,
+                        "calibration_rows": 600,
+                        "predicted_positive_count": 45,
+                        "max_predicted_day_fraction": 0.25,
+                    },
+                ],
+                stability_rows=[
+                    {
+                        "model": "shortExitLifecycleAi",
+                        "filename": "short_exit_lifecycle.onnx",
+                        "selected": True,
+                        "calibration_method": "raw",
+                        "selected_threshold": 0.62,
+                        "nearest_threshold": 0.62,
+                        "selected_threshold_index": 6,
+                        "selected_predicted_positive_count": 45,
+                        "selected_max_predicted_day_fraction": 0.25,
+                        "stable_island_points": 1,
+                        "stable_island_threshold_min": 0.62,
+                        "stable_island_threshold_max": 0.62,
+                        "min_stable_threshold_points": 3,
+                        "pass_stable_threshold_island": False,
+                    }
+                ],
+            )
+
+            summary, rows = gates.evaluate_gates(out)
+
+        self.assertFalse(summary["promotion_ready"])
+        self.assertEqual("FAIL", rows.iloc[0]["gate_status"])
+        self.assertEqual(1, rows.iloc[0]["stable_threshold_island_points"])
+        self.assertIn("stable_threshold_island_points", rows.iloc[0]["warnings"])
 
 
 if __name__ == "__main__":

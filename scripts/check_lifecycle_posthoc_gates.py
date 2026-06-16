@@ -48,12 +48,27 @@ def selected_manifest_methods(manifest: dict) -> dict[str, str]:
     return methods
 
 
+def load_threshold_stability(output_dir: Path) -> dict[tuple[str, str], dict]:
+    report_path = output_dir / "posthoc_threshold_stability_report.json"
+    if not report_path.is_file():
+        return {}
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    summaries: dict[tuple[str, str], dict] = {}
+    for row in report.get("models", []) or []:
+        model = str(row.get("model", ""))
+        method = str(row.get("calibration_method", ""))
+        if model and method:
+            summaries[(model, method)] = row
+    return summaries
+
+
 def evaluate_gates(
     output_dir: Path,
     *,
     min_frozen_holdout_rows: int = 500,
     min_predicted_positive_count: int = 20,
     max_day_dominance_frac: float = 0.40,
+    min_stable_threshold_points: int = 3,
     brier_tolerance: float = 1e-12,
 ) -> tuple[dict, pd.DataFrame]:
     missing = [name for name in REQUIRED_ARTIFACTS if not (output_dir / name).is_file()]
@@ -64,6 +79,8 @@ def evaluate_gates(
     scorecard = pd.read_csv(output_dir / "lifecycle_micro_scorecard.csv")
     comparison = pd.read_csv(output_dir / "posthoc_calibration_comparison.csv")
     manifest_methods = selected_manifest_methods(manifest)
+    threshold_stability = load_threshold_stability(output_dir)
+    has_threshold_stability_report = bool((output_dir / "posthoc_threshold_stability_report.json").is_file())
 
     required_scorecard_cols = {"model", "posthoc_selected_method"}
     required_comparison_cols = {
@@ -126,6 +143,20 @@ def evaluate_gates(
         if not pass_day_dominance:
             warnings.append(f"max_predicted_day_fraction {max_day_fraction:.5f} > maximum {float(max_day_dominance_frac):.5f}")
 
+        stability_summary = threshold_stability.get((model, selected_method), {})
+        stable_island_points = finite_int(stability_summary.get("stable_island_points")) if stability_summary else 0
+        pass_stable_threshold_island = bool(
+            stability_summary
+            and stability_summary.get("pass_stable_threshold_island")
+            and stable_island_points >= int(min_stable_threshold_points)
+        )
+        if not has_threshold_stability_report:
+            warnings.append("missing posthoc_threshold_stability_report.json; rerun training with Step 17 artifacts")
+        elif not stability_summary:
+            warnings.append(f"missing threshold-stability summary for selected_method {selected_method!r}")
+        elif not pass_stable_threshold_island:
+            warnings.append(f"stable_threshold_island_points {stable_island_points} < minimum {int(min_stable_threshold_points)}")
+
         gate_status = "PASS" if (
             not manifest_errors
             and not warnings
@@ -133,6 +164,7 @@ def evaluate_gates(
             and pass_min_predictions
             and pass_day_dominance
             and pass_selected_brier
+            and pass_stable_threshold_island
         ) else "FAIL"
 
         rows.append({
@@ -149,6 +181,10 @@ def evaluate_gates(
             "pass_min_predicted_positive_count": pass_min_predictions,
             "pass_max_day_dominance": pass_day_dominance,
             "pass_selected_best_brier": pass_selected_brier,
+            "stable_threshold_island_points": stable_island_points,
+            "stable_threshold_island_min": stability_summary.get("stable_island_threshold_min") if stability_summary else "",
+            "stable_threshold_island_max": stability_summary.get("stable_island_threshold_max") if stability_summary else "",
+            "pass_stable_threshold_island": pass_stable_threshold_island,
             "gate_status": gate_status,
             "warnings": "; ".join(warnings),
         })
@@ -167,11 +203,13 @@ def evaluate_gates(
             "min_frozen_holdout_rows": int(min_frozen_holdout_rows),
             "min_predicted_positive_count": int(min_predicted_positive_count),
             "max_day_dominance_frac": float(max_day_dominance_frac),
+            "min_stable_threshold_points": int(min_stable_threshold_points),
             "brier_tolerance": float(brier_tolerance),
         },
         "artifacts": {
             "gate_rows_csv": "posthoc_promotion_gate_rows.csv",
             "gate_report_json": "posthoc_promotion_gate_report.json",
+            "threshold_stability_report_json": "posthoc_threshold_stability_report.json",
         },
         "models": rows,
     }
@@ -184,6 +222,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-frozen-holdout-rows", type=int, default=500)
     parser.add_argument("--min-predicted-positive-count", type=int, default=20)
     parser.add_argument("--max-day-dominance-frac", type=float, default=0.40)
+    parser.add_argument("--min-stable-threshold-points", type=int, default=3)
     parser.add_argument("--brier-tolerance", type=float, default=1e-12)
     parser.add_argument("--no-write", action="store_true", help="Print only; do not write gate report artifacts.")
     parser.add_argument("--fail-on-gate", action="store_true", help="Exit 1 when promotion_ready is false.")
@@ -198,6 +237,7 @@ def main() -> None:
         min_frozen_holdout_rows=args.min_frozen_holdout_rows,
         min_predicted_positive_count=args.min_predicted_positive_count,
         max_day_dominance_frac=args.max_day_dominance_frac,
+        min_stable_threshold_points=args.min_stable_threshold_points,
         brier_tolerance=args.brier_tolerance,
     )
     if not args.no_write:
@@ -211,6 +251,7 @@ def main() -> None:
         "selected_method",
         "predicted_positive_count",
         "max_predicted_day_fraction",
+        "stable_threshold_island_points",
         "gate_status",
     ]].to_string(index=False))
     print(f"POSTHOC_PROMOTION_GATE={'PASS' if summary['promotion_ready'] else 'FAIL'}")
