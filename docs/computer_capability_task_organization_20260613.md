@@ -1308,6 +1308,29 @@ Action done on 2026-06-16 — broader/full-window cost-aware setup + lifecycle c
   - `shortMicroExitGuardAi`: predicted positives `8717`, max day fraction `0.0995`, stable island points `17`.
 - Interpretation: this is the first full-window baseline chain to pass the post-hoc artifact gate, threshold-stability count gate, and day-dominance gate. It is **GO for deeper review and replay/backtest preparation**, but still **NO-GO for paper/live promotion** until runtime calibration application, recorded-event replay parity, full decision/PnL/day-dominance backtests, paper/shadow drift checks, and cost-aware label economics review are complete.
 
+Action done on 2026-06-16 — setup precision-improvement experiments reviewed from the mounted external disk:
+
+- External disk was mounted at `/Volumes/DatabentoVault`; free space was about `2.9TiB` available (`4.5TiB` size, `1.7TiB` used).
+- Two early LightGBM directories were incomplete/aborted because LightGBM initially fell back to RandomForest before `libomp`/latest guard handling was fixed: `setup_cost_aware_30s_lightgbm_nonews_20260616_154515` and `setup_cost_aware_30s_lightgbm_nonews_20260616_155549`. Ignore these directories.
+- Completed full-window setup experiment artifacts all had `errors=[]`, `paired_oof_rows=630000`, and `oof_coverage_frac=0.8219338930311748`.
+- Base setup scorecard comparison:
+
+| Setup run | Family | Features | Min expected net R label | Long avg precision | Short avg precision | Avg ECE | Notes |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `setup_cost_aware_30s_20260615_192705` | RandomForest | 61 | `0.00` | `27.86%` | `44.13%` | `19.40%` | Original full-window run; news feature block enabled and setup output directory name was stale. |
+| `setup_cost_aware_30s_nonews_20260616_141009` | RandomForest | 34 | `0.00` | `32.25%` | `44.20%` | `19.38%` | Removing zero-signal news features improved long precision without hurting short, but predictions stayed sparse/day-concentrated. |
+| `setup_cost_aware_30s_lightgbm_nonews_20260616_163138` | LightGBM | 34 | `0.00` | `37.15%` | `36.70%` | `18.43%` | Best calibration and much more stable OOF coverage across days; `code_commit=7c5368a`. |
+| `setup_cost_aware_30s_catboost_nonews_20260616_163956` | CatBoost | 34 | `0.00` | `37.69%` | `36.28%` | `18.70%` | Best balanced/global OOF precision; `code_commit=7c5368a`. |
+| `setup_cost_aware_30s_minr_0.25_nonews_20260616_165025` | RandomForest | 34 | `0.25` | `31.16%` | `30.61%` | `26.35%` | Stricter label reduced prevalence/signals but worsened precision/ECE. Do not use as next candidate. |
+| `setup_cost_aware_30s_minr_0.50_nonews_20260616_170027` | RandomForest | 34 | `0.50` | `25.79%` | `25.47%` | `29.49%` | Worse on precision/ECE. Do not use as next candidate. |
+
+- OOF-global thresholded comparison gives a more stable view than unweighted fold-average scorecard precision:
+  - CatBoost no-news: global OOF precision `37.71%` long / `36.18%` short, predicted positives `68575` long / `74550` short, worst-side max predicted-day fraction `3.04%`.
+  - LightGBM no-news: global OOF precision `37.24%` long / `36.15%` short, predicted positives `57164` long / `63135` short, worst-side max predicted-day fraction `3.29%`.
+  - RandomForest no-news: global OOF precision `35.38%` long / `37.91%` short, but only `13346` long / `14797` short predicted positives and worst-side max predicted-day fraction `12.00%`.
+- Preferred next lifecycle/micro rerun setup input if running only one candidate: `setup_cost_aware_30s_catboost_nonews_20260616_163956/oof_setup_predictions.csv`, because it has the best balanced global OOF precision with low day concentration. LightGBM no-news is a near-tie and is the alternate if prioritizing slightly lower ECE over global OOF precision.
+- These setup experiments are still research-only. Setup probabilities remain imperfectly calibrated and mean expected net R among thresholded predicted positives is still negative, so this is not a paper/live promotion signal by itself. Use the selected OOF file to test whether lifecycle/micro downstream gates improve, then evaluate replay/backtest PnL/day dominance before any promotion decision.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
