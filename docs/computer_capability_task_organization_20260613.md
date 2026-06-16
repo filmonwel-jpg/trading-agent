@@ -70,7 +70,7 @@ Use the 48GB computer for all artifact-producing work, especially anything that 
 
 Good tasks for the 48GB machine:
 
-1. Mount/copy the raw folders with write-capable output storage available.
+1. Read raw DBN folders in place with write-capable output storage available for generated artifacts; do not copy `Downloads` source DBNs to the vault unless a later capacity-approved step explicitly reverses this.
 2. Create source manifests and paired-date manifests for the new pilot schemas.
 3. Decode one day per schema and produce schema/row-count/storage estimates.
 4. Build the first 10-day pilot slice for `TSLA`, `TQQQ`, `NVDA`, `SPY`, and `QQQ`.
@@ -1094,6 +1094,8 @@ Decision on 2026-06-16: keep the current cost assumptions for now and move to br
 
 Location correction from the 48GB Mac on 2026-06-16: the broader-duration inputs are currently raw DBN download folders under `/Users/filmonghezehey/Downloads`, not prebuilt `combined_30s.csv` / `combined_5s.csv` training files. Earlier docs recorded these folders at `/Volumes/DatabentoVault/...`; for this run, use the `Downloads` paths as the source of truth and build the combined CSVs first.
 
+Storage policy correction from the user on 2026-06-16: do **not** copy the source DBN folders from `Downloads` to the external disk for now. The raw source DBNs should stay in `/Users/filmonghezehey/Downloads`; only generated `data_lake_v2` outputs such as manifests, `combined_30s.csv`, `combined_5s.csv`, setup artifacts, lifecycle artifacts, and logs should write under `/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2`.
+
 Current raw DBN folder mapping:
 
 | Current 48GB source folder | Recorded/known role | Used by current baseline builder? | Notes |
@@ -1166,7 +1168,7 @@ RUN_CHAIN_AFTER_BUILD=1 \
 bash scripts/run_core_full_window_bars_from_downloads_20260616.sh
 ```
 
-Raw-folder copy note: do **not** delete the `Downloads` DBN folders after a copy without a manifest/hash review. If a durable copy to the vault is needed first, use `COPY_RAW_DOWNLOADS=1`; this copies with `rsync` and writes `raw_download_manifest.json`, but the current recommended training path reads from `Downloads` because that is where the user confirmed the raw DBN sources currently live.
+Raw-folder copy policy: do **not** copy the source DBN folders to the external disk for this run. Leave the six raw DBN folders in `Downloads`; `scripts/run_core_full_window_bars_from_downloads_20260616.sh` now rejects `COPY_RAW_DOWNLOADS=1` and `USE_COPIED_RAW_FOR_BUILD=1`. The allowed external writes are the manifest/build/training outputs under the `data_lake_v2` output root.
 
 Action added in code:
 
@@ -1186,7 +1188,7 @@ Action added in code:
   - validates `oof_setup_predictions.csv` schema and paired OOF count before lifecycle/micro starts,
   - runs lifecycle/micro with posthoc calibration, threshold-stability, promotion-gate artifacts, streamed per-symbol staging, and `--no-onnx`,
   - writes everything under `$LAKE_ROOT/model_training_sets/broader_full_window_cost_aware_<timestamp>/` by default.
-- `scripts/run_core_full_window_bars_from_downloads_20260616.sh` is the prerequisite when only raw DBN folders exist. It inventories the six `Downloads` raw folders, builds `combined_30s.csv` / `combined_5s.csv` from the two currently supported `20260523` folders, and can optionally launch the cost-aware chain with `RUN_CHAIN_AFTER_BUILD=1`.
+- `scripts/run_core_full_window_bars_from_downloads_20260616.sh` is the prerequisite when only raw DBN folders exist. It inventories the six `Downloads` raw folders in place, does not copy source DBNs to external storage, builds `combined_30s.csv` / `combined_5s.csv` from the two currently supported `20260523` folders, and can optionally launch the cost-aware chain with `RUN_CHAIN_AFTER_BUILD=1`.
 
 If combined full-window CSVs already exist, or after `scripts/run_core_full_window_bars_from_downloads_20260616.sh` creates them, preflight the cost-aware chain with the built CSV paths:
 

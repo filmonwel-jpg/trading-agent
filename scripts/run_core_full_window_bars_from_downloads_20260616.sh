@@ -44,7 +44,6 @@ RUNNER_PREFLIGHT_ONLY="${RUNNER_PREFLIGHT_ONLY:-0}"
 RUN_CHAIN_AFTER_BUILD="${RUN_CHAIN_AFTER_BUILD:-0}"
 COPY_RAW_DOWNLOADS="${COPY_RAW_DOWNLOADS:-0}"
 USE_COPIED_RAW_FOR_BUILD="${USE_COPIED_RAW_FOR_BUILD:-0}"
-RAW_COPY_DEST_ROOT="${RAW_COPY_DEST_ROOT:-$LAKE_ROOT/raw_downloads/databento_downloads_$BUILD_TS}"
 WRITE_1S_OUTPUTS="${WRITE_1S_OUTPUTS:-0}"
 
 MIN_UNIQUE_DAYS="${MIN_UNIQUE_DAYS:-100}"
@@ -59,11 +58,11 @@ echo "OUTPUT_ROOT=$OUTPUT_ROOT"
 echo "BUILD_ROOT=$BUILD_ROOT"
 echo "SYMBOLS=$SYMBOLS"
 echo "MAX_DAYS=$MAX_DAYS"
+echo "RAW_SOURCE_COPY_POLICY=disabled_downloads_in_place"
 echo "RUNNER_PREFLIGHT_ONLY=$RUNNER_PREFLIGHT_ONLY"
 echo "RUN_CHAIN_AFTER_BUILD=$RUN_CHAIN_AFTER_BUILD"
-echo "COPY_RAW_DOWNLOADS=$COPY_RAW_DOWNLOADS"
-echo "USE_COPIED_RAW_FOR_BUILD=$USE_COPIED_RAW_FOR_BUILD"
-echo "RAW_COPY_DEST_ROOT=$RAW_COPY_DEST_ROOT"
+echo "COPY_RAW_DOWNLOADS=$COPY_RAW_DOWNLOADS (must remain false)"
+echo "USE_COPIED_RAW_FOR_BUILD=$USE_COPIED_RAW_FOR_BUILD (must remain false)"
 echo "WRITE_1S_OUTPUTS=$WRITE_1S_OUTPUTS"
 echo "RAW_EQUS_TBBO=$RAW_EQUS_TBBO"
 echo "RAW_OPRA_OHLCV=$RAW_OPRA_OHLCV"
@@ -71,6 +70,15 @@ echo "RAW_EQUS_DEFINITION=$RAW_EQUS_DEFINITION"
 echo "RAW_OPRA_DEFINITION=$RAW_OPRA_DEFINITION"
 echo "RAW_EQUS_MBP1=$RAW_EQUS_MBP1"
 echo "RAW_OPRA_TCBBO=$RAW_OPRA_TCBBO"
+
+if truthy "$COPY_RAW_DOWNLOADS" || truthy "$USE_COPIED_RAW_FOR_BUILD"; then
+  cat >&2 <<'EOF'
+ERROR: source DBN copying is disabled for this runner.
+Leave raw DBN source folders in Downloads and write only generated lakev2 outputs under OUTPUT_ROOT.
+Unset COPY_RAW_DOWNLOADS and USE_COPIED_RAW_FOR_BUILD, then rerun.
+EOF
+  exit 1
+fi
 
 require_dir "$RAW_EQUS_TBBO" "EQUS tbbo 20260523"
 require_dir "$RAW_OPRA_OHLCV" "OPRA ohlcv-1s 20260523"
@@ -172,10 +180,12 @@ for source in source_paths:
 manifest = {
     "schema_version": "raw_databento_download_manifest_v1",
     "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    "raw_source_copy_policy": "disabled_downloads_in_place",
     "note": (
         "Only the 20260523 tbbo/ohlcv-1s folders are consumed by the current baseline CSV builder. "
         "The 20260612 mbp-1/tcbbo/equity-definition/option-definition folders are inventory inputs for future normalizers. "
-        "EQUS-20260612-GFHRSU6F48 is the EQUS.MINI definition folder."
+        "EQUS-20260612-GFHRSU6F48 is the EQUS.MINI definition folder. "
+        "Source DBN folders stay in Downloads; this runner writes only manifests and generated bar/model outputs under the lakev2 output root."
     ),
     "sources": entries,
 }
@@ -193,26 +203,8 @@ PY
 
 write_raw_manifest
 
-if truthy "$COPY_RAW_DOWNLOADS"; then
-  mkdir -p "$RAW_COPY_DEST_ROOT"
-  for src in "$RAW_EQUS_TBBO" "$RAW_OPRA_OHLCV" "$RAW_EQUS_DEFINITION" "$RAW_OPRA_DEFINITION" "$RAW_EQUS_MBP1" "$RAW_OPRA_TCBBO"; do
-    if [[ -d "$src" ]]; then
-      dest="$RAW_COPY_DEST_ROOT/$(basename "$src")"
-      echo "RSYNC_RAW_SOURCE src=$src dest=$dest"
-      mkdir -p "$dest"
-      rsync -a --partial --info=progress2 "$src/" "$dest/"
-    else
-      echo "WARN optional raw source missing; not copying: $src" >&2
-    fi
-  done
-  if truthy "$USE_COPIED_RAW_FOR_BUILD"; then
-    RAW_EQUS_TBBO="$RAW_COPY_DEST_ROOT/$(basename "$RAW_EQUS_TBBO")"
-    RAW_OPRA_OHLCV="$RAW_COPY_DEST_ROOT/$(basename "$RAW_OPRA_OHLCV")"
-  fi
-fi
-
 if truthy "$RUNNER_PREFLIGHT_ONLY"; then
-  echo "PREFLIGHT_ONLY: validated required Downloads DBN folders, output free space, and wrote raw manifest; skipping DBN build."
+  echo "PREFLIGHT_ONLY: validated required Downloads DBN folders, output free space, and wrote raw manifest; no source DBN copy attempted; skipping DBN build."
   exit 0
 fi
 
@@ -294,7 +286,7 @@ if truthy "$RUN_CHAIN_AFTER_BUILD"; then
   bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
 else
   cat <<EOF
-DONE: built broader/core CSVs from DBN Downloads.
+DONE: built broader/core CSVs from DBN Downloads without copying raw source folders.
 
 Next command:
 
@@ -306,5 +298,3 @@ EOF
 fi
 
 echo "DONE: $BUILD_ROOT"
-
-
