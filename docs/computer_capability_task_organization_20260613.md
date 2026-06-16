@@ -1026,6 +1026,66 @@ Stop/go decision: **GO for cost-aware label infrastructure; NO-GO for promotion*
 
 If the 10-day smoke produces sparse/empty OOF predictions, that is still not a promotion failure by itself. The purpose of this step is to verify cost-aware label generation and manifests. Useful OOF coverage and promotion evidence still require broader/full-window training.
 
+### Step 19 — Lifecycle/micro rerun using cost-aware setup OOF
+
+48GB-machine result on 2026-06-15:
+
+- Pulled branch commit `29724d0`.
+- Setup OOF source: `model_training_sets/setup_cost_aware_30s_20260615_192705/oof_setup_predictions.csv`.
+- Output directory: `model_training_sets/lifecycle_micro_posthoc_threshold_stability_20260615_201142`.
+- ONNX export remained disabled; artifacts are research/evaluation-only.
+
+OOF setup join:
+
+```text
+OOF_SETUP_JOIN dropped_unscored_30s_rows=21000 retained_rows=18000
+OOF_SETUP_JOIN summary={"errors": [], "min_unique_values": 3, "rows": 18000, "sides": {"long": {"finite_count": 18000, "max": 0.9336708854249688, "mean": 0.5324028887400515, "min": 0.0919267379380229, "missing_count": 0, "unique_values": 18000}, "short": {"finite_count": 18000, "max": 0.7790762200927414, "mean": 0.3642569053623551, "min": 0.0148872498857027, "missing_count": 0, "unique_values": 17998}}}
+```
+
+Run summary:
+
+```text
+output_dir: /Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/lifecycle_micro_posthoc_threshold_stability_20260615_201142
+errors: []
+model_count: 6
+posthoc_threshold_stability_report_exists: True
+posthoc_promotion_gate_report_exists: True
+promotion_ready: False
+POSTHOC_PROMOTION_GATE=FAIL
+```
+
+Selected posthoc methods:
+
+| Model | Selected method | Posthoc Brier | Posthoc ECE | Posthoc threshold | Calibration rows |
+|---|---|---:|---:|---:|---:|
+| `longExitLifecycleAi` | raw | 0.084169 | 0.022223 | 0.62 | 6597 |
+| `shortExitLifecycleAi` | raw | 0.129095 | 0.044535 | 0.70 | 6623 |
+| `longMicroEntryAi` | sigmoid | 0.136460 | 0.062930 | 0.50 | 2299 |
+| `shortMicroEntryAi` | sigmoid | 0.136171 | 0.053027 | 0.50 | 2355 |
+| `longMicroExitGuardAi` | isotonic | 0.082384 | 0.013965 | 0.60 | 2026 |
+| `shortMicroExitGuardAi` | isotonic | 0.134292 | 0.052617 | 0.60 | 2338 |
+
+Promotion-gate rows:
+
+| Model | Selected method | Predicted positives | Max predicted day fraction | Stable island points | Gate status |
+|---|---|---:|---:|---:|---|
+| `longExitLifecycleAi` | raw | 1716 | 1.00000 | 0 | FAIL |
+| `shortExitLifecycleAi` | raw | 1276 | 1.00000 | 0 | FAIL |
+| `longMicroEntryAi` | sigmoid | 0 | 0.00000 | 0 | FAIL |
+| `shortMicroEntryAi` | sigmoid | 118 | 1.00000 | 0 | FAIL |
+| `longMicroExitGuardAi` | isotonic | 222 | 1.00000 | 0 | FAIL |
+| `shortMicroExitGuardAi` | isotonic | 297 | 0.52862 | 0 | FAIL |
+
+Threshold-stability result:
+
+- Every candidate method still had `stable_island_points=0` and `pass_stable_threshold_island=false` under `min_stable_threshold_points=3`.
+- The cost-aware setup OOF changed the setup-probability distribution and some selected thresholds, but it did **not** remove the core 10-day-smoke blockers:
+  - `longMicroEntryAi` selected zero frozen-holdout predictions.
+  - Most selected routes still have single-day predicted-positive dominance above the `0.40` cap.
+  - No selected route has a stable threshold island.
+
+Stop/go decision: **Correct FAIL**. The downstream cost-aware rerun successfully produced lifecycle/micro posthoc calibration, threshold-stability, and promotion-gate artifacts, but it remains **NO-GO for promotion**. Continue treating this as infrastructure/evaluation evidence only. The next material blockers are broader/full-window training, label/economics review, Java/runtime calibration application, replay parity, paper/shadow checks, and full-window promotion gates.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
