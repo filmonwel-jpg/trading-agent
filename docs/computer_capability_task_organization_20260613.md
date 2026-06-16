@@ -1269,6 +1269,45 @@ bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
 
 - Do not interpret a promotion-gate failure as a script failure. The useful questions are whether stable threshold islands appear, whether day dominance improves, whether predicted-positive counts become adequate, and whether setup label economics remain too noisy under the documented cost assumptions.
 
+Action done on 2026-06-16 — broader/core DBN build:
+
+- Completed on the 48GB/write-capable Mac from raw `Downloads` source folders without copying raw DBNs to the external disk.
+- Build root: `model_training_sets/core_full_window_bars_from_downloads_20260616_100914`.
+- `bar_build_manifest.json`: `errors=[]`.
+- Output coverage:
+  - `combined_30s.csv`: `830700` rows, `213` days, symbols `NVDA,QQQ,SPY,TQQQ,TSLA`, date range `2025-07-21` through `2026-05-22`.
+  - `combined_5s.csv`: `4984200` rows, `213` days, symbols `NVDA,QQQ,SPY,TQQQ,TSLA`, same date range.
+- `raw_download_manifest.json` recorded `raw_source_copy_policy=disabled_downloads_in_place` and correctly inventoried the six `Downloads` folders, including `EQUS-20260612-GFHRSU6F48` as `EQUS.MINI / definition`.
+- No `1s` output was produced, which is acceptable for the current setup/lifecycle/micro training chain because it consumes only `30s` and `5s` artifacts. The `1s`/tick path remains a live/backtest hard-stop/reflex path, not a current training input.
+
+Action done on 2026-06-16 — broader/full-window cost-aware setup + lifecycle chain:
+
+- Chain root: `model_training_sets/broader_full_window_cost_aware_20260616_115143`.
+- Input staging passed: `30s_rows=830700`, `30s_days=213`, `5s_rows=4984200`, `5s_days=213`, symbols `NVDA,QQQ,SPY,TQQQ,TSLA`.
+- Setup training used the full-window staged `combined_30s.csv` and wrote full-window setup artifacts with `code_commit=be51620`, `errors=[]`, `feature_count=61`, and `oof_predictions.paired_rows=630000` / `oof_coverage_frac=0.8219338930311748`.
+- Setup metrics remained weak/noisy and research-only:
+  - Long setup: `avg_precision=27.86%`, `brier=0.2459`, `ECE=0.1918`.
+  - Short setup: `avg_precision=44.13%`, `brier=0.2462`, `ECE=0.1963`.
+  - Cost/economics warning persisted: net entry reward/risk after configured costs is `1.07`, below `MIN_NET_R_MULTIPLE=1.20`.
+  - Cost-aware labels are much more permissive than legacy TP-before-SL labels: long positive rate `31.14%` vs legacy `10.50%`; short positive rate `30.69%` vs legacy `11.61%`. Carry this as a label-noise/economics review item.
+- Important run-hygiene note: `SETUP_OUT_DIR` was still exported from an earlier 10-day run, so full-window setup artifacts were written under `model_training_sets/setup_cost_aware_30s_20260615_192705` instead of under the new chain root. The manifest timestamps/input path prove these are the 2026-06-16 full-window setup artifacts, but the directory name is stale. Future runs should `unset SETUP_OUT_DIR` before launching the chain. The runner has been hardened after this review to fail fast if `RUN_SETUP_STAGE=1` and `SETUP_OUT_DIR` is outside `CHAIN_ROOT`, unless `ALLOW_EXTERNAL_SETUP_OUT_DIR=1` is explicitly set.
+- Lifecycle/micro streamed staging completed across all five symbols and produced:
+  - `long_lifecycle_rows=1470536` (`1000000` sampled for training cap)
+  - `short_lifecycle_rows=1550534` (`1000000` sampled for training cap)
+  - `long_micro_entry_rows=511676`
+  - `short_micro_entry_rows=540149`
+  - `long_micro_exit_rows=489096`
+  - `short_micro_exit_rows=505704`
+- Lifecycle/micro artifacts were written under `lifecycle_micro_full_window_cost_aware/`, with ONNX export disabled.
+- `posthoc_promotion_gate_report.json` result: `promotion_ready=true`, `fail_count=0`, all six selected methods `isotonic`, all six routes passed the artifact gate:
+  - `longExitLifecycleAi`: predicted positives `41339`, max day fraction `0.0612`, stable island points `16`.
+  - `shortExitLifecycleAi`: predicted positives `37777`, max day fraction `0.0719`, stable island points `16`.
+  - `longMicroEntryAi`: predicted positives `1945`, max day fraction `0.0586`, stable island points `16`.
+  - `shortMicroEntryAi`: predicted positives `1312`, max day fraction `0.1037`, stable island points `16`.
+  - `longMicroExitGuardAi`: predicted positives `8836`, max day fraction `0.0910`, stable island points `17`.
+  - `shortMicroExitGuardAi`: predicted positives `8717`, max day fraction `0.0995`, stable island points `17`.
+- Interpretation: this is the first full-window baseline chain to pass the post-hoc artifact gate, threshold-stability count gate, and day-dominance gate. It is **GO for deeper review and replay/backtest preparation**, but still **NO-GO for paper/live promotion** until runtime calibration application, recorded-event replay parity, full decision/PnL/day-dominance backtests, paper/shadow drift checks, and cost-aware label economics review are complete.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
