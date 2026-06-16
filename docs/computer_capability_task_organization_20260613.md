@@ -1086,6 +1086,116 @@ Threshold-stability result:
 
 Stop/go decision: **Correct FAIL**. The downstream cost-aware rerun successfully produced lifecycle/micro posthoc calibration, threshold-stability, and promotion-gate artifacts, but it remains **NO-GO for promotion**. Continue treating this as infrastructure/evaluation evidence only. The next material blockers are broader/full-window training, label/economics review, Java/runtime calibration application, replay parity, paper/shadow checks, and full-window promotion gates.
 
+### Step 20 — Broader/full-window cost-aware setup + lifecycle chain
+
+Decision on 2026-06-16: keep the current cost assumptions for now and move to broader/full-window evidence. Do **not** tune the `1.07R < 1.20R` economics warning yet; carry it forward as a documented risk so this run isolates the effect of a broader date window.
+
+Action added in code:
+
+- `scripts/stage_broader_window_inputs.py` streams combined or per-symbol full-window 30s/5s inputs and writes:
+  - `input_slice/combined_30s.csv` for `train_30s_models.py`
+  - `input_slice/combined_5s.csv` for inspection
+  - `input_slice/data_30s/<SYMBOL>_30s_training.csv` for streamed lifecycle/micro training
+  - `input_slice/data_5s/<SYMBOL>_5s_training.csv` for streamed lifecycle/micro training
+  - `input_slice/input_slice_manifest.json`
+- `scripts/run_broader_full_window_cost_aware_chain_20260616.sh` is a paste-safe 48GB runner that:
+  - intentionally does **not** default to the 10-day pilot dataset,
+  - auto-detects the older full-window `20260523` combined training files when present,
+  - defaults to the core symbols `TSLA,TQQQ,NVDA,SPY,QQQ`,
+  - defaults to the aligned full-window date range `[2025-07-21, 2026-05-23)`,
+  - requires at least `100` unique staged days, `100000` staged 30s rows, and `600000` staged 5s rows so the same 10-day smoke cannot be rerun accidentally,
+  - runs setup with `COST_AWARE_LABELS=1`, `ENTRY_FILL_MODE=next_open_with_slippage`, `TRAIN_LEGACY_30S_EXIT_MODELS=0`, `UPDATE_CANONICAL_MODEL_ALIASES=0`, and `--no-onnx`,
+  - validates `oof_setup_predictions.csv` schema and paired OOF count before lifecycle/micro starts,
+  - runs lifecycle/micro with posthoc calibration, threshold-stability, promotion-gate artifacts, streamed per-symbol staging, and `--no-onnx`,
+  - writes everything under `$LAKE_ROOT/model_training_sets/broader_full_window_cost_aware_<timestamp>/` by default.
+
+First run a preflight on the 48GB Mac:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+git fetch origin ai-training-dynamic-upgrade-20260612
+git checkout ai-training-dynamic-upgrade-20260612
+git pull --ff-only origin ai-training-dynamic-upgrade-20260612
+git --no-pager log --oneline -1
+
+export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+
+RUNNER_PREFLIGHT_ONLY=1 \
+bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
+```
+
+If auto-detection cannot find the full-window sources, set them explicitly. Use the full-window `20260523` combined files, not the 10-day pilot:
+
+```zsh
+export SOURCE_30S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_30s_20260523_combined.csv"
+export SOURCE_5S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_5s_20260523_combined.csv"
+
+RUNNER_PREFLIGHT_ONLY=1 \
+bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
+```
+
+Then run the broader/full-window core-symbol chain:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+
+# Optional when auto-detection succeeds; required if preflight asked for explicit paths.
+export SOURCE_30S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_30s_20260523_combined.csv"
+export SOURCE_5S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_5s_20260523_combined.csv"
+
+unset SETUP_OUT_DIR
+unset SETUP_PREDICTIONS
+unset LIFECYCLE_OUT_DIR
+unset CHAIN_RUN_ID
+unset CHAIN_ROOT
+
+bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
+```
+
+Expected output shape:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_<timestamp>/
+  chain_config.env
+  input_slice/
+    combined_30s.csv
+    combined_5s.csv
+    data_30s/
+    data_5s/
+    input_slice_manifest.json
+  setup_cost_aware_full_window/
+    cost_aware_label_manifest.json
+    cost_aware_setup_labels.csv
+    oof_setup_predictions.csv
+    setup_manifest.json
+    setup_scorecard.csv
+    train.log
+  lifecycle_micro_full_window_cost_aware/
+    lifecycle_micro_scorecard.csv
+    lifecycle_micro_route_manifest.json
+    posthoc_threshold_stability.csv
+    posthoc_threshold_stability_report.json
+    posthoc_promotion_gate_rows.csv
+    posthoc_promotion_gate_report.json
+    train.log
+  lifecycle_staging/
+```
+
+Operational notes:
+
+- This is still research/evaluation-only. The runner uses `--no-onnx` and does not update canonical aliases.
+- The default lifecycle expansion is uncapped per symbol/side (`LIFECYCLE_MAX_ENTRY_EVENTS_PER_SYMBOL_SIDE=0`) and caps model training loads at `LIFECYCLE_MAX_TRAIN_ROWS_PER_MODEL=1000000`. If the 48GB Mac hits memory pressure, rerun with a bounded first-pass cap such as:
+
+```zsh
+export LIFECYCLE_MAX_ENTRY_EVENTS_PER_SYMBOL_SIDE=5000
+export LIFECYCLE_MAX_STAGED_ROWS_PER_SYMBOL_PER_MODEL=100000
+export LIFECYCLE_MAX_TRAIN_ROWS_PER_MODEL=750000
+bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
+```
+
+- Do not interpret a promotion-gate failure as a script failure. The useful questions are whether stable threshold islands appear, whether day dominance improves, whether predicted-positive counts become adequate, and whether setup label economics remain too noisy under the documented cost assumptions.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
