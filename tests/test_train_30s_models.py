@@ -220,7 +220,8 @@ class TestMainArtifacts(unittest.TestCase):
             # Required artifacts — all must be written even when no signals exist
             for fname in ("setup_scorecard.csv", "setup_manifest.json",
                           "calibration_manifest.json", "threshold_grid.csv",
-                          "calibration_reliability.csv", "oof_setup_predictions.csv"):
+                          "calibration_reliability.csv", "oof_setup_predictions.csv",
+                          "cost_aware_setup_labels.csv", "cost_aware_label_manifest.json"):
                 self.assertTrue((out_dir / fname).exists(), f"Missing {fname}")
 
             # Scorecard columns
@@ -235,7 +236,27 @@ class TestMainArtifacts(unittest.TestCase):
             self.assertIn("feature_schema_sha256", manifest)
             self.assertIn("feature_columns", manifest)
             self.assertIn("label_info", manifest)
-            self.assertFalse(manifest["label_info"]["cost_aware"])
+            self.assertTrue(manifest["label_info"]["cost_aware"])
+            self.assertEqual("binary_expected_net_r_after_costs", manifest["label_info"]["type"])
+            self.assertIn("cost_aware_label_manifest", manifest["artifacts"])
+
+            # Cost-aware label manifest records execution assumptions and summaries.
+            label_manifest = json.loads((out_dir / "cost_aware_label_manifest.json").read_text())
+            self.assertEqual("setup_cost_aware_labels_v1", label_manifest["schema_version"])
+            self.assertTrue(label_manifest["used_for_entry_training"])
+            for key in ("entry_spread_model", "exit_spread_model", "entry_slippage_bps",
+                        "exit_slippage_bps", "fill_probability", "partial_fill_penalty_r",
+                        "missed_fill_penalty_r", "latency_assumption"):
+                self.assertIn(key, label_manifest["assumptions"])
+            self.assertIn("long", label_manifest["summary"])
+            self.assertIn("short", label_manifest["summary"])
+
+            cost_labels = pd.read_csv(out_dir / "cost_aware_setup_labels.csv")
+            for col in ("Label_Long_Entry_CostAware", "Label_Short_Entry_CostAware",
+                        "Label_Long_Entry_TpBeforeSl", "Label_Short_Entry_TpBeforeSl",
+                        "Label_Long_Entry_ExpectedNetRAfterCosts",
+                        "Label_Short_Entry_ExpectedNetRAfterCosts"):
+                self.assertIn(col, cost_labels.columns, f"cost labels missing column {col}")
 
             # Calibration manifest
             cal = json.loads((out_dir / "calibration_manifest.json").read_text())
@@ -254,7 +275,8 @@ class TestMainArtifacts(unittest.TestCase):
             for col in ("Symbol", "Timestamp", "f_long_setup_prob", "long_setup_fold_id",
                         "f_long_setup_threshold", "f_long_setup_threshold_margin",
                         "f_short_setup_prob", "short_setup_fold_id",
-                        "is_oof_setup_prediction"):
+                        "is_oof_setup_prediction", "Label_Long_Entry_ExpectedNetRAfterCosts",
+                        "Label_Short_Entry_ExpectedNetRAfterCosts"):
                 self.assertIn(col, oof.columns, f"oof missing column {col}")
             # side and fold_id (narrow format) must NOT be present
             self.assertNotIn("side", oof.columns, "oof must be wide format — 'side' column not expected")

@@ -48,6 +48,13 @@ ENTRY_SLIPPAGE_BPS = float(os.getenv('ENTRY_SLIPPAGE_BPS', '2.0'))
 EXIT_SLIPPAGE_BPS = float(os.getenv('EXIT_SLIPPAGE_BPS', '2.0'))
 MIN_NET_R_MULTIPLE = float(os.getenv('MIN_NET_R_MULTIPLE', '1.2'))
 SUPPORTED_ENTRY_FILL_MODES = {'current_close', 'next_open', 'next_open_with_slippage'}
+COST_AWARE_LABELS = os.getenv('COST_AWARE_LABELS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+COST_AWARE_LABEL_SCHEMA_VERSION = 'setup_cost_aware_labels_v1'
+COST_AWARE_MIN_NET_R_LABEL = float(os.getenv('COST_AWARE_MIN_NET_R_LABEL', '0.0'))
+COST_AWARE_DEFAULT_SPREAD_BPS = float(os.getenv('COST_AWARE_DEFAULT_SPREAD_BPS', '0.0'))
+COST_AWARE_FILL_PROBABILITY = float(os.getenv('COST_AWARE_FILL_PROBABILITY', '0.98'))
+COST_AWARE_PARTIAL_FILL_PENALTY_R = float(os.getenv('COST_AWARE_PARTIAL_FILL_PENALTY_R', '0.02'))
+COST_AWARE_MISSED_FILL_PENALTY_R = float(os.getenv('COST_AWARE_MISSED_FILL_PENALTY_R', '0.05'))
 
 # Adjusted targets for Exits to act as material hazard/unwind detectors
 EXIT_DROP_PCT = 0.0020       # 0.20%
@@ -800,12 +807,213 @@ def _entry_fill_price(side, i, opens, closes):
     return float(fill)
 
 
+def _finite_positive(value):
+    try:
+        v = float(value)
+    except Exception:
+        return False
+    return np.isfinite(v) and v > 0.0
+
+
+def _first_numeric_array(df, names):
+    for name in names:
+        if name in df.columns:
+            return pd.to_numeric(df[name], errors='coerce').to_numpy(dtype=float)
+    return None
+
+
+def _quote_arrays(df):
+    bid = _first_numeric_array(df, ['Bid', 'BidPrice', 'bid', 'BestBid', 'best_bid', 'BidLast'])
+    ask = _first_numeric_array(df, ['Ask', 'AskPrice', 'ask', 'BestAsk', 'best_ask', 'AskLast'])
+    return bid, ask
+
+
+def _spread_pct_array(df, bids, asks):
+    default_spread = max(0.0, COST_AWARE_DEFAULT_SPREAD_BPS / 10000.0)
+    if bids is not None and asks is not None:
+        mid = (bids + asks) / 2.0
+        spread = np.where(
+            np.isfinite(bids) & np.isfinite(asks) & (mid > 0.0),
+            np.maximum(asks - bids, 0.0) / np.maximum(mid, 1e-9),
+            np.nan,
+        )
+        if np.isfinite(spread).any():
+            return np.nan_to_num(spread, nan=default_spread, posinf=default_spread, neginf=default_spread)
+    if 'f_spread_pct' in df.columns:
+        spread = pd.to_numeric(df['f_spread_pct'], errors='coerce').to_numpy(dtype=float)
+        spread = np.where(np.isfinite(spread), np.maximum(spread, 0.0), default_spread)
+        return spread
+    return np.full(len(df), default_spread, dtype=float)
+
+
+def _half_spread_pct(spread_pct, idx):
+    if spread_pct is None or idx < 0 or idx >= len(spread_pct):
+        return max(0.0, COST_AWARE_DEFAULT_SPREAD_BPS / 20000.0)
+    value = float(spread_pct[idx])
+    if not np.isfinite(value) or value < 0.0:
+        value = max(0.0, COST_AWARE_DEFAULT_SPREAD_BPS / 10000.0)
+    return value / 2.0
+
+
+def _cost_aware_label_assumptions():
+    return {
+        'schema_version': COST_AWARE_LABEL_SCHEMA_VERSION,
+        'enabled_for_entry_training': bool(COST_AWARE_LABELS),
+        'label_type': 'expected_net_r_after_costs',
+        'entry_fill_mode': ENTRY_FILL_MODE,
+        'latency_assumption': 'entry at current close when ENTRY_FILL_MODE=current_close, otherwise next in-session bar',
+        'entry_profit_pct_base': ENTRY_PROFIT_PCT,
+        'entry_risk_pct_base': ENTRY_RISK_PCT,
+        'adaptive_thresholds': 'hour_bucket_and_atr_scaled_entry_profit_pct_entry_risk_pct',
+        'future_window_bars': FUTURE_WINDOW_BARS,
+        'entry_spread_model': 'side-aware bid/ask when available, otherwise half f_spread_pct/default spread penalty',
+        'exit_spread_model': 'target/stop/horizon price adjusted by half f_spread_pct/default spread penalty',
+        'entry_slippage_bps': ENTRY_SLIPPAGE_BPS,
+        'exit_slippage_bps': EXIT_SLIPPAGE_BPS,
+        'default_spread_bps': COST_AWARE_DEFAULT_SPREAD_BPS,
+        'fill_probability': COST_AWARE_FILL_PROBABILITY,
+        'partial_fill_penalty_r': COST_AWARE_PARTIAL_FILL_PENALTY_R,
+        'missed_fill_penalty_r': COST_AWARE_MISSED_FILL_PENALTY_R,
+        'min_expected_net_r_positive_label': COST_AWARE_MIN_NET_R_LABEL,
+        'ambiguous_tp_sl_policy': 'conservative_stop_when_tp_and_sl_hit_same_bar',
+        'no_barrier_hit_policy': 'mark_to_horizon_close_after_exit_costs',
+    }
+
+
+def _validate_cost_aware_label_config():
+    values = {
+        'COST_AWARE_MIN_NET_R_LABEL': COST_AWARE_MIN_NET_R_LABEL,
+        'COST_AWARE_DEFAULT_SPREAD_BPS': COST_AWARE_DEFAULT_SPREAD_BPS,
+        'COST_AWARE_FILL_PROBABILITY': COST_AWARE_FILL_PROBABILITY,
+        'COST_AWARE_PARTIAL_FILL_PENALTY_R': COST_AWARE_PARTIAL_FILL_PENALTY_R,
+        'COST_AWARE_MISSED_FILL_PENALTY_R': COST_AWARE_MISSED_FILL_PENALTY_R,
+        'ENTRY_SLIPPAGE_BPS': ENTRY_SLIPPAGE_BPS,
+        'EXIT_SLIPPAGE_BPS': EXIT_SLIPPAGE_BPS,
+    }
+    bad = [name for name, value in values.items() if not np.isfinite(float(value))]
+    if bad:
+        raise ValueError(f"Missing/non-finite cost-aware label assumptions: {bad}")
+    if COST_AWARE_FILL_PROBABILITY < 0.0 or COST_AWARE_FILL_PROBABILITY > 1.0:
+        raise ValueError('COST_AWARE_FILL_PROBABILITY must be within [0, 1]')
+    for name in ['COST_AWARE_DEFAULT_SPREAD_BPS', 'COST_AWARE_PARTIAL_FILL_PENALTY_R', 'COST_AWARE_MISSED_FILL_PENALTY_R', 'ENTRY_SLIPPAGE_BPS', 'EXIT_SLIPPAGE_BPS']:
+        if values[name] < 0.0:
+            raise ValueError(f'{name} must be non-negative')
+
+
+def _cost_adjusted_expected_r(realized_net_r):
+    if not np.isfinite(realized_net_r):
+        return float('nan')
+    return float(
+        COST_AWARE_FILL_PROBABILITY * realized_net_r
+        - COST_AWARE_PARTIAL_FILL_PENALTY_R
+        - (1.0 - COST_AWARE_FILL_PROBABILITY) * COST_AWARE_MISSED_FILL_PENALTY_R
+    )
+
+
+def _cost_aware_entry_fill_price(side, i, entry_idx, opens, closes, bids, asks, spread_pct):
+    slip = ENTRY_SLIPPAGE_BPS / 10000.0
+    if side == 'long' and asks is not None and entry_idx < len(asks) and _finite_positive(asks[entry_idx]):
+        return float(asks[entry_idx]) * (1.0 + slip)
+    if side == 'short' and bids is not None and entry_idx < len(bids) and _finite_positive(bids[entry_idx]):
+        return float(bids[entry_idx]) * (1.0 - slip)
+
+    if ENTRY_FILL_MODE == 'current_close':
+        base = closes[i]
+    else:
+        base = opens[entry_idx] if np.isfinite(opens[entry_idx]) else closes[entry_idx]
+    if not _finite_positive(base):
+        return float('nan')
+    half_spread = _half_spread_pct(spread_pct, entry_idx)
+    if side == 'long':
+        return float(base) * (1.0 + half_spread + slip)
+    return float(base) * max(0.0, 1.0 - half_spread - slip)
+
+
+def _cost_aware_exit_fill_price(side, base_price, exit_idx, spread_pct):
+    if not _finite_positive(base_price):
+        return float('nan')
+    half_spread = _half_spread_pct(spread_pct, exit_idx)
+    slip = EXIT_SLIPPAGE_BPS / 10000.0
+    if side == 'long':
+        return float(base_price) * max(0.0, 1.0 - half_spread - slip)
+    return float(base_price) * (1.0 + half_spread + slip)
+
+
+def _cost_aware_expected_net_r_for_entry(side, i, opens, closes, highs, lows, dates, symbols, bids, asks, spread_pct, entry_profit_pct, entry_risk_pct):
+    n = len(closes)
+    if ENTRY_FILL_MODE == 'current_close':
+        entry_idx = i
+    else:
+        entry_idx = i + 1
+        if entry_idx >= n or dates[entry_idx] != dates[i] or symbols[entry_idx] != symbols[i]:
+            return float('nan')
+
+    entry_fill = _cost_aware_entry_fill_price(side, i, entry_idx, opens, closes, bids, asks, spread_pct)
+    if not _finite_positive(entry_fill) or entry_risk_pct <= 0.0:
+        return float('nan')
+
+    risk_dollars = entry_fill * float(entry_risk_pct)
+    if risk_dollars <= 0.0 or not np.isfinite(risk_dollars):
+        return float('nan')
+
+    if side == 'long':
+        target = entry_fill * (1.0 + entry_profit_pct)
+        stop = entry_fill * (1.0 - entry_risk_pct)
+    else:
+        target = entry_fill * (1.0 - entry_profit_pct)
+        stop = entry_fill * (1.0 + entry_risk_pct)
+
+    exit_idx = -1
+    exit_base = float('nan')
+    last_idx = -1
+    for j in range(i + 1, min(n, i + FUTURE_WINDOW_BARS + 1)):
+        if dates[j] != dates[i] or symbols[j] != symbols[i]:
+            break
+        last_idx = j
+        h = highs[j]
+        l = lows[j]
+        if side == 'long':
+            hit_target = h >= target
+            hit_stop = l <= stop
+        else:
+            hit_target = l <= target
+            hit_stop = h >= stop
+        if hit_target and hit_stop:
+            exit_idx = j
+            exit_base = stop
+            break
+        if hit_target:
+            exit_idx = j
+            exit_base = target
+            break
+        if hit_stop:
+            exit_idx = j
+            exit_base = stop
+            break
+
+    if exit_idx < 0 and last_idx >= 0:
+        exit_idx = last_idx
+        exit_base = closes[last_idx]
+    if exit_idx < 0 or not _finite_positive(exit_base):
+        return float('nan')
+
+    exit_fill = _cost_aware_exit_fill_price(side, exit_base, exit_idx, spread_pct)
+    if not _finite_positive(exit_fill):
+        return float('nan')
+    if side == 'long':
+        realized_net_r = (exit_fill - entry_fill) / risk_dollars
+    else:
+        realized_net_r = (entry_fill - exit_fill) / risk_dollars
+    return _cost_adjusted_expected_r(realized_net_r)
+
+
 def generate_labels(df):
     if TRAIN_LEGACY_30S_EXIT_MODELS:
         print(">>> Generating 4 event-ordered path-dependent labels...")
     else:
         print(">>> Generating entry labels only; legacy 30s exit labels/model training disabled.")
     _validate_entry_fill_config()
+    _validate_cost_aware_label_config()
 
     df = df.copy()
     n = len(df)
@@ -822,6 +1030,10 @@ def generate_labels(df):
     y_short_entry = np.zeros(n, dtype=np.int8)
     y_long_exit = np.zeros(n, dtype=np.int8)
     y_short_exit = np.zeros(n, dtype=np.int8)
+    expected_long_entry_net_r = np.full(n, np.nan, dtype=float)
+    expected_short_entry_net_r = np.full(n, np.nan, dtype=float)
+    bids, asks = _quote_arrays(df)
+    spread_pct = _spread_pct_array(df, bids, asks)
 
     usable = n - FUTURE_WINDOW_BARS
     for i in range(usable):
@@ -870,6 +1082,10 @@ def generate_labels(df):
                     if le_hit_sl:
                         break
 
+        expected_long_entry_net_r[i] = _cost_aware_expected_net_r_for_entry(
+            'long', i, opens, closes, highs, lows, dates, symbols, bids, asks, spread_pct, ep, er
+        )
+
         if np.isfinite(short_entry_fill):
             for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
                 if dates[j] != current_date or symbols[j] != current_symbol:
@@ -887,6 +1103,10 @@ def generate_labels(df):
                     break
                 if se_hit_sl:
                     break
+
+        expected_short_entry_net_r[i] = _cost_aware_expected_net_r_for_entry(
+            'short', i, opens, closes, highs, lows, dates, symbols, bids, asks, spread_pct, ep, er
+        )
 
         if TRAIN_LEGACY_30S_EXIT_MODELS:
             for j in range(i + 1, i + FUTURE_WINDOW_BARS + 1):
@@ -923,13 +1143,127 @@ def generate_labels(df):
                 if sx_hit_sl:
                     break
 
-    df['Label_Long_Entry'] = y_long_entry
-    df['Label_Short_Entry'] = y_short_entry
+    cost_long_entry = (np.isfinite(expected_long_entry_net_r) & (expected_long_entry_net_r > COST_AWARE_MIN_NET_R_LABEL)).astype(np.int8)
+    cost_short_entry = (np.isfinite(expected_short_entry_net_r) & (expected_short_entry_net_r > COST_AWARE_MIN_NET_R_LABEL)).astype(np.int8)
+    df['Label_Long_Entry_TpBeforeSl'] = y_long_entry
+    df['Label_Short_Entry_TpBeforeSl'] = y_short_entry
+    df['Label_Long_Entry_ExpectedNetRAfterCosts'] = expected_long_entry_net_r
+    df['Label_Short_Entry_ExpectedNetRAfterCosts'] = expected_short_entry_net_r
+    df['Label_Long_Entry_CostAware'] = cost_long_entry
+    df['Label_Short_Entry_CostAware'] = cost_short_entry
+    df['Label_Long_Entry'] = cost_long_entry if COST_AWARE_LABELS else y_long_entry
+    df['Label_Short_Entry'] = cost_short_entry if COST_AWARE_LABELS else y_short_entry
     df['Label_Long_Exit'] = y_long_exit
     df['Label_Short_Exit'] = y_short_exit
 
     df = df.iloc[:usable].copy()
     return df
+
+
+def _summarize_expected_net_r(df, side):
+    prefix = 'Long' if side == 'long' else 'Short'
+    expected_col = f'Label_{prefix}_Entry_ExpectedNetRAfterCosts'
+    cost_label_col = f'Label_{prefix}_Entry_CostAware'
+    legacy_col = f'Label_{prefix}_Entry_TpBeforeSl'
+    values = pd.to_numeric(df.get(expected_col, pd.Series(dtype=float)), errors='coerce')
+    finite = values[np.isfinite(values)]
+    labels = pd.to_numeric(df.get(cost_label_col, pd.Series(dtype=float)), errors='coerce').fillna(0).astype(int)
+    legacy = pd.to_numeric(df.get(legacy_col, pd.Series(dtype=float)), errors='coerce').fillna(0).astype(int)
+    if len(finite):
+        quantiles = finite.quantile([0.10, 0.50, 0.90])
+        min_value = float(finite.min())
+        max_value = float(finite.max())
+        mean_value = float(finite.mean())
+        q10 = float(quantiles.loc[0.10])
+        q50 = float(quantiles.loc[0.50])
+        q90 = float(quantiles.loc[0.90])
+    else:
+        min_value = max_value = mean_value = q10 = q50 = q90 = None
+    return {
+        'side': side,
+        'expected_net_r_column': expected_col,
+        'cost_aware_label_column': cost_label_col,
+        'legacy_label_column': legacy_col,
+        'rows': int(len(df)),
+        'finite_expected_net_r_rows': int(len(finite)),
+        'positive_cost_aware_labels': int(labels.sum()),
+        'positive_cost_aware_rate': float(labels.mean()) if len(labels) else 0.0,
+        'positive_legacy_tp_before_sl_labels': int(legacy.sum()),
+        'legacy_tp_before_sl_positive_rate': float(legacy.mean()) if len(legacy) else 0.0,
+        'label_delta_count': int((labels != legacy).sum()) if len(labels) == len(legacy) else None,
+        'expected_net_r_min': min_value,
+        'expected_net_r_mean': mean_value,
+        'expected_net_r_p10': q10,
+        'expected_net_r_p50': q50,
+        'expected_net_r_p90': q90,
+        'expected_net_r_max': max_value,
+    }
+
+
+def write_cost_aware_label_artifacts(df, output_dir, input_csv, generated_at, commit_hash):
+    label_cols = [
+        'Symbol', 'Timestamp', 'Date',
+        'Label_Long_Entry', 'Label_Short_Entry',
+        'Label_Long_Entry_CostAware', 'Label_Short_Entry_CostAware',
+        'Label_Long_Entry_TpBeforeSl', 'Label_Short_Entry_TpBeforeSl',
+        'Label_Long_Entry_ExpectedNetRAfterCosts', 'Label_Short_Entry_ExpectedNetRAfterCosts',
+    ]
+    labels_path = output_dir / 'cost_aware_setup_labels.csv'
+    cols = [col for col in label_cols if col in df.columns]
+    df[cols].to_csv(labels_path, index=False)
+
+    manifest = {
+        'schema_version': COST_AWARE_LABEL_SCHEMA_VERSION,
+        'generated_at_utc': generated_at,
+        'code_commit': commit_hash,
+        'input_csv': str(input_csv),
+        'labels_csv': 'cost_aware_setup_labels.csv',
+        'used_for_entry_training': bool(COST_AWARE_LABELS),
+        'assumptions': _cost_aware_label_assumptions(),
+        'label_columns': {
+            'long_expected_net_r_after_costs': 'Label_Long_Entry_ExpectedNetRAfterCosts',
+            'short_expected_net_r_after_costs': 'Label_Short_Entry_ExpectedNetRAfterCosts',
+            'long_cost_aware_binary': 'Label_Long_Entry_CostAware',
+            'short_cost_aware_binary': 'Label_Short_Entry_CostAware',
+            'long_training_target': 'Label_Long_Entry',
+            'short_training_target': 'Label_Short_Entry',
+            'long_legacy_tp_before_sl': 'Label_Long_Entry_TpBeforeSl',
+            'short_legacy_tp_before_sl': 'Label_Short_Entry_TpBeforeSl',
+        },
+        'summary': {
+            'long': _summarize_expected_net_r(df, 'long'),
+            'short': _summarize_expected_net_r(df, 'short'),
+        },
+        'errors': [],
+        'warnings': [] if COST_AWARE_LABELS else [
+            'COST_AWARE_LABELS is disabled; expected_net_r_after_costs labels were written but not used as entry training targets.'
+        ],
+    }
+    manifest_path = output_dir / 'cost_aware_label_manifest.json'
+    manifest_path.write_text(json.dumps(_json_safe(manifest), indent=2), encoding='utf-8')
+    print(f">>> Wrote {labels_path}")
+    print(f">>> Wrote {manifest_path}")
+    return manifest
+
+
+def current_git_commit():
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return 'unknown'
+
+
+def _json_safe(obj):
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 
 def assign_market_regime(df):
@@ -1873,6 +2207,8 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_at = datetime.now(timezone.utc).isoformat()
     fschema_hash = feature_schema_hash(feature_cols)
+    commit_hash = current_git_commit()
+    cost_aware_label_manifest = write_cost_aware_label_artifacts(df, output_dir, str(csv_file), generated_at, commit_hash)
 
     # --- setup_scorecard.csv ---
     scorecard_path = output_dir / "setup_scorecard.csv"
@@ -1900,6 +2236,9 @@ def main():
 
     _wide_cols = [
         'Symbol', 'Timestamp', 'Date', 'Label_Long_Entry', 'Label_Short_Entry',
+        'Label_Long_Entry_CostAware', 'Label_Short_Entry_CostAware',
+        'Label_Long_Entry_TpBeforeSl', 'Label_Short_Entry_TpBeforeSl',
+        'Label_Long_Entry_ExpectedNetRAfterCosts', 'Label_Short_Entry_ExpectedNetRAfterCosts',
         'f_long_setup_prob', 'long_setup_fold_id',
         'f_long_setup_threshold', 'f_long_setup_threshold_margin',
         'f_short_setup_prob', 'short_setup_fold_id',
@@ -1923,6 +2262,12 @@ def main():
         row_w['Label_Short_Entry'] = (
             df_meta.at[_idx, 'Label_Short_Entry'] if 'Label_Short_Entry' in df_meta.columns else float('nan')
         )
+        for _label_col in [
+            'Label_Long_Entry_CostAware', 'Label_Short_Entry_CostAware',
+            'Label_Long_Entry_TpBeforeSl', 'Label_Short_Entry_TpBeforeSl',
+            'Label_Long_Entry_ExpectedNetRAfterCosts', 'Label_Short_Entry_ExpectedNetRAfterCosts',
+        ]:
+            row_w[_label_col] = df_meta.at[_idx, _label_col] if _label_col in df_meta.columns else float('nan')
         # Long side: NaN / -1 when bar was never in an OOF test fold
         row_w['f_long_setup_prob'] = lr['prob'] if lr else float('nan')
         row_w['long_setup_fold_id'] = int(lr['fold_id']) if lr else -1
@@ -1983,6 +2328,8 @@ def main():
             'threshold_grid': 'threshold_grid.csv',
             'oof_predictions': 'oof_setup_predictions.csv',
             'reliability': 'calibration_reliability.csv',
+            'cost_aware_labels': 'cost_aware_setup_labels.csv',
+            'cost_aware_label_manifest': 'cost_aware_label_manifest.json',
         },
         'models': cal_model_entries,
         'errors': [],
@@ -2009,14 +2356,6 @@ def main():
     print(f">>> Wrote {cal_rel_path}")
 
     # --- setup_manifest.json ---
-    try:
-        import subprocess
-        commit_hash = subprocess.check_output(
-            ['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        commit_hash = 'unknown'
-
     oof_coverage = oof_paired_count / max(len(df_rest), 1)
 
     entry_sr_long = next((r for r in score_rows if r['filename'] == 'long_entry.onnx'), {})
@@ -2032,18 +2371,28 @@ def main():
         'feature_schema_sha256': fschema_hash,
         'model_family': _normalize_model_family(MODEL_FAMILY),
         'label_info': {
-            'type': 'binary_tp_before_sl',
+            'type': 'binary_expected_net_r_after_costs' if COST_AWARE_LABELS else 'binary_tp_before_sl',
             'entry_fill_mode': ENTRY_FILL_MODE,
             'entry_profit_pct': ENTRY_PROFIT_PCT,
             'entry_risk_pct': ENTRY_RISK_PCT,
             'entry_slippage_bps': ENTRY_SLIPPAGE_BPS,
             'exit_slippage_bps': EXIT_SLIPPAGE_BPS,
             'future_window_bars': FUTURE_WINDOW_BARS,
-            'cost_aware': False,
-            'note': (
-                'Labels are binary tp_before_sl with basic slippage constants. '
-                'No expected_net_r_after_costs label or label manifest yet. '
-                'Add Phase 4 cost-aware labels before feature-block experiments.'
+            'cost_aware': bool(COST_AWARE_LABELS),
+            'expected_net_r_after_costs_available': True,
+            'cost_aware_label_schema_version': COST_AWARE_LABEL_SCHEMA_VERSION,
+            'cost_aware_label_manifest': 'cost_aware_label_manifest.json',
+            'cost_aware_labels_csv': 'cost_aware_setup_labels.csv',
+            'long_training_target': 'Label_Long_Entry',
+            'short_training_target': 'Label_Short_Entry',
+            'long_expected_net_r_after_costs': 'Label_Long_Entry_ExpectedNetRAfterCosts',
+            'short_expected_net_r_after_costs': 'Label_Short_Entry_ExpectedNetRAfterCosts',
+            'long_legacy_tp_before_sl': 'Label_Long_Entry_TpBeforeSl',
+            'short_legacy_tp_before_sl': 'Label_Short_Entry_TpBeforeSl',
+            'assumptions': cost_aware_label_manifest.get('assumptions', {}),
+            'summary': cost_aware_label_manifest.get('summary', {}),
+            'note': 'Entry labels use expected_net_r_after_costs by default; legacy tp_before_sl labels are retained for audit.' if COST_AWARE_LABELS else (
+                'Expected_net_r_after_costs labels were generated, but COST_AWARE_LABELS=0 kept legacy tp_before_sl as the training target.'
             ),
         },
         'training_rows': len(df_rest),
@@ -2086,19 +2435,12 @@ def main():
             'oof_predictions': 'oof_setup_predictions.csv',
             'calibration_manifest': 'calibration_manifest.json',
             'calibration_reliability': 'calibration_reliability.csv',
+            'cost_aware_labels': 'cost_aware_setup_labels.csv',
+            'cost_aware_label_manifest': 'cost_aware_label_manifest.json',
         },
         'errors': [],
         'warnings': calibration_manifest['warnings'],
     }
-    # Replace nan/inf with None for JSON serialisation.
-    def _json_safe(obj):
-        if isinstance(obj, dict):
-            return {k: _json_safe(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_json_safe(v) for v in obj]
-        if isinstance(obj, float) and not math.isfinite(obj):
-            return None
-        return obj
 
     manifest_path = output_dir / "setup_manifest.json"
     manifest_path.write_text(json.dumps(_json_safe(setup_manifest), indent=2), encoding='utf-8')

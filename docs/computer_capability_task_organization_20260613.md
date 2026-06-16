@@ -913,6 +913,67 @@ Promotion-gate rows:
 - Threshold-stability result: every candidate method had `stable_island_points=0` and `pass_stable_threshold_island=false` under `min_stable_threshold_points=3` because the short smoke has either single-day predicted-positive dominance above the `0.40` cap or too few selected predictions.
 - Stop/go decision: **Correct FAIL**. Step 17 is now producing the missing stable-threshold-island evidence, and the evidence correctly blocks promotion of this 10-day smoke. Do not relax the gate to pass the pilot. Next blockers remain cost-aware labels, broader/full-window training, Java/runtime calibration application, replay parity, and paper/shadow checks.
 
+### Step 18 — Minimum cost-aware setup labels
+
+Action plan:
+
+- Replace the 30s setup entry training target with a minimum execution-aware binary label derived from `expected_net_r_after_costs > COST_AWARE_MIN_NET_R_LABEL`.
+- Preserve the old `tp_before_sl` labels as audit columns, so label deltas are explicit instead of silently changing target semantics.
+- Store all required assumptions in a machine-readable label manifest: entry/exit spread model, fixed slippage, fill probability, partial-fill penalty, missed-fill penalty, latency assumption, and ambiguous TP/SL policy.
+- Keep all artifacts research-only until the cost-aware setup OOF run is followed by lifecycle/micro reruns, full-window training, promotion gates, runtime parity, and paper/shadow checks.
+
+Action done in code:
+
+- `train_30s_models.py` now defaults `COST_AWARE_LABELS=1` and writes:
+  - `cost_aware_setup_labels.csv`
+  - `cost_aware_label_manifest.json`
+- Entry training targets `Label_Long_Entry` and `Label_Short_Entry` are cost-aware by default.
+- Audit columns retained in setup labels and `oof_setup_predictions.csv`:
+  - `Label_Long_Entry_CostAware`
+  - `Label_Short_Entry_CostAware`
+  - `Label_Long_Entry_TpBeforeSl`
+  - `Label_Short_Entry_TpBeforeSl`
+  - `Label_Long_Entry_ExpectedNetRAfterCosts`
+  - `Label_Short_Entry_ExpectedNetRAfterCosts`
+- `setup_manifest.json` now records `label_info.cost_aware=true`, the cost-aware label artifacts, and the label summary.
+- `calibration_manifest.json` references the cost-aware label artifacts.
+- `scripts/run_setup_cost_aware_labels_20260615.sh` is a paste-safe 48GB runner for the setup OOF rerun. It uses `--no-onnx`, disables canonical alias updates, and writes only research artifacts.
+
+Run the 48GB cost-aware setup OOF smoke:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+git fetch origin ai-training-dynamic-upgrade-20260612
+git checkout ai-training-dynamic-upgrade-20260612
+git pull --ff-only origin ai-training-dynamic-upgrade-20260612
+git --no-pager log --oneline -1
+
+unset SETUP_OUT_DIR
+unset RUN_ID
+
+bash scripts/run_setup_cost_aware_labels_20260615.sh
+```
+
+Expected output directory shape:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/setup_cost_aware_30s_<timestamp>
+```
+
+Expected artifacts:
+
+- `setup_scorecard.csv`
+- `threshold_grid.csv`
+- `oof_setup_predictions.csv`
+- `calibration_manifest.json`
+- `calibration_reliability.csv`
+- `setup_manifest.json`
+- `cost_aware_setup_labels.csv`
+- `cost_aware_label_manifest.json`
+- `train.log`
+
+If the 10-day smoke produces sparse/empty OOF predictions, that is still not a promotion failure by itself. The purpose of this step is to verify cost-aware label generation and manifests. Useful OOF coverage and promotion evidence still require broader/full-window training.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
