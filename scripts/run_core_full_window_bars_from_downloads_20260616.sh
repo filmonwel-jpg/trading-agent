@@ -30,7 +30,7 @@ RAW_OPRA_OHLCV="${RAW_OPRA_OHLCV:-$DOWNLOAD_ROOT/OPRA-20260523-MSV68VKVKD}"
 
 # Richer 20260612 sources are inventoried here, but not consumed by the current
 # baseline builder until dedicated mbp-1/tcbbo/definition normalizers exist.
-RAW_EQUS_20260612_UNKNOWN="${RAW_EQUS_20260612_UNKNOWN:-$DOWNLOAD_ROOT/EQUS-20260612-GFHRSU6F48}"
+RAW_EQUS_DEFINITION="${RAW_EQUS_DEFINITION:-${RAW_EQUS_20260612_UNKNOWN:-$DOWNLOAD_ROOT/EQUS-20260612-GFHRSU6F48}}"
 RAW_OPRA_DEFINITION="${RAW_OPRA_DEFINITION:-$DOWNLOAD_ROOT/OPRA-20260612-B5D4JV3GV6}"
 RAW_EQUS_MBP1="${RAW_EQUS_MBP1:-$DOWNLOAD_ROOT/EQUS-20260612-36BEU4G7M8}"
 RAW_OPRA_TCBBO="${RAW_OPRA_TCBBO:-$DOWNLOAD_ROOT/OPRA-20260612-KN5TPHB5EF}"
@@ -67,7 +67,7 @@ echo "RAW_COPY_DEST_ROOT=$RAW_COPY_DEST_ROOT"
 echo "WRITE_1S_OUTPUTS=$WRITE_1S_OUTPUTS"
 echo "RAW_EQUS_TBBO=$RAW_EQUS_TBBO"
 echo "RAW_OPRA_OHLCV=$RAW_OPRA_OHLCV"
-echo "RAW_EQUS_20260612_UNKNOWN=$RAW_EQUS_20260612_UNKNOWN"
+echo "RAW_EQUS_DEFINITION=$RAW_EQUS_DEFINITION"
 echo "RAW_OPRA_DEFINITION=$RAW_OPRA_DEFINITION"
 echo "RAW_EQUS_MBP1=$RAW_EQUS_MBP1"
 echo "RAW_OPRA_TCBBO=$RAW_OPRA_TCBBO"
@@ -96,7 +96,7 @@ mkdir -p "$BUILD_ROOT"
 
 write_raw_manifest() {
   python3 - "$BUILD_ROOT/raw_download_manifest.json" \
-    "$RAW_EQUS_TBBO" "$RAW_OPRA_OHLCV" "$RAW_EQUS_20260612_UNKNOWN" \
+    "$RAW_EQUS_TBBO" "$RAW_OPRA_OHLCV" "$RAW_EQUS_DEFINITION" \
     "$RAW_OPRA_DEFINITION" "$RAW_EQUS_MBP1" "$RAW_OPRA_TCBBO" <<'PY'
 import json
 import re
@@ -134,8 +134,8 @@ known = {
     },
     "EQUS-20260612-GFHRSU6F48": {
         "dataset": "EQUS.MINI",
-        "schema": "unknown_until_audited",
-        "role": "not found in prior docs; inspect filenames/source manifest before using in model training",
+        "schema": "definition",
+        "role": "equity definition source; inventoried only until definition metadata reader exists",
     },
 }
 
@@ -157,7 +157,7 @@ for source in source_paths:
         "path": str(source),
         "folder_name": source.name,
         "exists": source.is_dir(),
-        "documented": source.name in known and source.name != "EQUS-20260612-GFHRSU6F48",
+        "documented": source.name in known,
         "known_info": known.get(source.name, {}),
         "file_count": len(files),
         "total_bytes": sum(p.stat().st_size for p in files),
@@ -174,8 +174,8 @@ manifest = {
     "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     "note": (
         "Only the 20260523 tbbo/ohlcv-1s folders are consumed by the current baseline CSV builder. "
-        "The 20260612 mbp-1/tcbbo/definition folders are inventory inputs for future normalizers. "
-        "EQUS-20260612-GFHRSU6F48 was supplied from Downloads but is not documented in prior runbooks; audit before use."
+        "The 20260612 mbp-1/tcbbo/equity-definition/option-definition folders are inventory inputs for future normalizers. "
+        "EQUS-20260612-GFHRSU6F48 is the EQUS.MINI definition folder."
     ),
     "sources": entries,
 }
@@ -195,7 +195,7 @@ write_raw_manifest
 
 if truthy "$COPY_RAW_DOWNLOADS"; then
   mkdir -p "$RAW_COPY_DEST_ROOT"
-  for src in "$RAW_EQUS_TBBO" "$RAW_OPRA_OHLCV" "$RAW_EQUS_20260612_UNKNOWN" "$RAW_OPRA_DEFINITION" "$RAW_EQUS_MBP1" "$RAW_OPRA_TCBBO"; do
+  for src in "$RAW_EQUS_TBBO" "$RAW_OPRA_OHLCV" "$RAW_EQUS_DEFINITION" "$RAW_OPRA_DEFINITION" "$RAW_EQUS_MBP1" "$RAW_OPRA_TCBBO"; do
     if [[ -d "$src" ]]; then
       dest="$RAW_COPY_DEST_ROOT/$(basename "$src")"
       echo "RSYNC_RAW_SOURCE src=$src dest=$dest"

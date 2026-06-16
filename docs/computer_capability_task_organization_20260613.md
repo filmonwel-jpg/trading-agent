@@ -99,6 +99,7 @@ Good tasks for the 48GB machine:
 2. Create a source manifest for:
    - existing `EQUS tbbo`
    - existing `OPRA ohlcv-1s`
+   - new `EQUS definition` (`EQUS-20260612-GFHRSU6F48`; corrected on 2026-06-16)
    - new `EQUS mbp-1`
    - new `OPRA tcbbo`
    - new `OPRA definition`
@@ -123,7 +124,7 @@ Use this ledger format for every remaining step: write the **Action plan** first
 
 Action plan:
 
-- Build the source inventory from the five required folders only: existing `EQUS tbbo`, existing `OPRA ohlcv-1s`, new `EQUS mbp-1`, new `OPRA tcbbo`, and primary new `OPRA definition`.
+- Build the source inventory from the required folders: existing `EQUS tbbo`, existing `OPRA ohlcv-1s`, new `EQUS definition`, new `EQUS mbp-1`, new `OPRA tcbbo`, and primary new `OPRA definition`.
 - Exclude the duplicate `OPRA-20260612-B5D4JV3GV6 2` definition folder unless a later hash check proves it is needed.
 - Require `hash_error_count == 0` before using the source manifest for pilot planning.
 
@@ -135,6 +136,7 @@ Action done:
 - `hash_skipped_count: 0`.
 - Expected unpaired date remains `20260403`, present only in `equs_mbp1_20260612`.
 - `duplicate_candidates: []` after excluding the duplicate definition folder.
+- 2026-06-16 correction: `EQUS-20260612-GFHRSU6F48` is the `EQUS.MINI` equity definition folder. Earlier five-source manifest language predates that clarification; include `equs_definition_20260612` in future source inventories.
 
 ### Step 2 — Representative DBN day decode audits
 
@@ -158,7 +160,7 @@ Action plan:
 
 - Select the latest 10 fully paired trading dates from the hashed source manifest.
 - The selected set must exclude `20260403` automatically because that date is not paired across sources.
-- Require exactly five source files per selected date: `EQUS tbbo`, `OPRA ohlcv-1s`, `EQUS mbp-1`, `OPRA tcbbo`, and primary `OPRA definition`.
+- Require exactly six source files per selected date in future enriched-source manifests: `EQUS tbbo`, `OPRA ohlcv-1s`, `EQUS definition`, `EQUS mbp-1`, `OPRA tcbbo`, and primary `OPRA definition`. Historical Step 3 selected-file counts were produced before the `EQUS definition` folder was identified.
 - Record compressed-size and decoded-memory estimates before any build.
 
 Action done:
@@ -1101,13 +1103,13 @@ Current raw DBN folder mapping:
 | `/Users/filmonghezehey/Downloads/EQUS-20260612-36BEU4G7M8` | `EQUS.MINI` / `mbp-1` | no | Richer equity quote-state source. Inventory only until an `mbp-1` normalizer is implemented. |
 | `/Users/filmonghezehey/Downloads/OPRA-20260612-KN5TPHB5EF` | `OPRA.PILLAR` / `tcbbo` | no | Richer option trade/quote source. Inventory only until a `tcbbo` normalizer is implemented. |
 | `/Users/filmonghezehey/Downloads/OPRA-20260612-B5D4JV3GV6` | `OPRA.PILLAR` / `definition` | no | Option metadata source. Inventory only until a definition reader is implemented. |
-| `/Users/filmonghezehey/Downloads/EQUS-20260612-GFHRSU6F48` | not previously documented | no | Treat as unknown until `raw_download_manifest.json` infers schema/dates from filenames or a source manifest is reviewed. Do not feed it into model training blindly. |
+| `/Users/filmonghezehey/Downloads/EQUS-20260612-GFHRSU6F48` | `EQUS.MINI` / `definition` | no | Equity definition source. Inventory only until an equity definition metadata reader is implemented. |
 
 Correct order for the broader run:
 
 1. Inventory the `Downloads` raw DBN folders and build broader/core 30s/5s CSVs from the two currently supported baseline folders: `EQUS-20260523-6J9KE98BJ9` and `OPRA-20260523-MSV68VKVKD`.
 2. Run the cost-aware setup + lifecycle chain against those newly built CSVs.
-3. Keep the 20260612 `mbp-1` / `tcbbo` / `definition` folders as audited raw inputs for a later richer-feature normalizer; they are not part of this baseline full-window chain yet.
+3. Keep the 20260612 `EQUS definition` / `EQUS mbp-1` / `OPRA tcbbo` / `OPRA definition` folders as audited raw inputs for later richer-feature normalizers; they are not part of this baseline full-window chain yet.
 
 Preflight the raw `Downloads` folders first:
 

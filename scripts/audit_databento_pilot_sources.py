@@ -26,6 +26,7 @@ DBN_SUFFIXES = (".dbn", ".dbn.zst")
 DEFAULT_SOURCES: tuple[tuple[str, str, str, str], ...] = (
     ("equs_tbbo_20260523", "EQUS.MINI", "tbbo", "EQUS-20260523-6J9KE98BJ9"),
     ("opra_ohlcv1s_20260523", "OPRA.PILLAR", "ohlcv-1s", "OPRA-20260523-MSV68VKVKD"),
+    ("equs_definition_20260612", "EQUS.MINI", "definition", "EQUS-20260612-GFHRSU6F48"),
     ("equs_mbp1_20260612", "EQUS.MINI", "mbp-1", "EQUS-20260612-36BEU4G7M8"),
     ("opra_tcbbo_20260612", "OPRA.PILLAR", "tcbbo", "OPRA-20260612-KN5TPHB5EF"),
     ("opra_definition_20260612", "OPRA.PILLAR", "definition", "OPRA-20260612-B5D4JV3GV6"),

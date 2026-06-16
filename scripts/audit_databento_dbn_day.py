@@ -24,6 +24,7 @@ from typing import Any
 DEFAULT_SOURCE_DIRS: tuple[tuple[str, str, str, str], ...] = (
     ("equs_tbbo_20260523", "EQUS.MINI", "tbbo", "/Volumes/DatabentoVault/EQUS-20260523-6J9KE98BJ9"),
     ("opra_ohlcv1s_20260523", "OPRA.PILLAR", "ohlcv-1s", "/Volumes/DatabentoVault/OPRA-20260523-MSV68VKVKD"),
+    ("equs_definition_20260612", "EQUS.MINI", "definition", "/Volumes/DatabentoVault/EQUS-20260612-GFHRSU6F48"),
     ("equs_mbp1_20260612", "EQUS.MINI", "mbp-1", "/Volumes/DatabentoVault/EQUS-20260612-36BEU4G7M8"),
     ("opra_tcbbo_20260612", "OPRA.PILLAR", "tcbbo", "/Volumes/DatabentoVault/OPRA-20260612-KN5TPHB5EF"),
     ("opra_definition_20260612", "OPRA.PILLAR", "definition", "/Volumes/DatabentoVault/OPRA-20260612-B5D4JV3GV6"),
