@@ -839,25 +839,25 @@ Rerun the corrected Phase 5 smoke with Step 17 artifacts:
 
 ```zsh
 cd /Users/filmonghezehey/trading-agent/worktrees/databento
-export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
-export SETUP_PREDICTIONS="$LAKE_ROOT/model_training_sets/setup_oof_predictions_20260615_153000/setup_oof_predictions.csv"
-export LIFECYCLE_OUT_DIR="$LAKE_ROOT/model_training_sets/lifecycle_micro_posthoc_threshold_stability_$(date +%Y%m%d_%H%M%S)"
+git fetch origin ai-training-dynamic-upgrade-20260612
+git checkout ai-training-dynamic-upgrade-20260612
+git pull --ff-only origin ai-training-dynamic-upgrade-20260612
+git --no-pager log --oneline -1
 
-python3 train_lifecycle_micro_models.py \
-  --input-30s-csv "$LAKE_ROOT/normalized_30s" \
-  --input-5s-csv "$LAKE_ROOT/normalized_5s" \
-  --setup-predictions-csv "$SETUP_PREDICTIONS" \
-  --output-dir "$LIFECYCLE_OUT_DIR" \
-  --posthoc-calibration both \
-  --posthoc-calibration-frac 0.20 \
-  --frozen-holdout-frac 0.20 \
-  --min-frozen-holdout-rows 500 \
-  --min-holdout-predictions 20 \
-  --max-day-dominance-frac 0.40 \
-  --min-stable-threshold-points 3
+bash scripts/run_lifecycle_micro_posthoc_threshold_stability_20260615.sh
 ```
 
-Then rerun the artifact-only promotion-gate report:
+The runner defaults to the corrected 10-day Phase 5 smoke inputs and avoids accidental ONNX export:
+
+- `LAKE_ROOT=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2`
+- `PILOT_BUILD_ROOT=$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_20260613_173446`
+- `SETUP_PREDICTIONS=$LAKE_ROOT/model_training_sets/setup_30s_fixed_quality_20260615_144107/oof_setup_predictions.csv`
+- `RUN_ID=lifecycle_micro_posthoc_threshold_stability_<timestamp>`
+- `--no-onnx`
+
+The previously referenced path `model_training_sets/setup_oof_predictions_20260615_153000/setup_oof_predictions.csv` is stale/not available on the 48GB Mac for this smoke. Do not use it unless a matching setup OOF run is generated and verified.
+
+The runner also writes the artifact-only promotion-gate report. To rerun that report manually against the same output directory:
 
 ```zsh
 python3 scripts/check_lifecycle_posthoc_gates.py \
