@@ -1090,6 +1090,82 @@ Stop/go decision: **Correct FAIL**. The downstream cost-aware rerun successfully
 
 Decision on 2026-06-16: keep the current cost assumptions for now and move to broader/full-window evidence. Do **not** tune the `1.07R < 1.20R` economics warning yet; carry it forward as a documented risk so this run isolates the effect of a broader date window.
 
+Location correction from the 48GB Mac on 2026-06-16: the broader-duration inputs are currently raw DBN download folders under `/Users/filmonghezehey/Downloads`, not prebuilt `combined_30s.csv` / `combined_5s.csv` training files. Earlier docs recorded these folders at `/Volumes/DatabentoVault/...`; for this run, use the `Downloads` paths as the source of truth and build the combined CSVs first.
+
+Current raw DBN folder mapping:
+
+| Current 48GB source folder | Recorded/known role | Used by current baseline builder? | Notes |
+|---|---|---:|---|
+| `/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9` | `EQUS.MINI` / `tbbo` | yes | Equity trade + top-of-book source consumed by `build_30s_from_5s_csv.py --dbeq-dir`. |
+| `/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD` | `OPRA.PILLAR` / `ohlcv-1s` | yes | Compact option-volume source consumed by `build_30s_from_5s_csv.py --opra-dir`. |
+| `/Users/filmonghezehey/Downloads/EQUS-20260612-36BEU4G7M8` | `EQUS.MINI` / `mbp-1` | no | Richer equity quote-state source. Inventory only until an `mbp-1` normalizer is implemented. |
+| `/Users/filmonghezehey/Downloads/OPRA-20260612-KN5TPHB5EF` | `OPRA.PILLAR` / `tcbbo` | no | Richer option trade/quote source. Inventory only until a `tcbbo` normalizer is implemented. |
+| `/Users/filmonghezehey/Downloads/OPRA-20260612-B5D4JV3GV6` | `OPRA.PILLAR` / `definition` | no | Option metadata source. Inventory only until a definition reader is implemented. |
+| `/Users/filmonghezehey/Downloads/EQUS-20260612-GFHRSU6F48` | not previously documented | no | Treat as unknown until `raw_download_manifest.json` infers schema/dates from filenames or a source manifest is reviewed. Do not feed it into model training blindly. |
+
+Correct order for the broader run:
+
+1. Inventory the `Downloads` raw DBN folders and build broader/core 30s/5s CSVs from the two currently supported baseline folders: `EQUS-20260523-6J9KE98BJ9` and `OPRA-20260523-MSV68VKVKD`.
+2. Run the cost-aware setup + lifecycle chain against those newly built CSVs.
+3. Keep the 20260612 `mbp-1` / `tcbbo` / `definition` folders as audited raw inputs for a later richer-feature normalizer; they are not part of this baseline full-window chain yet.
+
+Preflight the raw `Downloads` folders first:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+git fetch origin ai-training-dynamic-upgrade-20260612
+git checkout ai-training-dynamic-upgrade-20260612
+git pull --ff-only origin ai-training-dynamic-upgrade-20260612
+git --no-pager log --oneline -1
+
+export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+export DOWNLOAD_ROOT="/Users/filmonghezehey/Downloads"
+
+RUNNER_PREFLIGHT_ONLY=1 \
+bash scripts/run_core_full_window_bars_from_downloads_20260616.sh
+```
+
+Then build the broader/core full-window CSVs from DBN. This writes under `$LAKE_ROOT/model_training_sets/core_full_window_bars_from_downloads_<timestamp>/`:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+export DOWNLOAD_ROOT="/Users/filmonghezehey/Downloads"
+
+unset BUILD_RUN_ID
+unset BUILD_ROOT
+
+bash scripts/run_core_full_window_bars_from_downloads_20260616.sh
+```
+
+By default this prerequisite writes only `combined_30s.csv`, `combined_5s.csv`, `data_30s/`, and `data_5s/`, because the cost-aware setup + lifecycle chain does not need full-window 1s outputs. If a later QA pass needs 1s artifacts too, set `WRITE_1S_OUTPUTS=1` before the DBN build.
+
+After the DBN-to-CSV build passes, launch the cost-aware setup + lifecycle chain from its outputs:
+
+```zsh
+export BUILD_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/core_full_window_bars_from_downloads_<timestamp>"
+export SOURCE_30S="$BUILD_ROOT/combined_30s.csv"
+export SOURCE_5S="$BUILD_ROOT/combined_5s.csv"
+
+unset SETUP_OUT_DIR
+unset SETUP_PREDICTIONS
+unset LIFECYCLE_OUT_DIR
+unset CHAIN_RUN_ID
+unset CHAIN_ROOT
+
+bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
+```
+
+Optional one-command mode after preflight, if the 48GB Mac can be left running for the full DBN build + setup + lifecycle chain:
+
+```zsh
+RUN_CHAIN_AFTER_BUILD=1 \
+bash scripts/run_core_full_window_bars_from_downloads_20260616.sh
+```
+
+Raw-folder copy note: do **not** delete the `Downloads` DBN folders after a copy without a manifest/hash review. If a durable copy to the vault is needed first, use `COPY_RAW_DOWNLOADS=1`; this copies with `rsync` and writes `raw_download_manifest.json`, but the current recommended training path reads from `Downloads` because that is where the user confirmed the raw DBN sources currently live.
+
 Action added in code:
 
 - `scripts/stage_broader_window_inputs.py` streams combined or per-symbol full-window 30s/5s inputs and writes:
@@ -1108,8 +1184,9 @@ Action added in code:
   - validates `oof_setup_predictions.csv` schema and paired OOF count before lifecycle/micro starts,
   - runs lifecycle/micro with posthoc calibration, threshold-stability, promotion-gate artifacts, streamed per-symbol staging, and `--no-onnx`,
   - writes everything under `$LAKE_ROOT/model_training_sets/broader_full_window_cost_aware_<timestamp>/` by default.
+- `scripts/run_core_full_window_bars_from_downloads_20260616.sh` is the prerequisite when only raw DBN folders exist. It inventories the six `Downloads` raw folders, builds `combined_30s.csv` / `combined_5s.csv` from the two currently supported `20260523` folders, and can optionally launch the cost-aware chain with `RUN_CHAIN_AFTER_BUILD=1`.
 
-First run a preflight on the 48GB Mac:
+If combined full-window CSVs already exist, or after `scripts/run_core_full_window_bars_from_downloads_20260616.sh` creates them, preflight the cost-aware chain with the built CSV paths:
 
 ```zsh
 cd /Users/filmonghezehey/trading-agent/worktrees/databento
@@ -1119,30 +1196,22 @@ git pull --ff-only origin ai-training-dynamic-upgrade-20260612
 git --no-pager log --oneline -1
 
 export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
+export BUILD_ROOT="$LAKE_ROOT/model_training_sets/core_full_window_bars_from_downloads_<timestamp>"
+export SOURCE_30S="$BUILD_ROOT/combined_30s.csv"
+export SOURCE_5S="$BUILD_ROOT/combined_5s.csv"
 
 RUNNER_PREFLIGHT_ONLY=1 \
 bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
 ```
 
-If auto-detection cannot find the full-window sources, set them explicitly. Use the full-window `20260523` combined files, not the 10-day pilot:
-
-```zsh
-export SOURCE_30S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_30s_20260523_combined.csv"
-export SOURCE_5S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_5s_20260523_combined.csv"
-
-RUNNER_PREFLIGHT_ONLY=1 \
-bash scripts/run_broader_full_window_cost_aware_chain_20260616.sh
-```
-
-Then run the broader/full-window core-symbol chain:
+Then run the broader/full-window core-symbol chain from those built CSVs:
 
 ```zsh
 cd /Users/filmonghezehey/trading-agent/worktrees/databento
 export LAKE_ROOT="/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2"
-
-# Optional when auto-detection succeeds; required if preflight asked for explicit paths.
-export SOURCE_30S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_30s_20260523_combined.csv"
-export SOURCE_5S="/Volumes/DatabentoVault/trading-agent-offload/databento/training_data/databento_5s_20260523_combined.csv"
+export BUILD_ROOT="$LAKE_ROOT/model_training_sets/core_full_window_bars_from_downloads_<timestamp>"
+export SOURCE_30S="$BUILD_ROOT/combined_30s.csv"
+export SOURCE_5S="$BUILD_ROOT/combined_5s.csv"
 
 unset SETUP_OUT_DIR
 unset SETUP_PREDICTIONS
