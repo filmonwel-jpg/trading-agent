@@ -73,6 +73,15 @@ class TestFeatureSchemaHash(unittest.TestCase):
         self.assertNotEqual(t30.feature_schema_hash(cols_a), t30.feature_schema_hash(cols_b))
 
 
+class TestOptionalModelFamilyFallback(unittest.TestCase):
+    def test_require_model_family_raises_instead_of_fallback(self):
+        with unittest.mock.patch.object(t30, "LGBMClassifier", None), \
+             unittest.mock.patch.object(t30, "LIGHTGBM_IMPORT_ERROR", "ImportError: libomp missing"), \
+             unittest.mock.patch.object(t30, "REQUIRE_MODEL_FAMILY", True):
+            with self.assertRaisesRegex(RuntimeError, "REQUIRE_MODEL_FAMILY=1"):
+                t30.build_classifier("lightgbm")
+
+
 class TestPerformWalkForwardOof(unittest.TestCase):
     def _make_dataset(self, n_days=12, rows_per_day=30, seed=42):
         rng = np.random.default_rng(seed)

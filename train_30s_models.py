@@ -26,13 +26,17 @@ except Exception:
 
 try:
     from lightgbm import LGBMClassifier
-except Exception:
+    LIGHTGBM_IMPORT_ERROR = ""
+except Exception as exc:
     LGBMClassifier = None
+    LIGHTGBM_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 try:
     from catboost import CatBoostClassifier
-except Exception:
+    CATBOOST_IMPORT_ERROR = ""
+except Exception as exc:
     CatBoostClassifier = None
+    CATBOOST_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 # --- CONFIGURATION: THE 4-MODEL PARAMETERS ---
 # CHANGED: Now pointing to the new 30-second aggregated data
@@ -82,6 +86,7 @@ MODEL_EXPORTS_ROOT = Path(os.getenv('MODEL_EXPORTS_ROOT', 'model_exports')).expa
 
 MODEL_FAMILY = os.getenv('MODEL_FAMILY', 'random_forest').strip().lower()
 REGIME_MODEL_FAMILY = os.getenv('REGIME_MODEL_FAMILY', MODEL_FAMILY).strip().lower()
+REQUIRE_MODEL_FAMILY = os.getenv('REQUIRE_MODEL_FAMILY', '0').strip().lower() not in ('0', 'false', 'no', 'off')
 
 SETUP_MANIFEST_SCHEMA_VERSION = "setup_30s_v1"
 
@@ -227,6 +232,24 @@ def _normalize_model_family(family):
     return 'random_forest'
 
 
+def _model_family_unavailable_message(model_family, context_name='MODEL_FAMILY'):
+    family = _normalize_model_family(model_family)
+    if family == 'lightgbm' and LGBMClassifier is None:
+        detail = LIGHTGBM_IMPORT_ERROR or 'unknown'
+    elif family == 'catboost' and CatBoostClassifier is None:
+        detail = CATBOOST_IMPORT_ERROR or 'unknown'
+    else:
+        return ''
+    return f"Requested {context_name}={family} is unavailable; import_error={detail}"
+
+
+def require_model_family_available(model_family, context_name='MODEL_FAMILY'):
+    message = _model_family_unavailable_message(model_family, context_name=context_name)
+    if message and REQUIRE_MODEL_FAMILY:
+        raise RuntimeError(message + "; refusing RandomForest fallback because REQUIRE_MODEL_FAMILY=1")
+    return message
+
+
 def build_classifier(model_family='random_forest', random_state=42, multi_class=False):
     family = _normalize_model_family(model_family)
 
@@ -264,8 +287,9 @@ def build_classifier(model_family='random_forest', random_state=42, multi_class=
         }
         return CatBoostClassifier(**kwargs)
 
-    if family in ('lightgbm', 'catboost'):
-        print(f"WARNING: Requested MODEL_FAMILY={family} is unavailable; falling back to RandomForest.")
+    message = require_model_family_available(family)
+    if message:
+        print(f"WARNING: {message}; falling back to RandomForest.")
     return build_rf_classifier(random_state=random_state)
 
 
@@ -1968,6 +1992,9 @@ def main():
     print(f">>> Training model family: {_normalize_model_family(MODEL_FAMILY)}")
     print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
     print(f">>> Train legacy 30s exit models: {TRAIN_LEGACY_30S_EXIT_MODELS}")
+
+    require_model_family_available(MODEL_FAMILY, context_name='MODEL_FAMILY')
+    require_model_family_available(REGIME_MODEL_FAMILY, context_name='REGIME_MODEL_FAMILY')
 
     print(f">>> Loading historical data from {csv_file}...")
     if not ensure_training_csv_available(csv_file, source_5s_clean_file):
