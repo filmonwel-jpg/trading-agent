@@ -872,6 +872,47 @@ python3 scripts/check_lifecycle_posthoc_gates.py \
 
 Expected result for a short corrected smoke remains `POSTHOC_PROMOTION_GATE=FAIL` unless each selected method has enough frozen-holdout predictions, no excessive single-day dominance, and at least three contiguous eligible threshold-grid points around its selected threshold.
 
+48GB-machine Step 17 result on 2026-06-15:
+
+- Pulled `26b354a Guard threshold stability runner against stale setup path`.
+- Ran `scripts/run_lifecycle_micro_posthoc_threshold_stability_20260615.sh`.
+- Output directory: `model_training_sets/lifecycle_micro_posthoc_threshold_stability_20260615_190547`.
+- Setup OOF source: `model_training_sets/setup_30s_fixed_quality_20260615_144107/oof_setup_predictions.csv`.
+- Setup join retained the corrected OOF population:
+  - dropped unscored 30s rows: `21000`
+  - retained OOF-scored rows: `18000`
+  - manifest/training errors: `[]`
+- Wrote Step 17 artifacts:
+  - `posthoc_threshold_stability.csv`
+  - `posthoc_threshold_stability_report.json`
+  - `posthoc_promotion_gate_rows.csv`
+  - `posthoc_promotion_gate_report.json`
+- Overall result: `POSTHOC_PROMOTION_GATE=FAIL` / `promotion_ready=false`.
+- Selected methods matched the corrected raw/no-op selection behavior:
+
+| Model | Selected method | Brier | ECE | Threshold | Frozen holdout rows |
+|---|---|---:|---:|---:|---:|
+| `longExitLifecycleAi` | raw | 0.085120 | 0.024624 | 0.62 | 6597 |
+| `shortExitLifecycleAi` | raw | 0.129457 | 0.047756 | 0.68 | 6623 |
+| `longMicroEntryAi` | sigmoid | 0.136396 | 0.066769 | 0.50 | 2299 |
+| `shortMicroEntryAi` | sigmoid | 0.135049 | 0.059911 | 0.70 | 2355 |
+| `longMicroExitGuardAi` | isotonic | 0.082384 | 0.013965 | 0.60 | 2026 |
+| `shortMicroExitGuardAi` | isotonic | 0.134292 | 0.052617 | 0.60 | 2338 |
+
+Promotion-gate rows:
+
+| Model | Selected method | Predicted positives | Max predicted day fraction | Stable island points | Gate status |
+|---|---|---:|---:|---:|---|
+| `longExitLifecycleAi` | raw | 1716 | 1.00000 | 0 | FAIL |
+| `shortExitLifecycleAi` | raw | 1290 | 1.00000 | 0 | FAIL |
+| `longMicroEntryAi` | sigmoid | 0 | 0.00000 | 0 | FAIL |
+| `shortMicroEntryAi` | sigmoid | 58 | 1.00000 | 0 | FAIL |
+| `longMicroExitGuardAi` | isotonic | 222 | 1.00000 | 0 | FAIL |
+| `shortMicroExitGuardAi` | isotonic | 297 | 0.52862 | 0 | FAIL |
+
+- Threshold-stability result: every candidate method had `stable_island_points=0` and `pass_stable_threshold_island=false` under `min_stable_threshold_points=3` because the short smoke has either single-day predicted-positive dominance above the `0.40` cap or too few selected predictions.
+- Stop/go decision: **Correct FAIL**. Step 17 is now producing the missing stable-threshold-island evidence, and the evidence correctly blocks promotion of this 10-day smoke. Do not relax the gate to pass the pilot. Next blockers remain cost-aware labels, broader/full-window training, Java/runtime calibration application, replay parity, and paper/shadow checks.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
