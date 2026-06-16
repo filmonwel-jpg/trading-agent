@@ -857,6 +857,8 @@ The runner defaults to the corrected 10-day Phase 5 smoke inputs and avoids acci
 
 The previously referenced path `model_training_sets/setup_oof_predictions_20260615_153000/setup_oof_predictions.csv` is stale/not available on the 48GB Mac for this smoke. Do not use it unless a matching setup OOF run is generated and verified.
 
+Operational note from the first Step 17 rerun attempt: an exported shell variable can override the runner defaults. If a terminal still has `SETUP_PREDICTIONS` exported to the stale `setup_oof_predictions_20260615_153000` path, either run `unset SETUP_PREDICTIONS` before the runner or pull the latest branch with the guarded runner. The guarded runner auto-detects that known missing stale path and falls back to `setup_30s_fixed_quality_20260615_144107/oof_setup_predictions.csv`.
+
 The runner also writes the artifact-only promotion-gate report. To rerun that report manually against the same output directory:
 
 ```zsh

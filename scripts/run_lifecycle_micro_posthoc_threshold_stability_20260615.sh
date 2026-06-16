@@ -9,13 +9,15 @@ PILOT_BUILD_ROOT="${PILOT_BUILD_ROOT:-$LAKE_ROOT/model_training_sets/pilot_10d_f
 SETUP_OUT_DIR="${SETUP_OUT_DIR:-$LAKE_ROOT/model_training_sets/setup_30s_fixed_quality_20260615_144107}"
 INPUT_30S="${INPUT_30S:-$PILOT_BUILD_ROOT/combined/combined_30s.csv}"
 INPUT_5S="${INPUT_5S:-$PILOT_BUILD_ROOT/combined/combined_5s.csv}"
-SETUP_PREDICTIONS="${SETUP_PREDICTIONS:-$SETUP_OUT_DIR/oof_setup_predictions.csv}"
+DEFAULT_SETUP_PREDICTIONS="$SETUP_OUT_DIR/oof_setup_predictions.csv"
+SETUP_PREDICTIONS="${SETUP_PREDICTIONS:-$DEFAULT_SETUP_PREDICTIONS}"
 RUN_ID="${RUN_ID:-lifecycle_micro_posthoc_threshold_stability_$(date +%Y%m%d_%H%M%S)}"
 LIFECYCLE_OUT_DIR="${LIFECYCLE_OUT_DIR:-$LAKE_ROOT/model_training_sets/$RUN_ID}"
 MIN_FROZEN_HOLDOUT_ROWS="${MIN_FROZEN_HOLDOUT_ROWS:-500}"
 MIN_HOLDOUT_PREDICTIONS="${MIN_HOLDOUT_PREDICTIONS:-20}"
 MAX_DAY_DOMINANCE_FRAC="${MAX_DAY_DOMINANCE_FRAC:-0.40}"
 MIN_STABLE_THRESHOLD_POINTS="${MIN_STABLE_THRESHOLD_POINTS:-3}"
+RUNNER_PREFLIGHT_ONLY="${RUNNER_PREFLIGHT_ONLY:-0}"
 
 require_path() {
   local path="$1"
@@ -39,9 +41,15 @@ echo "PILOT_BUILD_ROOT=$PILOT_BUILD_ROOT"
 echo "SETUP_OUT_DIR=$SETUP_OUT_DIR"
 echo "INPUT_30S=$INPUT_30S"
 echo "INPUT_5S=$INPUT_5S"
+if [[ ! -f "$SETUP_PREDICTIONS" && "$SETUP_PREDICTIONS" == *"/setup_oof_predictions_20260615_153000/setup_oof_predictions.csv" && -f "$DEFAULT_SETUP_PREDICTIONS" ]]; then
+  echo "WARN stale SETUP_PREDICTIONS inherited from shell and file is missing: $SETUP_PREDICTIONS" >&2
+  echo "WARN falling back to corrected setup OOF: $DEFAULT_SETUP_PREDICTIONS" >&2
+  SETUP_PREDICTIONS="$DEFAULT_SETUP_PREDICTIONS"
+fi
 echo "SETUP_PREDICTIONS=$SETUP_PREDICTIONS"
 echo "LIFECYCLE_OUT_DIR=$LIFECYCLE_OUT_DIR"
 echo "MIN_STABLE_THRESHOLD_POINTS=$MIN_STABLE_THRESHOLD_POINTS"
+echo "RUNNER_PREFLIGHT_ONLY=$RUNNER_PREFLIGHT_ONLY"
 
 require_path "$INPUT_30S"
 require_path "$INPUT_5S"
@@ -67,6 +75,13 @@ if missing:
     raise SystemExit(f"ERROR: setup OOF CSV is not lifecycle-compatible; missing columns: {missing}\npath={path}")
 print("OOF schema OK:", path)
 PY
+
+case "$RUNNER_PREFLIGHT_ONLY" in
+  1|true|TRUE|yes|YES|on|ON)
+    echo "PREFLIGHT_ONLY: validated input paths and setup OOF schema; skipping training."
+    exit 0
+    ;;
+esac
 
 mkdir -p "$LIFECYCLE_OUT_DIR"
 export LIFECYCLE_OUT_DIR
