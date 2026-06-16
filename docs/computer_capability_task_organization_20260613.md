@@ -972,6 +972,58 @@ Expected artifacts:
 - `cost_aware_label_manifest.json`
 - `train.log`
 
+Observed 48GB smoke result on 2026-06-15:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/setup_cost_aware_30s_20260615_192705
+```
+
+Run summary:
+
+```text
+setup_errors: []
+label_errors: []
+label_cost_aware: True
+label_type: binary_expected_net_r_after_costs
+oof_rows: 35685
+paired_oof_rows: 18000
+```
+
+Important economics warning from `train.log`:
+
+```text
+WARNING: Net entry reward/risk after configured costs is below MIN_NET_R_MULTIPLE=1.20: 1.07
+```
+
+Interpretation:
+
+- This warning does **not** mean the run failed. The setup labels were generated and persisted correctly.
+- It does mean that, after configured slippage/cost assumptions, the effective base setup reward/risk multiple is only about `1.07R`, below the configured minimum target of `1.20R`.
+- Treat this output as an evaluation artifact, not as a production-ready model bundle. Promotion remains blocked until broader/full-window evidence, lifecycle/micro reruns, threshold-stability/day-dominance gates, runtime parity, replay parity, and paper/shadow checks pass.
+- The average and median expected net R are negative on both sides in this 10-day smoke:
+  - long: mean `-0.308803`, p50 `-0.383624`
+  - short: mean `-0.324221`, p50 `-0.444902`
+- The new cost-aware labels identify many more positives than the legacy TP-before-SL method:
+  - long: `12,825` cost-aware positives vs `4,943` legacy positives, delta `8,692`
+  - short: `11,870` cost-aware positives vs `5,464` legacy positives, delta `7,184`
+- This may be intentional if the new label is capturing partial path economics, but it also increases the risk of noisy positives. Do not interpret this 10-day artifact as promotion evidence by itself.
+
+Setup scorecard:
+
+| Model | Avg precision | Avg threshold | Threshold std | Brier score | ECE | Folds used |
+|---|---:|---:|---:|---:|---:|---:|
+| LONG ENTRY (Dip Buyer) | 0.443288 | 0.60 | 0.000000 | 0.280213 | 0.198917 | 5 |
+| SHORT ENTRY (Rip Seller) | 0.112428 | 0.64 | 0.045607 | 0.239966 | 0.148496 | 5 |
+
+Cost-aware label summary:
+
+| Side | Rows | Finite expected-net-R rows | Positive cost-aware labels | Positive cost-aware rate | Positive legacy TP-before-SL labels | Label delta count | Expected-net-R mean | Expected-net-R p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| long | 38385 | 38336 | 12825 | 0.334115 | 4943 | 8692 | -0.308803 | -0.383624 |
+| short | 38385 | 38336 | 11870 | 0.309235 | 5464 | 7184 | -0.324221 | -0.444902 |
+
+Stop/go decision: **GO for cost-aware label infrastructure; NO-GO for promotion**. The minimum cost-aware label path is now producing the expected artifacts, manifests, and OOF file, but the tight base economics and noisy-positive risk must be carried into the next lifecycle/micro rerun and promotion-gate analysis.
+
 If the 10-day smoke produces sparse/empty OOF predictions, that is still not a promotion failure by itself. The purpose of this step is to verify cost-aware label generation and manifests. Useful OOF coverage and promotion evidence still require broader/full-window training.
 
 ### Phase C — Training and promotion gates on the 48GB machine
