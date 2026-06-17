@@ -1343,6 +1343,29 @@ Action done on 2026-06-16 — setup precision-improvement experiments reviewed f
 - Preferred next lifecycle/micro rerun setup input if running only one candidate: `setup_cost_aware_30s_catboost_nonews_20260616_163956/oof_setup_predictions.csv`, because it has the best balanced global OOF precision with low day concentration. LightGBM no-news is a near-tie and is the alternate if prioritizing slightly lower ECE over global OOF precision.
 - These setup experiments are still research-only. Setup probabilities remain imperfectly calibrated and mean expected net R among thresholded predicted positives is still negative, so this is not a paper/live promotion signal by itself. Use the selected OOF file to test whether lifecycle/micro downstream gates improve, then evaluate replay/backtest PnL/day dominance before any promotion decision.
 
+Action done on 2026-06-16 — lifecycle/micro rerun using the CatBoost no-news setup OOF:
+
+- Chain root: `model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413`.
+- Setup stage was intentionally skipped (`RUN_SETUP_STAGE=0` in the screen output), and lifecycle/micro consumed `setup_cost_aware_30s_catboost_nonews_20260616_163956/oof_setup_predictions.csv`.
+- Staging passed with the same full-window coverage as the prior chain: `30s_rows=830700`, `30s_days=213`, `5s_rows=4984200`, `5s_days=213`, symbols `NVDA,QQQ,SPY,TQQQ,TSLA`.
+- Selected setup manifest: `code_commit=7c5368a`, `feature_count=34`, `errors=[]`, `paired_oof_rows=630000`, `oof_coverage_frac=0.8219338930311748`.
+- Lifecycle/micro output directory: `broader_full_window_cost_aware_catboost_setup_20260616_200413/lifecycle_micro_full_window_cost_aware`.
+- Posthoc gate result remained `POSTHOC_PROMOTION_GATE=PASS` / `promotion_ready=true` / `fail_count=0` / `model_count=6`.
+- Gate-row comparison versus the prior RandomForest-setup lifecycle run:
+
+| Model | Old predicted positives | New predicted positives | Delta | Old max day frac | New max day frac | Stable island points | Gate |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `longExitLifecycleAi` | `41339` | `41455` | `+116` | `0.061201` | `0.061271` | `16 → 16` | `PASS` |
+| `shortExitLifecycleAi` | `37777` | `38198` | `+421` | `0.071896` | `0.072177` | `16 → 16` | `PASS` |
+| `longMicroEntryAi` | `1945` | `1904` | `-41` | `0.058612` | `0.058824` | `16 → 16` | `PASS` |
+| `shortMicroEntryAi` | `1312` | `1231` | `-81` | `0.103659` | `0.107230` | `16 → 16` | `PASS` |
+| `longMicroExitGuardAi` | `8836` | `8836` | `0` | `0.090991` | `0.090991` | `17 → 17` | `PASS` |
+| `shortMicroExitGuardAi` | `8717` | `8717` | `0` | `0.099461` | `0.099461` | `17 → 17` | `PASS` |
+
+- Scorecard deltas were small. The biggest operational change was `shortMicroEntryAi`, where the selected raw threshold moved from `0.72` to `0.68`, precision stayed essentially flat (`90.30% → 90.33%`), and recall improved (`5.65% → 6.46%`). Exit guards were unchanged.
+- Interpretation: the CatBoost no-news setup OOF is a healthier upstream setup signal and does not break the downstream lifecycle/micro posthoc artifact gate, but the downstream gate profile is broadly similar to the prior RandomForest-setup run. This is still **research/evaluation-only** and still **NO-GO for paper/live promotion** until runtime calibration, replay parity, full PnL/day-dominance backtests, paper/shadow drift checks, and label-economics review pass.
+- Audit hardening after this review: `scripts/run_broader_full_window_cost_aware_chain_20260616.sh` now persists `SETUP_PREDICTIONS`, `RUN_STAGE_INPUTS`, `RUN_SETUP_STAGE`, `RUN_LIFECYCLE_STAGE`, `RUNNER_PREFLIGHT_ONLY`, and lifecycle cap settings into `chain_config.env` for future lifecycle-only reruns. The already-completed CatBoost chain predates this small config-recording hardening, so its setup-skipped proof comes from the screen/log plus the external `SETUP_OUT_DIR` and validated CatBoost OOF path.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
