@@ -257,6 +257,25 @@ python3 scripts/analyze_databento_silver_ablation.py \
   --preset equs
 ```
 
+If the fine split passes QA but short-entry folds are still zero/thin, run the
+artifact-only threshold floor diagnostic against the saved OOF probabilities.
+This estimates the highest per-fold short threshold that would satisfy a strict
+minimum predicted-positive floor without retraining or exporting ONNX:
+
+```zsh
+python3 scripts/analyze_databento_short_threshold_floor.py \
+  --ablation-root "$ABLATION_ROOT" \
+  --preset liquidity \
+  --preset equs \
+  --min-pred-pos-rate 0.005 \
+  --min-pred-pos-count 20
+```
+
+The diagnostic writes `databento_short_threshold_floor_candidates.csv`. It is a
+research triage tool only; threshold-floor candidates still require full
+walk-forward policy changes, frozen-holdout checks, backtests, paper/shadow, and
+live feature-parity validation before any promotion.
+
 This is not a production promotion gate. Promotion still requires calibration,
 backtest, paper/shadow, and live feature-parity checks for the active silver
 feature schema.
