@@ -268,7 +268,7 @@ def _wide_underlying_seconds(agg: pd.DataFrame, market_day: str, underlying: str
         right_df = right_df.rename(columns={metric: f"{prefix}{metric}" for metric in RIGHT_METRICS})
         pieces.append(right_df)
 
-    out = pd.concat(pieces, axis=1) if pieces else pd.DataFrame()
+    out = pd.concat(pieces, axis=1, sort=False) if pieces else pd.DataFrame()
     if full_session_grid:
         idx = session_index(market_day)
         out = out.reindex(idx)
