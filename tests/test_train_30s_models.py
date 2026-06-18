@@ -316,6 +316,37 @@ class TestMainArtifacts(unittest.TestCase):
                 check_names=False,
             )
 
+    def test_databento_silver_feature_block_is_distinct_and_opt_in(self):
+        self.assertGreater(len(t30.DATABENTO_SILVER_FEATURE_COLS), 0)
+        self.assertEqual(len(t30.DATABENTO_SILVER_FEATURE_COLS), len(set(t30.DATABENTO_SILVER_FEATURE_COLS)))
+        self.assertFalse(set(t30.DATABENTO_SILVER_FEATURE_COLS) & set(t30.META_PRODUCER_FEATURE_COLS))
+        self.assertFalse(set(t30.DATABENTO_SILVER_FEATURE_COLS) & set(t30.NEWS_BAR_FEATURE_COLS))
+        self.assertFalse(t30.USE_DATABENTO_SILVER_FEATURES)
+
+    def test_optional_numeric_columns_fill_missing_nan_and_infinite_values(self):
+        frame = pd.DataFrame({
+            "EqMbp1SpreadBpsMean30s": ["1.25", None, "bad"],
+            "OpraTcbboPutCallVolumeRatio30s": [np.inf, "2.5", -np.inf],
+        })
+
+        out = t30.ensure_optional_numeric_columns(frame, t30.DATABENTO_SILVER_FEATURE_COLS, default_value=0.0)
+
+        for col in t30.DATABENTO_SILVER_FEATURE_COLS:
+            self.assertIn(col, out.columns)
+        self.assertAlmostEqual(out.loc[0, "EqMbp1SpreadBpsMean30s"], 1.25)
+        self.assertAlmostEqual(out.loc[1, "OpraTcbboPutCallVolumeRatio30s"], 2.5)
+        self.assertEqual(out.loc[2, "EqMbp1SpreadBpsMean30s"], 0.0)
+        self.assertEqual(out.loc[0, "OpraTcbboPutCallVolumeRatio30s"], 0.0)
+        self.assertEqual(out.loc[2, "OpraTcbboPutCallVolumeRatio30s"], 0.0)
+        values = out[t30.DATABENTO_SILVER_FEATURE_COLS].to_numpy(dtype=float)
+        self.assertTrue(np.isfinite(values).all())
+
+    def test_append_unique_feature_columns_preserves_order_without_duplicates(self):
+        base = ["f_dist_vwap", "EqMbp1SpreadBpsMean30s"]
+        appended = t30.append_unique_feature_columns(base, ["EqMbp1SpreadBpsMean30s", "OpraTcbboPutCallVolumeRatio30s"])
+
+        self.assertEqual(appended, ["f_dist_vwap", "EqMbp1SpreadBpsMean30s", "OpraTcbboPutCallVolumeRatio30s"])
+
 
 class TestRegimeSpecificNoOnnx(unittest.TestCase):
     """Regression: --no-onnx must suppress export in train_regime_specific_models()."""

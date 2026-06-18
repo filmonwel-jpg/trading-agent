@@ -155,3 +155,29 @@ Expected output shape for the five-symbol, 10-day pilot is `39,000` rows
 Proceed to the next QA/comparison step only if the command prints
 `DATABENTO_ENRICHED_30S_BUILD=PASS` and the manifest has `errors=[]`.
 
+## Research-only trainer experiment with Databento silver features
+
+By default, `train_30s_models.py` ignores the appended `EqMbp1...` and
+`OpraTcbbo...` columns so enriched CSVs remain row/schema neutral for production
+compatibility checks. To run a research-only setup comparison that activates the
+conservative silver feature subset, set `USE_DATABENTO_SILVER_FEATURES=1` and
+keep ONNX export disabled:
+
+```zsh
+export AUTO_BUILD_30S_IF_MISSING=0
+export UPDATE_CANONICAL_MODEL_ALIASES=0
+export TRAIN_LEGACY_30S_EXIT_MODELS=0
+export MODEL_FAMILY=random_forest
+export REGIME_MODEL_FAMILY=random_forest
+export USE_DATABENTO_SILVER_FEATURES=1
+
+python3 train_30s_models.py \
+  --input-csv "$ENRICHED_30S_ROOT/combined/combined_30s.csv" \
+  --output-dir "$ENRICHED_30S_ROOT/training_runs/setup_silver_features_no_onnx_$(date +%Y%m%d_%H%M%S)" \
+  --no-onnx
+```
+
+This is not a production promotion gate. Promotion still requires calibration,
+backtest, paper/shadow, and live feature-parity checks for the active silver
+feature schema.
+

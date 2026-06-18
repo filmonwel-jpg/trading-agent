@@ -78,6 +78,7 @@ USE_EXTENDED_FEATURES = False
 # Optional training-only meta features emitted by build_30s_from_5s_csv.py producer baselines.
 # Keep disabled by default so production Java shape remains unchanged unless explicitly enabled.
 USE_META_PRODUCER_FEATURES = os.getenv('USE_META_PRODUCER_FEATURES', '0').strip().lower() not in ('0', 'false', 'no', 'off')
+USE_DATABENTO_SILVER_FEATURES = os.getenv('USE_DATABENTO_SILVER_FEATURES', '0').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_NEWS_BAR_FEATURES = os.getenv('USE_NEWS_BAR_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_REGIME_PROB_FEATURES = os.getenv('USE_REGIME_PROB_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 TRAIN_LEGACY_30S_EXIT_MODELS = os.getenv('TRAIN_LEGACY_30S_EXIT_MODELS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
@@ -130,6 +131,49 @@ REGIME_PROB_FEATURE_COLS = [
     'f_regime_prob_trend',
     'f_regime_prob_volatile',
     'f_regime_prob_entropy',
+]
+
+DATABENTO_SILVER_FEATURE_SCHEMA_VERSION = 'databento_silver_30s_opt_in_v1'
+
+# Conservative, causal 30-second Databento silver subset.  Audit/source-routing
+# fields such as SilverRows, JoinCoverage, and SourceMaxLagSec intentionally stay
+# out of the active model schema; they remain QA columns in the enriched CSV.
+DATABENTO_SILVER_FEATURE_COLS = [
+    'EqMbp1SpreadBpsMean30s',
+    'EqMbp1SpreadBpsLast30s',
+    'EqMbp1RawSpreadMinBps30s',
+    'EqMbp1RawSpreadMaxBps30s',
+    'EqMbp1L1ImbalanceMean30s',
+    'EqMbp1L1ImbalanceLast30s',
+    'EqMbp1QuoteUpdateCount30s',
+    'EqMbp1EventCount30s',
+    'EqMbp1QuoteUpdateCoverage30s',
+    'EqMbp1QuoteStateValidCoverage30s',
+    'EqMbp1ValidSpreadCoverage30s',
+    'EqMbp1LockedCrossedCoverage30s',
+    'EqMbp1QuoteAgeMsMean30s',
+    'EqMbp1QuoteAgeMsMax30s',
+    'OpraTcbboCallTradeCount30s',
+    'OpraTcbboPutTradeCount30s',
+    'OpraTcbboTotalTradeCount30s',
+    'OpraTcbboCallContractVolume30s',
+    'OpraTcbboPutContractVolume30s',
+    'OpraTcbboTotalContractVolume30s',
+    'OpraTcbboCallPremiumNotional30s',
+    'OpraTcbboPutPremiumNotional30s',
+    'OpraTcbboTotalPremiumNotional30s',
+    'OpraTcbboAnyActiveCoverage30s',
+    'OpraTcbboCallAvgSpreadBpsMean30s',
+    'OpraTcbboPutAvgSpreadBpsMean30s',
+    'OpraTcbboCallMedianSpreadBpsMean30s',
+    'OpraTcbboPutMedianSpreadBpsMean30s',
+    'OpraTcbboCallAtBidVolume30s',
+    'OpraTcbboPutAtBidVolume30s',
+    'OpraTcbboCallAtAskVolume30s',
+    'OpraTcbboPutAtAskVolume30s',
+    'OpraTcbboCallMinusPutVolume30s',
+    'OpraTcbboOptionVolumeImbalance30s',
+    'OpraTcbboPutCallVolumeRatio30s',
 ]
 
 NEWS_BAR_FEATURE_COLS = [
@@ -1953,7 +1997,17 @@ def ensure_optional_numeric_columns(df, columns, default_value=0.0):
     for col in columns:
         if col not in out.columns:
             out[col] = default_value
-        out[col] = pd.to_numeric(out[col], errors='coerce').fillna(default_value)
+        out[col] = pd.to_numeric(out[col], errors='coerce').replace([np.inf, -np.inf], np.nan).fillna(default_value)
+    return out
+
+
+def append_unique_feature_columns(feature_cols, optional_cols):
+    out = list(feature_cols)
+    seen = set(out)
+    for col in optional_cols:
+        if col not in seen:
+            out.append(col)
+            seen.add(col)
     return out
 
 
@@ -2091,6 +2145,18 @@ def main():
         print(
             ">>> Meta producer feature block enabled "
             f"(+{len(META_PRODUCER_FEATURE_COLS)} columns, training-only schema extension)."
+        )
+
+    if USE_DATABENTO_SILVER_FEATURES:
+        # Research-only opt-in: accept causal Databento silver columns from enriched 30s CSVs.
+        # Missing columns default to zero so baseline-vs-enriched comparisons can run with the
+        # same schema; enriched rows with undefined causal aggregates also stay row-preserving.
+        df = ensure_optional_numeric_columns(df, DATABENTO_SILVER_FEATURE_COLS, default_value=0.0)
+        df_rest = ensure_optional_numeric_columns(df_rest, DATABENTO_SILVER_FEATURE_COLS, default_value=0.0)
+        feature_cols = append_unique_feature_columns(feature_cols, DATABENTO_SILVER_FEATURE_COLS)
+        print(
+            ">>> Databento silver feature block enabled "
+            f"(+{len(DATABENTO_SILVER_FEATURE_COLS)} columns, {DATABENTO_SILVER_FEATURE_SCHEMA_VERSION}, research-only opt-in)."
         )
 
     regime_feature_cols = build_regime_feature_subset(df_rest, feature_cols)
@@ -2421,6 +2487,16 @@ def main():
         'feature_columns': feature_cols,
         'feature_count': len(feature_cols),
         'feature_schema_sha256': fschema_hash,
+        'feature_blocks': {
+            'base_feature_count': base_feature_count,
+            'extended_features_enabled': bool(USE_EXTENDED_FEATURES),
+            'news_bar_features_enabled': bool(USE_NEWS_BAR_FEATURES),
+            'meta_producer_features_enabled': bool(USE_META_PRODUCER_FEATURES),
+            'databento_silver_features_enabled': bool(USE_DATABENTO_SILVER_FEATURES),
+            'databento_silver_feature_schema_version': DATABENTO_SILVER_FEATURE_SCHEMA_VERSION,
+            'databento_silver_feature_count': len(DATABENTO_SILVER_FEATURE_COLS) if USE_DATABENTO_SILVER_FEATURES else 0,
+            'regime_probability_features_enabled': bool(USE_REGIME_PROB_FEATURES),
+        },
         'model_family': _normalize_model_family(MODEL_FAMILY),
         'label_info': {
             'type': 'binary_expected_net_r_after_costs' if COST_AWARE_LABELS else 'binary_tp_before_sl',
