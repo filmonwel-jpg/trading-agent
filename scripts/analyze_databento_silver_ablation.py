@@ -18,6 +18,16 @@ import pandas as pd
 
 
 DEFAULT_PRESETS = ("all", "equs", "opra", "liquidity", "options_flow")
+KNOWN_PRESETS = (
+    "all",
+    "equs",
+    "opra",
+    "liquidity",
+    "equs_liquidity",
+    "opra_liquidity",
+    "equs_activity",
+    "options_flow",
+)
 ENTRY_FILENAMES = ("long_entry.onnx", "short_entry.onnx")
 SILVER_SCHEMA_VERSION = "databento_silver_30s_opt_in_v1"
 EXPECTED_SILVER_FEATURE_COUNTS = {
@@ -25,6 +35,9 @@ EXPECTED_SILVER_FEATURE_COUNTS = {
     "equs": 14,
     "opra": 21,
     "liquidity": 17,
+    "equs_liquidity": 12,
+    "opra_liquidity": 5,
+    "equs_activity": 2,
     "options_flow": 16,
 }
 REQUIRED_ARTIFACTS = (
@@ -521,8 +534,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--preset",
         action="append",
-        choices=DEFAULT_PRESETS,
-        help="Preset to include; may be repeated. Defaults to all known presets.",
+        choices=KNOWN_PRESETS,
+        help="Preset to include; may be repeated. Defaults to the original five-preset ablation set.",
     )
     parser.add_argument("--output-dir", type=Path, help="Where to write comparison CSV/JSON; defaults to ablation root")
     parser.add_argument("--no-write", action="store_true", help="Print only; do not write comparison artifacts")

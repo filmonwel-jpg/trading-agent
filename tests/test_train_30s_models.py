@@ -324,7 +324,9 @@ class TestMainArtifacts(unittest.TestCase):
         self.assertFalse(t30.USE_DATABENTO_SILVER_FEATURES)
 
     def test_databento_silver_feature_presets_resolve_expected_subsets(self):
-        expected_presets = {"all", "equs", "opra", "liquidity", "options_flow"}
+        expected_presets = {
+            "all", "equs", "opra", "liquidity", "equs_liquidity", "opra_liquidity", "equs_activity", "options_flow"
+        }
         self.assertEqual(set(t30.DATABENTO_SILVER_FEATURE_PRESETS), expected_presets)
 
         all_cols, preset = t30.resolve_databento_silver_feature_columns("all")
@@ -342,17 +344,28 @@ class TestMainArtifacts(unittest.TestCase):
         self.assertTrue(all(col.startswith("OpraTcbbo") for col in opra_cols))
         self.assertFalse(set(equs_cols) & set(opra_cols))
 
-        for preset_name in ["liquidity", "options_flow"]:
+        for preset_name in ["liquidity", "equs_liquidity", "opra_liquidity", "equs_activity", "options_flow"]:
             cols, resolved = t30.resolve_databento_silver_feature_columns(preset_name)
             self.assertEqual(resolved, preset_name)
             self.assertGreater(len(cols), 0)
             self.assertEqual(len(cols), len(set(cols)))
             self.assertTrue(set(cols).issubset(set(t30.DATABENTO_SILVER_FEATURE_COLS)))
 
+        self.assertEqual(
+            t30.DATABENTO_SILVER_EQUS_LIQUIDITY_FEATURE_COLS + t30.DATABENTO_SILVER_OPRA_LIQUIDITY_FEATURE_COLS,
+            t30.DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS,
+        )
+        self.assertTrue(all(col.startswith("EqMbp1") for col in t30.DATABENTO_SILVER_EQUS_LIQUIDITY_FEATURE_COLS))
+        self.assertTrue(all(col.startswith("OpraTcbbo") for col in t30.DATABENTO_SILVER_OPRA_LIQUIDITY_FEATURE_COLS))
+        self.assertFalse(set(t30.DATABENTO_SILVER_EQUS_ACTIVITY_FEATURE_COLS) & set(t30.DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS))
+
     def test_databento_silver_feature_preset_aliases_and_invalid_values(self):
         self.assertEqual(t30.resolve_databento_silver_feature_columns("options")[1], "options_flow")
         self.assertEqual(t30.resolve_databento_silver_feature_columns("spread-liquidity")[1], "liquidity")
         self.assertEqual(t30.resolve_databento_silver_feature_columns("equity")[1], "equs")
+        self.assertEqual(t30.resolve_databento_silver_feature_columns("equs-l1")[1], "equs_liquidity")
+        self.assertEqual(t30.resolve_databento_silver_feature_columns("opra_spreads")[1], "opra_liquidity")
+        self.assertEqual(t30.resolve_databento_silver_feature_columns("quote_activity")[1], "equs_activity")
         with self.assertRaisesRegex(ValueError, "Unsupported DATABENTO_SILVER_FEATURE_SET"):
             t30.resolve_databento_silver_feature_columns("not_a_real_preset")
 

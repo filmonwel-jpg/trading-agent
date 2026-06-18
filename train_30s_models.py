@@ -205,6 +205,19 @@ DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS = [
     'OpraTcbboPutMedianSpreadBpsMean30s',
 ]
 
+DATABENTO_SILVER_EQUS_LIQUIDITY_FEATURE_COLS = [
+    col for col in DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS if col.startswith('EqMbp1')
+]
+
+DATABENTO_SILVER_OPRA_LIQUIDITY_FEATURE_COLS = [
+    col for col in DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS if col.startswith('OpraTcbbo')
+]
+
+DATABENTO_SILVER_EQUS_ACTIVITY_FEATURE_COLS = [
+    'EqMbp1QuoteUpdateCount30s',
+    'EqMbp1EventCount30s',
+]
+
 DATABENTO_SILVER_OPTIONS_FLOW_FEATURE_COLS = [
     'OpraTcbboCallTradeCount30s',
     'OpraTcbboPutTradeCount30s',
@@ -229,6 +242,9 @@ DATABENTO_SILVER_FEATURE_PRESETS = {
     'equs': DATABENTO_SILVER_EQUS_FEATURE_COLS,
     'opra': DATABENTO_SILVER_OPRA_FEATURE_COLS,
     'liquidity': DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS,
+    'equs_liquidity': DATABENTO_SILVER_EQUS_LIQUIDITY_FEATURE_COLS,
+    'opra_liquidity': DATABENTO_SILVER_OPRA_LIQUIDITY_FEATURE_COLS,
+    'equs_activity': DATABENTO_SILVER_EQUS_ACTIVITY_FEATURE_COLS,
     'options_flow': DATABENTO_SILVER_OPTIONS_FLOW_FEATURE_COLS,
 }
 
@@ -236,6 +252,16 @@ DATABENTO_SILVER_FEATURE_SET_ALIASES = {
     'eq': 'equs',
     'equity': 'equs',
     'equs_mbp1': 'equs',
+    'eq_liquidity': 'equs_liquidity',
+    'equity_liquidity': 'equs_liquidity',
+    'equs-l1': 'equs_liquidity',
+    'equs_l1': 'equs_liquidity',
+    'opra_spread': 'opra_liquidity',
+    'opra_spreads': 'opra_liquidity',
+    'options_liquidity': 'opra_liquidity',
+    'eq_activity': 'equs_activity',
+    'equs_counts': 'equs_activity',
+    'quote_activity': 'equs_activity',
     'options': 'options_flow',
     'option_flow': 'options_flow',
     'options-flow': 'options_flow',

@@ -184,6 +184,9 @@ Supported ablation presets are:
 - `equs` — equity L1 spread/imbalance/liquidity features only
 - `opra` — OPRA options context features only
 - `liquidity` — spread, coverage, quote-age, and liquidity-state features
+- `equs_liquidity` — EQUS L1 spread/imbalance/coverage/quote-age liquidity features only
+- `opra_liquidity` — OPRA active-coverage and option spread-context liquidity features only
+- `equs_activity` — EQUS quote update/event count features only
 - `options_flow` — OPRA trade count, volume, premium, at-bid/at-ask, and put/call flow features
 
 To run all ablations into separate no-ONNX directories:
@@ -206,6 +209,28 @@ for preset in all equs opra liquidity options_flow; do
 done
 ```
 
+If the first pass points to `liquidity`, run the fine split to isolate whether
+the lift comes from EQUS L1 liquidity, OPRA spread/liquidity context, or EQUS
+quote activity:
+
+```zsh
+export RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
+export ABLATION_ROOT="$ENRICHED_30S_ROOT/training_runs/setup_silver_liquidity_split_no_onnx_$RUN_STAMP"
+mkdir -p "$ABLATION_ROOT"
+
+for preset in liquidity equs_liquidity opra_liquidity equs_activity equs; do
+  export DATABENTO_SILVER_FEATURE_SET="$preset"
+  export RUN_ROOT="$ABLATION_ROOT/$preset"
+  mkdir -p "$RUN_ROOT"
+
+  python3 train_30s_models.py \
+    --input-csv "$ENRICHED_30S_ROOT/combined/combined_30s.csv" \
+    --output-dir "$RUN_ROOT" \
+    --no-onnx \
+    2>&1 | tee "$RUN_ROOT/train_30s_no_onnx.log"
+done
+```
+
 After the loop completes, compare the preset artifacts against a strict baseline
 no-ONNX run. The helper validates required artifacts, checks that no ONNX files
 were written, verifies row/schema consistency, summarizes fold-level precision
@@ -216,6 +241,19 @@ comparison CSV/JSON under `$ABLATION_ROOT`:
 python3 scripts/analyze_databento_silver_ablation.py \
   --baseline-dir "$BASELINE_RUN_ROOT" \
   --ablation-root "$ABLATION_ROOT"
+```
+
+For a fine-split root, pass the exact preset list:
+
+```zsh
+python3 scripts/analyze_databento_silver_ablation.py \
+  --baseline-dir "$BASELINE_RUN_ROOT" \
+  --ablation-root "$ABLATION_ROOT" \
+  --preset liquidity \
+  --preset equs_liquidity \
+  --preset opra_liquidity \
+  --preset equs_activity \
+  --preset equs
 ```
 
 This is not a production promotion gate. Promotion still requires calibration,
