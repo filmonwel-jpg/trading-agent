@@ -72,6 +72,12 @@ def _int(raw: object, default: int = 0) -> int:
         return default
 
 
+def non_empty_path_arg(raw: str) -> Path:
+    if not str(raw or "").strip():
+        raise argparse.ArgumentTypeError("path argument must not be empty; check the corresponding shell variable")
+    return Path(raw).expanduser()
+
+
 def parse_path_prefix_map(raw: str) -> tuple[Path, Path]:
     if "=" not in raw:
         raise argparse.ArgumentTypeError("--path-prefix-map must be OLD_PREFIX=NEW_PREFIX")
@@ -123,6 +129,41 @@ def verify(
     pilot_manifest_path = pilot_dir / "manifest.json"
     pilot_dates_path = pilot_dir / "pilot_dates.csv"
     pilot_source_files_path = pilot_dir / "pilot_source_files.csv"
+
+    required_inputs = [
+        ("hash manifest", hash_manifest_path),
+        ("DBN audit manifest", audit_manifest_path),
+        ("pilot manifest", pilot_manifest_path),
+        ("pilot dates", pilot_dates_path),
+        ("pilot source files", pilot_source_files_path),
+    ]
+    missing_inputs = [f"missing required input {label}: {path}" for label, path in required_inputs if not path.exists()]
+    if missing_inputs:
+        manifest = {
+            "generated_at_utc": utc_now(),
+            "lake_root": str(lake_root),
+            "hash_dir": str(hash_dir),
+            "audit_dir": str(audit_dir),
+            "pilot_dir": str(pilot_dir),
+            "path_prefix_maps": [(str(old), str(new)) for old, new in (path_prefix_maps or [])],
+            "selected_dates": [],
+            "selected_file_count": 0,
+            "expected_file_count": expected_days * len(expected_sources),
+            "source_counts": {},
+            "date_counts": {},
+            "total_compressed_gib": 0.0,
+            "errors": missing_inputs,
+            "warnings": [
+                "If a required directory resolved to the repository root, one of HASH_DIR, AUDIT_SUMMARY_DIR, or PILOT_DIR was probably empty."
+            ],
+        }
+        (output_dir / "prebuild_manifest_check.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_csv(output_dir / "prebuild_manifest_check_files.csv", [])
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        print(f"wrote {output_dir / 'prebuild_manifest_check.json'}")
+        print(f"wrote {output_dir / 'prebuild_manifest_check_files.csv'}")
+        print("PREBUILD_CHECK=FAIL")
+        return 2
 
     hash_manifest = read_json(hash_manifest_path)
     audit_manifest = read_json(audit_manifest_path)
@@ -241,11 +282,11 @@ def verify(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--lake-root", required=True, type=Path, help="External data_lake_v2 root.")
-    parser.add_argument("--hash-dir", type=Path, help="source_inventory_hashes_* directory. Defaults to latest.")
-    parser.add_argument("--audit-summary-dir", type=Path, help="dbn_audit_summary_recent_old_* directory. Defaults to latest.")
-    parser.add_argument("--pilot-dates-dir", type=Path, help="pilot_dates_latest10_* directory. Defaults to latest.")
-    parser.add_argument("--output-dir", required=True, type=Path, help="Directory for prebuild check outputs.")
+    parser.add_argument("--lake-root", required=True, type=non_empty_path_arg, help="External data_lake_v2 root.")
+    parser.add_argument("--hash-dir", type=non_empty_path_arg, help="source_inventory_hashes_* directory. Defaults to latest.")
+    parser.add_argument("--audit-summary-dir", type=non_empty_path_arg, help="dbn_audit_summary_recent_old_* directory. Defaults to latest.")
+    parser.add_argument("--pilot-dates-dir", type=non_empty_path_arg, help="pilot_dates_latest10_* directory. Defaults to latest.")
+    parser.add_argument("--output-dir", required=True, type=non_empty_path_arg, help="Directory for prebuild check outputs.")
     parser.add_argument("--expected-days", type=int, default=10, help="Expected number of pilot dates.")
     parser.add_argument("--expected-source", action="append", help="Expected source label. Repeatable. Defaults to the six pilot sources.")
     parser.add_argument(

@@ -37,6 +37,21 @@ class VerifyDatabentoPilotPrebuildTest(unittest.TestCase):
             ],
         )
 
+    def test_empty_hash_dir_argument_fails_before_repo_manifest_lookup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lake = Path(temp_dir) / "data_lake_v2"
+            out = lake / "raw_audits" / "prebuild_test"
+            with self.assertRaises(SystemExit) as raised:
+                verifier.main([
+                    "--lake-root",
+                    str(lake),
+                    "--hash-dir",
+                    "",
+                    "--output-dir",
+                    str(out),
+                ])
+            self.assertEqual(raised.exception.code, 2)
+
     def make_lake(self, root: Path) -> tuple[Path, Path, Path, Path]:
         lake = root / "data_lake_v2"
         hash_dir = lake / "source_manifests" / "source_inventory_hashes_test"
@@ -135,6 +150,27 @@ class VerifyDatabentoPilotPrebuildTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             manifest = json.loads((output_dir / "prebuild_manifest_check.json").read_text(encoding="utf-8"))
             self.assertTrue(any("missing source file" in error for error in manifest["errors"]))
+
+    def test_verify_reports_missing_manifest_inputs_without_traceback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            lake = root / "data_lake_v2"
+            output_dir = lake / "raw_audits" / "prebuild_test"
+
+            rc = verifier.verify(
+                lake_root=lake,
+                hash_dir=root / "missing_hash_dir",
+                audit_dir=root / "missing_audit_dir",
+                pilot_dir=root / "missing_pilot_dir",
+                output_dir=output_dir,
+                expected_sources=["a", "b"],
+                expected_days=2,
+            )
+
+            self.assertEqual(rc, 2)
+            manifest = json.loads((output_dir / "prebuild_manifest_check.json").read_text(encoding="utf-8"))
+            self.assertTrue(any("missing required input hash manifest" in error for error in manifest["errors"]))
+            self.assertTrue(any("HASH_DIR" in warning for warning in manifest["warnings"]))
 
     def test_verify_accepts_path_prefix_map(self):
         with tempfile.TemporaryDirectory() as temp_dir:

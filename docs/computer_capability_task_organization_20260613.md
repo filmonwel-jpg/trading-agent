@@ -1393,6 +1393,13 @@ Action follow-up on 2026-06-17 — first 48GB six-source prebuild check failed c
 - Code hardening after this failure: `scripts/verify_databento_pilot_prebuild.py` supports `--path-prefix-map OLD_PREFIX=NEW_PREFIX` and records both `path` and `checked_path` in `prebuild_manifest_check_files.csv`. This is useful for validating legacy manifests against moved raw roots, but the preferred fix for Phase 1 is to regenerate source inventory and pilot-date manifests from the current `Downloads` raw root.
 - Validation after this hardening: `python3 -m py_compile scripts/verify_databento_pilot_prebuild.py tests/test_verify_databento_pilot_prebuild.py` and `python3 -m unittest discover -s tests -p 'test_verify_databento_pilot_prebuild.py' -v` passed with `4` focused tests.
 
+Action follow-up on 2026-06-17 — second 48GB prebuild verifier attempt failed because required shell variables were empty:
+
+- Observed traceback ended with `FileNotFoundError: [Errno 2] No such file or directory: '/Users/filmonghezehey/trading-agent/worktrees/databento/manifest.json'`.
+- Root cause: one or more of `HASH_DIR`, `AUDIT_SUMMARY_DIR`, or `PILOT_DIR` expanded to an empty string in the verifier command. Python `Path("").resolve()` resolved that empty path to the current worktree, so the verifier tried to read `manifest.json` from the repository root.
+- Code hardening after this failure: `scripts/verify_databento_pilot_prebuild.py` now rejects empty path arguments with `path argument must not be empty; check the corresponding shell variable`, and it preflights required manifest/CSV inputs before reading them. Missing inputs now produce a structured `PREBUILD_CHECK=FAIL` report instead of a traceback.
+- Validation after this hardening: `python3 -m py_compile scripts/verify_databento_pilot_prebuild.py tests/test_verify_databento_pilot_prebuild.py`, `python3 -m unittest discover -s tests -p 'test_verify_databento_pilot_prebuild.py' -v`, and `git diff --check` passed with `6` focused tests.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
