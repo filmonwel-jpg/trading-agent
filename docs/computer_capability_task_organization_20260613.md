@@ -1400,6 +1400,30 @@ Action follow-up on 2026-06-17 — second 48GB prebuild verifier attempt failed 
 - Code hardening after this failure: `scripts/verify_databento_pilot_prebuild.py` now rejects empty path arguments with `path argument must not be empty; check the corresponding shell variable`, and it preflights required manifest/CSV inputs before reading them. Missing inputs now produce a structured `PREBUILD_CHECK=FAIL` report instead of a traceback.
 - Validation after this hardening: `python3 -m py_compile scripts/verify_databento_pilot_prebuild.py tests/test_verify_databento_pilot_prebuild.py`, `python3 -m unittest discover -s tests -p 'test_verify_databento_pilot_prebuild.py' -v`, and `git diff --check` passed with `6` focused tests.
 
+Action done on 2026-06-17 — six-source `Downloads`-root manifest/audit/prebuild validation passed on the 48GB Mac:
+
+- Source inventory: `source_manifests/source_inventory_hashes_six_source_downloads_20260617_183630`.
+  - Wrote `source_inventory.csv`, `source_files.csv`, `paired_dates.csv`, and `manifest.json`.
+  - Warning was expected/informational: `1 dates are not present in every source` (the known unpaired `20260403` from `EQUS mbp-1`).
+- Six-source pilot manifest: `source_manifests/pilot_dates_latest10_six_source_downloads_20260617_183703`.
+  - Selected dates: `2026-05-11`, `2026-05-12`, `2026-05-13`, `2026-05-14`, `2026-05-15`, `2026-05-18`, `2026-05-19`, `2026-05-20`, `2026-05-21`, `2026-05-22`.
+  - Selected files: `60` (`10` dates × `6` sources).
+  - Total compressed size for the selected 10-day pilot: `4.508 GiB`.
+- Representative DBN audits passed for both recent and older dates:
+  - Recent audit dir: `raw_audits/dbn_day_audit_six_source_20260521_20260617_183703`.
+  - Older audit dir: `raw_audits/dbn_day_audit_six_source_20250721_20260617_183753`.
+  - Audit summary dir: `raw_audits/dbn_audit_summary_six_source_recent_old_20260617_183824`.
+  - Summary: `error_count=0`, `warning_count=0`, `row_count=12`, `total_file_gib=0.769`, `total_dataframe_gib=4.304`, `max_dataframe_mib=1836.107`, `max_memory_expansion_ratio=10.613`, `max_row_count=18080585`.
+  - Largest decoded source was `equs_mbp1_20260612` on `20260521`: `18,080,585` rows, `305.5 MiB` compressed, `1836.1 MiB` dataframe, memory expansion ratio `6.01`, decode time `15.93s`.
+  - Largest definition decode was `opra_definition_20260612` on `20260521`: `244,570` rows, `11.7 MiB` compressed, `95.6 MiB` dataframe, decode time `21.66s`.
+- Final prebuild verifier output: `raw_audits/prebuild_six_source_check_20260617_183825`.
+  - `expected_file_count=60`.
+  - `selected_file_count=60`.
+  - Date counts were `6` for every selected date.
+  - Source counts were `10` each for `equs_tbbo_20260523`, `opra_ohlcv1s_20260523`, `equs_definition_20260612`, `equs_mbp1_20260612`, `opra_tcbbo_20260612`, and `opra_definition_20260612`.
+  - `errors=[]`, `warnings=[]`, `PREBUILD_CHECK=PASS`.
+- Stop/go decision: **GO for Phase 1 normalizer implementation**. The six-source pilot inputs are now manifest-clean and decode-clean for representative dates. Next work should implement silver normalizers/readers for `EQUS mbp-1`, `OPRA tcbbo`, and the definition feeds, then build a 10-day enriched pilot before any full-window enriched training.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
