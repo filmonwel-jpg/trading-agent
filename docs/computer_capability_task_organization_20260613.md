@@ -1518,6 +1518,23 @@ Action done on 2026-06-18 — Databento silver ablation readout passed QA, but r
 - Research readout: `best_long_precision_delta_preset=liquidity`, `best_short_precision_delta_preset=all`, `balanced_positive_precision_candidates=[liquidity, equs]`.
 - Gate result: `DATABENTO_SILVER_ABLATION_QA=PASS`; promotion decision remains **NO-GO** pending stable fold thresholds, sufficient trade counts, and further frozen-holdout/paper checks.
 
+Action done on 2026-06-18 — Databento silver liquidity fine split passed QA, but still remains **NO-GO for production promotion**:
+
+- Fine-split root: `pilot_10d_six_source_enriched_30s_20260617_220849/training_runs/setup_silver_liquidity_split_no_onnx_20260618_154554`.
+- `RUN_QA` passed for baseline plus all fine-split presets: `liquidity`, `equs_liquidity`, `opra_liquidity`, `equs_activity`, and `equs` all had `training_rows=35685`, `paired_oof_rows=18000`, and expected selected silver feature counts.
+- Entry precision deltas versus baseline:
+  - `liquidity`: long `+0.032829`, short `+0.055765` — best balanced positive candidate.
+  - `equs`: long `+0.009856`, short `+0.060459` — best short lift in the fine split, but weaker balanced lift than `liquidity`.
+  - `equs_liquidity`: long `+0.006873`, short `+0.045607` — positive balanced lift, but smaller than `liquidity` and `equs`.
+  - `opra_liquidity`: long `-0.017201`, short `+0.012163` — rejected because long degraded.
+  - `equs_activity`: long `-0.005499`, short `-0.045151` — rejected because both sides did not improve.
+- Fold-stability caveats remain the blocker:
+  - Every fine-split short-entry preset still had at least one zero-prediction fold.
+  - `equs_liquidity` worsened short-entry sparsity (`zero_pred_folds=2`, `thin_pred_folds=3`).
+  - `liquidity` kept the strongest balanced lift, but still had short-entry `zero_pred_folds=1` and `thin_pred_folds=2`.
+- Research readout: `best_long_precision_delta_preset=liquidity`, `best_short_precision_delta_preset=equs`, `balanced_positive_precision_candidates=[liquidity, equs, equs_liquidity]`.
+- Gate result: `DATABENTO_SILVER_ABLATION_QA=PASS`; production promotion remains **NO-GO**. Next research step should target threshold/fold-stability diagnostics before any ONNX export, frozen-holdout claim, paper/shadow run, or live feature promotion.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
