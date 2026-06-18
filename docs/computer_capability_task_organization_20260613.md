@@ -1424,6 +1424,29 @@ Action done on 2026-06-17 — six-source `Downloads`-root manifest/audit/prebuil
   - `errors=[]`, `warnings=[]`, `PREBUILD_CHECK=PASS`.
 - Stop/go decision: **GO for Phase 1 normalizer implementation**. The six-source pilot inputs are now manifest-clean and decode-clean for representative dates. Next work should implement silver normalizers/readers for `EQUS mbp-1`, `OPRA tcbbo`, and the definition feeds, then build a 10-day enriched pilot before any full-window enriched training.
 
+Action done on 2026-06-17 — Phase 1 silver normalizer scaffolding implemented on this computer:
+
+- Added shared utilities: `scripts/databento_silver_utils.py`.
+- Added `EQUS mbp-1` quote-state normalizer: `scripts/normalize_equs_mbp1.py`.
+  - Reads `pilot_source_files.csv`, filters `equs_mbp1_20260612`, decodes one DBN day at a time, and writes per-date/per-symbol full-RTH 1-second silver CSVs.
+  - Output feature block includes top-of-book bid/ask/size/count, midpoint, microprice, spread bps, L1 imbalance, quote update count, quote coverage, valid-spread coverage, locked/crossed seconds, and quote age.
+- Added definition reader/normalizer: `scripts/normalize_databento_definitions.py`.
+  - Handles both `equs_definition_20260612` and `opra_definition_20260612`.
+  - Extracts canonical metadata: instrument id, symbol/raw symbol, asset class, underlying, right, expiration, strike, multiplier, and definition timestamp.
+- Added `OPRA tcbbo` normalizer: `scripts/normalize_opra_tcbbo.py`.
+  - Reads `opra_tcbbo_20260612`, optionally joins normalized definition CSVs, and writes per-date/per-underlying 1-second call/put option flow/liquidity CSVs.
+  - Output feature block includes call/put trade count, contract volume, premium notional, quote-context count, active contracts, spread bps summaries, at-bid/at-ask volume, total option flow, call-minus-put volume, option volume imbalance, and put/call volume ratio.
+- Added runbook: `scripts/README_databento_silver_normalizers.md`.
+- Added synthetic regression tests: `tests/test_databento_silver_normalizers.py`.
+- Validation on this computer:
+  - `python3 -m py_compile scripts/databento_silver_utils.py scripts/normalize_equs_mbp1.py scripts/normalize_databento_definitions.py scripts/normalize_opra_tcbbo.py tests/test_databento_silver_normalizers.py` ✓
+  - `python3 -m unittest discover -s tests -p 'test_databento_silver_normalizers.py' -v` → `5` tests OK ✓
+- Important implementation notes:
+  - `EQUS mbp-1` is safe from future leakage: quote state is forward-filled only after the first observed quote; pre-first-quote seconds remain missing with `QuoteAgeMs=999999`.
+  - `OPRA tcbbo` uses `QuoteContext` naming rather than `QuoteUpdate`, because `tcbbo` rows are trade rows with CBBO context, not a complete option quote-update stream.
+  - `BarEpochSec` is calculated via explicit UTC timestamp conversion to avoid pandas/numpy timestamp-unit ambiguity.
+- Next 48GB step: run the one-day smoke commands in `scripts/README_databento_silver_normalizers.md` against `PILOT_DIR=$LAKE_ROOT/source_manifests/pilot_dates_latest10_six_source_downloads_20260617_183703`; if all three normalizer manifests have `errors=[]`, run the full 10-day pilot normalization. Do not start enriched setup training until silver-output QA passes.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
