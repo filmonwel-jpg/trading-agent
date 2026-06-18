@@ -49,6 +49,22 @@ SCORECARD_METRICS = (
     "ece",
     "folds_used",
 )
+FOLD_STABILITY_METRICS = (
+    "fold_count",
+    "fold_precision_mean",
+    "fold_precision_min",
+    "fold_precision_max",
+    "fold_precision_std",
+    "pred_pos_rate_mean",
+    "pred_pos_rate_min",
+    "pred_pos_rate_max",
+    "pred_pos_rate_std",
+    "threshold_min",
+    "threshold_max",
+    "zero_pred_folds",
+    "thin_pred_folds",
+)
+THIN_PRED_POS_RATE = 0.005
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -133,6 +149,68 @@ def _read_oof_counts(path: Path, errors: list[str]) -> dict[str, int]:
     else:
         _append_issue(errors, f"OOF predictions missing is_oof_setup_prediction column: {path}")
     return {"total_rows": int(len(frame)), "paired_oof_rows": paired}
+
+
+def _numeric_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce").dropna()
+
+
+def _series_stat(series: pd.Series, stat: str) -> float:
+    if len(series) == 0:
+        return math.nan
+    if stat == "mean":
+        return float(series.mean())
+    if stat == "min":
+        return float(series.min())
+    if stat == "max":
+        return float(series.max())
+    if stat == "std":
+        return float(series.std(ddof=0)) if len(series) > 1 else 0.0
+    raise ValueError(f"Unsupported stat={stat!r}")
+
+
+def _read_threshold_stability(path: Path, errors: list[str]) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    try:
+        frame = pd.read_csv(path)
+    except Exception as exc:  # pragma: no cover - defensive path
+        _append_issue(errors, f"failed to read threshold grid {path}: {exc}")
+        return {}
+    required = {"model", "fold_id", "threshold", "test_precision", "pred_pos_rate"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        _append_issue(errors, f"threshold grid missing columns {missing}: {path}")
+        return {}
+
+    stability: dict[str, dict[str, Any]] = {}
+    model_values = frame["model"].astype(str)
+    for filename in ENTRY_FILENAMES:
+        subset = frame[model_values == filename].copy()
+        if subset.empty:
+            _append_issue(errors, f"threshold grid missing entry model rows {filename}: {path}")
+            continue
+        precision = _numeric_column(subset, "test_precision")
+        pred_pos = _numeric_column(subset, "pred_pos_rate")
+        threshold = _numeric_column(subset, "threshold")
+        stability[filename] = {
+            "fold_count": int(len(subset)),
+            "fold_precision_mean": _series_stat(precision, "mean"),
+            "fold_precision_min": _series_stat(precision, "min"),
+            "fold_precision_max": _series_stat(precision, "max"),
+            "fold_precision_std": _series_stat(precision, "std"),
+            "pred_pos_rate_mean": _series_stat(pred_pos, "mean"),
+            "pred_pos_rate_min": _series_stat(pred_pos, "min"),
+            "pred_pos_rate_max": _series_stat(pred_pos, "max"),
+            "pred_pos_rate_std": _series_stat(pred_pos, "std"),
+            "threshold_min": _series_stat(threshold, "min"),
+            "threshold_max": _series_stat(threshold, "max"),
+            "zero_pred_folds": int(pred_pos.le(0.0).sum()),
+            "thin_pred_folds": int(pred_pos.le(THIN_PRED_POS_RATE).sum()),
+        }
+    return stability
 
 
 def _validate_manifest_errors(run_name: str, artifact_name: str, manifest: dict[str, Any], errors: list[str]) -> None:
@@ -226,6 +304,7 @@ def summarize_run(
 
     scorecard = _read_scorecard(run_dir / "setup_scorecard.csv", errors)
     oof_counts = _read_oof_counts(run_dir / "oof_setup_predictions.csv", errors)
+    threshold_stability = _read_threshold_stability(run_dir / "threshold_grid.csv", errors)
     if baseline_oof_counts is not None and oof_counts != baseline_oof_counts:
         _append_issue(errors, f"{run_name} OOF counts={oof_counts}, baseline={baseline_oof_counts}")
 
@@ -243,18 +322,23 @@ def summarize_run(
         "threshold_grid_rows": _csv_row_count(run_dir / "threshold_grid.csv"),
         "oof_counts": oof_counts,
         "scorecard": scorecard,
+        "threshold_stability": threshold_stability,
     }
 
 
 def build_comparison_rows(baseline: dict[str, Any], preset_summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     baseline_scorecard = baseline.get("scorecard") or {}
+    baseline_stability = baseline.get("threshold_stability") or {}
     for summary in preset_summaries:
         preset = summary["run_name"]
         scorecard = summary.get("scorecard") or {}
+        threshold_stability = summary.get("threshold_stability") or {}
         for filename in ENTRY_FILENAMES:
             base = baseline_scorecard.get(filename, {})
             current = scorecard.get(filename, {})
+            base_stability = baseline_stability.get(filename, {})
+            current_stability = threshold_stability.get(filename, {})
             row: dict[str, Any] = {
                 "preset": preset,
                 "filename": filename,
@@ -266,6 +350,12 @@ def build_comparison_rows(baseline: dict[str, Any], preset_summaries: list[dict[
             for metric in SCORECARD_METRICS:
                 baseline_value = _finite_float(base.get(metric), math.nan)
                 current_value = _finite_float(current.get(metric), math.nan)
+                row[f"{metric}_baseline"] = baseline_value
+                row[f"{metric}_current"] = current_value
+                row[f"{metric}_delta"] = current_value - baseline_value if math.isfinite(baseline_value) and math.isfinite(current_value) else math.nan
+            for metric in FOLD_STABILITY_METRICS:
+                baseline_value = _finite_float(base_stability.get(metric), math.nan)
+                current_value = _finite_float(current_stability.get(metric), math.nan)
                 row[f"{metric}_baseline"] = baseline_value
                 row[f"{metric}_current"] = current_value
                 row[f"{metric}_delta"] = current_value - baseline_value if math.isfinite(baseline_value) and math.isfinite(current_value) else math.nan
@@ -393,6 +483,20 @@ def print_report(result: dict[str, Any]) -> None:
     ]
     if not frame.empty:
         print(frame[display_cols].to_string(index=False))
+
+    print("\n== FOLD_STABILITY_COMPARE")
+    stability_cols = [
+        "preset",
+        "filename",
+        "fold_precision_min_current",
+        "fold_precision_std_current",
+        "pred_pos_rate_min_current",
+        "pred_pos_rate_std_current",
+        "zero_pred_folds_current",
+        "thin_pred_folds_current",
+    ]
+    if not frame.empty:
+        print(frame[stability_cols].to_string(index=False))
 
     rec = result["recommendations"]
     print("\n== RESEARCH_READOUT")

@@ -83,7 +83,32 @@ def _write_minimal_run(
             },
         ]
     ).to_csv(run_dir / "setup_scorecard.csv", index=False)
-    pd.DataFrame([{"fold_id": 1}, {"fold_id": 2}]).to_csv(run_dir / "threshold_grid.csv", index=False)
+    threshold_rows = []
+    for model, precision, pred_pos_base in [
+        ("long_entry.onnx", long_precision, 0.10),
+        ("short_entry.onnx", short_precision, 0.03),
+    ]:
+        side = "long" if model == "long_entry.onnx" else "short"
+        for fold_id in range(1, 6):
+            threshold_rows.append(
+                {
+                    "model": model,
+                    "side": side,
+                    "fold_id": fold_id,
+                    "train_days": fold_id,
+                    "test_days": 1,
+                    "train_rows": 20,
+                    "test_rows": 20,
+                    "threshold": 0.60,
+                    "test_precision": max(0.0, precision + (fold_id - 3) * 0.01),
+                    "test_recall": 0.2,
+                    "pred_pos_rate": pred_pos_base if not (model == "short_entry.onnx" and fold_id == 1) else 0.0,
+                    "brier_score": 0.25,
+                    "ece": 0.1,
+                    "calibration_rows": 20,
+                }
+            )
+    pd.DataFrame(threshold_rows).to_csv(run_dir / "threshold_grid.csv", index=False)
     pd.DataFrame({"is_oof_setup_prediction": [1] * paired_rows + [0] * (training_rows - paired_rows)}).to_csv(
         run_dir / "oof_setup_predictions.csv",
         index=False,
@@ -132,6 +157,16 @@ class TestDatabentoSilverAblationAnalysis(unittest.TestCase):
             self.assertEqual(result["recommendations"]["best_long_precision_delta_preset"], "liquidity")
             balanced = result["recommendations"]["balanced_positive_precision_candidates"]
             self.assertEqual([row["preset"] for row in balanced], ["liquidity", "equs"])
+            liquidity_long = next(
+                row for row in result["compare_rows"]
+                if row["preset"] == "liquidity" and row["filename"] == "long_entry.onnx"
+            )
+            self.assertAlmostEqual(liquidity_long["fold_precision_min_current"], 0.456100)
+            all_short = next(
+                row for row in result["compare_rows"]
+                if row["preset"] == "all" and row["filename"] == "short_entry.onnx"
+            )
+            self.assertEqual(all_short["zero_pred_folds_current"], 1)
             self.assertTrue((ablation_root / "databento_silver_ablation_scorecard_compare.csv").is_file())
             self.assertTrue((ablation_root / "databento_silver_ablation_summary.json").is_file())
 
