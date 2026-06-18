@@ -189,9 +189,13 @@ Supported ablation presets are:
 To run all ablations into separate no-ONNX directories:
 
 ```zsh
+export RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
+export ABLATION_ROOT="$ENRICHED_30S_ROOT/training_runs/setup_silver_ablation_no_onnx_$RUN_STAMP"
+mkdir -p "$ABLATION_ROOT"
+
 for preset in all equs opra liquidity options_flow; do
   export DATABENTO_SILVER_FEATURE_SET="$preset"
-  export RUN_ROOT="$ENRICHED_30S_ROOT/training_runs/setup_silver_${preset}_no_onnx_$(date +%Y%m%d_%H%M%S)"
+  export RUN_ROOT="$ABLATION_ROOT/$preset"
   mkdir -p "$RUN_ROOT"
 
   python3 train_30s_models.py \
@@ -200,6 +204,17 @@ for preset in all equs opra liquidity options_flow; do
     --no-onnx \
     2>&1 | tee "$RUN_ROOT/train_30s_no_onnx.log"
 done
+```
+
+After the loop completes, compare the preset artifacts against a strict baseline
+no-ONNX run. The helper validates required artifacts, checks that no ONNX files
+were written, verifies row/schema consistency, and writes a comparison CSV/JSON
+under `$ABLATION_ROOT`:
+
+```zsh
+python3 scripts/analyze_databento_silver_ablation.py \
+  --baseline-dir "$BASELINE_RUN_ROOT" \
+  --ablation-root "$ABLATION_ROOT"
 ```
 
 This is not a production promotion gate. Promotion still requires calibration,
