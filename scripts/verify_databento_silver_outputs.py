@@ -174,6 +174,21 @@ def _max_abs_diff(left: pd.Series, right: pd.Series) -> float:
     return round(float(diff.max()), 9) if len(diff) else 0.0
 
 
+def _max_abs_diff_and_scale(left: pd.Series, right: pd.Series) -> tuple[float, float]:
+    left_values = pd.to_numeric(left, errors="coerce").fillna(0.0)
+    right_values = pd.to_numeric(right, errors="coerce").fillna(0.0)
+    diff = (left_values - right_values).abs()
+    scale = pd.concat([left_values.abs(), right_values.abs()], axis=1).max(axis=1)
+    return (
+        round(float(diff.max()), 9) if len(diff) else 0.0,
+        round(float(scale.max()), 9) if len(scale) else 0.0,
+    )
+
+
+def _within_tolerance(diff: float, scale: float, abs_tolerance: float, rel_tolerance: float) -> bool:
+    return diff <= max(float(abs_tolerance), float(rel_tolerance) * max(1.0, float(scale)))
+
+
 def _append_issue(target: list[str], message: str) -> None:
     if message and message not in target:
         target.append(message)
@@ -406,6 +421,8 @@ def validate_opra_file(
     *,
     expected_rows: int,
     min_active_seconds_frac: float,
+    notional_abs_tolerance: float,
+    notional_rel_tolerance: float,
     strict_quality: bool,
     warnings: list[str],
     errors: list[str],
@@ -440,13 +457,18 @@ def validate_opra_file(
     ]
     if not _all_nonnegative(frame, flow_columns):
         _append_issue(errors, f"OPRA {underlying} {date} has negative flow/count/notional values")
-    checks = {
+    exact_checks = {
         "volume": _max_abs_diff(frame["TotalOptionContractVolume1s"], frame["CallOptionContractVolume1s"] + frame["PutOptionContractVolume1s"]),
-        "notional": _max_abs_diff(frame["TotalOptionPremiumNotional1s"], frame["CallOptionPremiumNotional1s"] + frame["PutOptionPremiumNotional1s"]),
         "trade_count": _max_abs_diff(frame["TotalOptionTradeCount1s"], frame["CallOptionTradeCount1s"] + frame["PutOptionTradeCount1s"]),
         "quote_context": _max_abs_diff(frame["TotalOptionQuoteContextCount1s"], frame["CallOptionQuoteContextCount1s"] + frame["PutOptionQuoteContextCount1s"]),
     }
-    bad_checks = {name: value for name, value in checks.items() if value > 1e-6}
+    notional_diff, notional_scale = _max_abs_diff_and_scale(
+        frame["TotalOptionPremiumNotional1s"],
+        frame["CallOptionPremiumNotional1s"] + frame["PutOptionPremiumNotional1s"],
+    )
+    bad_checks = {name: value for name, value in exact_checks.items() if value > 1e-6}
+    if not _within_tolerance(notional_diff, notional_scale, notional_abs_tolerance, notional_rel_tolerance):
+        bad_checks["notional"] = notional_diff
     if bad_checks:
         _append_issue(errors, f"OPRA {underlying} {date} total consistency failed: {bad_checks}")
     imbalance = pd.to_numeric(frame["OptionVolumeImbalance1s"], errors="coerce").dropna()
@@ -506,6 +528,8 @@ def verify(
     min_equs_valid_spread_coverage: float,
     max_equs_locked_crossed_frac: float,
     min_opra_active_seconds_frac: float,
+    opra_notional_abs_tolerance: float,
+    opra_notional_rel_tolerance: float,
     strict_quality: bool,
     fail_on_warning: bool,
 ) -> int:
@@ -543,6 +567,8 @@ def verify(
                 row,
                 expected_rows=expected_rows_per_grid,
                 min_active_seconds_frac=min_opra_active_seconds_frac,
+                notional_abs_tolerance=opra_notional_abs_tolerance,
+                notional_rel_tolerance=opra_notional_rel_tolerance,
                 strict_quality=strict_quality,
                 warnings=warnings,
                 errors=errors,
@@ -556,6 +582,8 @@ def verify(
         "symbols": symbols,
         "expected_dates": expected_dates,
         "expected_rows_per_grid": expected_rows_per_grid,
+        "opra_notional_abs_tolerance": opra_notional_abs_tolerance,
+        "opra_notional_rel_tolerance": opra_notional_rel_tolerance,
         "strict_quality": strict_quality,
         "fail_on_warning": fail_on_warning,
         "manifest_artifacts": {artifact: manifests.get(artifact, {}) for artifact in EXPECTED_DIRS},
@@ -586,6 +614,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-equs-valid-spread-coverage", type=float, default=0.95, help="Soft EQUS ValidSpread1s coverage threshold.")
     parser.add_argument("--max-equs-locked-crossed-frac", type=float, default=0.02, help="Soft EQUS locked/crossed fraction threshold.")
     parser.add_argument("--min-opra-active-seconds-frac", type=float, default=0.001, help="Soft OPRA active-contract seconds threshold.")
+    parser.add_argument("--opra-notional-abs-tolerance", type=float, default=1.0, help="Absolute dollar tolerance for OPRA premium-notional total consistency. Allows harmless CSV/float residuals.")
+    parser.add_argument("--opra-notional-rel-tolerance", type=float, default=1e-9, help="Relative tolerance for OPRA premium-notional total consistency.")
     parser.add_argument("--strict-quality", action="store_true", help="Treat soft quality-threshold breaches as errors.")
     parser.add_argument("--fail-on-warning", action="store_true", help="Return non-zero if any warnings are emitted.")
     return parser
@@ -610,6 +640,8 @@ def main(argv: list[str] | None = None) -> int:
         min_equs_valid_spread_coverage=float(args.min_equs_valid_spread_coverage),
         max_equs_locked_crossed_frac=float(args.max_equs_locked_crossed_frac),
         min_opra_active_seconds_frac=float(args.min_opra_active_seconds_frac),
+        opra_notional_abs_tolerance=float(args.opra_notional_abs_tolerance),
+        opra_notional_rel_tolerance=float(args.opra_notional_rel_tolerance),
         strict_quality=bool(args.strict_quality),
         fail_on_warning=bool(args.fail_on_warning),
     )

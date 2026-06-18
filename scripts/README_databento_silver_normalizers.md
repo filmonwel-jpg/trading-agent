@@ -106,3 +106,9 @@ The verifier writes:
 
 Proceed to enriched feature-building only if the command prints `SILVER_QUALITY_CHECK=PASS`. Warnings should still be reviewed even when they are not fatal.
 
+Note: OPRA premium-notional consistency uses a small dollar/relative tolerance
+(`--opra-notional-abs-tolerance`, default `$1.00`, and
+`--opra-notional-rel-tolerance`, default `1e-9`) because large floating-point
+notional sums can round-trip through CSV with sub-dollar residuals. Contract
+volume, trade-count, and quote-context totals remain strict.
+

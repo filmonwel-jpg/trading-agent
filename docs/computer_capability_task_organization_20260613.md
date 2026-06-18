@@ -1475,6 +1475,15 @@ Action done on 2026-06-17 — 48GB Mac full 10-day Phase 1 silver normalization 
   - The verifier checks manifests, summaries, output file existence, required columns, full-session row counts, key/date consistency, monotonic/non-duplicate `BarEpochSec`, definition metadata coverage, EQUS quote-state/locked-crossed coverage, and OPRA call/put total consistency.
 - Stop/go decision: **GO for silver-output QA verification**, still **NO-GO for enriched setup training** until `SILVER_QUALITY_CHECK=PASS` and any warnings are reviewed.
 
+Action follow-up on 2026-06-17 — first 48GB silver QA verifier run failed on tiny OPRA premium-notional residuals only:
+
+- Command output had `quality_file_count=120`, expected dates matched, all manifest artifacts had `errors=[]`, and summary row counts were correct (`definitions=20`, `equs_mbp1_1s=50`, `opra_tcbbo_1s=50`).
+- Every reported error was `OPRA <symbol> <date> total consistency failed: {'notional': ...}`.
+- The largest residual shown was `$0.25`; many were binary floating-point fractions such as `0.0625`, `0.03125`, `0.001953125`, and `0.000488281`.
+- Interpretation: this is a QA-check tolerance problem from large premium-notional floats round-tripping through CSV, not evidence of missing rows or broken call/put aggregation. Contract volume, trade-count, and quote-context totals did not fail.
+- Code follow-up: `scripts/verify_databento_silver_outputs.py` now keeps strict total checks for contract volume/count/context, but applies OPRA premium-notional tolerances (`--opra-notional-abs-tolerance`, default `$1.00`, and `--opra-notional-rel-tolerance`, default `1e-9`). Regression tests now cover sub-dollar residual pass, large notional mismatch fail, and volume mismatch fail.
+- Next 48GB step: pull the tolerance fix and rerun `scripts/verify_databento_silver_outputs.py` against `silver/pilot_10d_six_source_phase1_20260617_193621`.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.

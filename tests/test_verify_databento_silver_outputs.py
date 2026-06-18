@@ -101,10 +101,15 @@ def _equs_frame(date: str, symbol: str) -> pd.DataFrame:
     )
 
 
-def _opra_frame(date: str, underlying: str, bad_total: bool = False) -> pd.DataFrame:
+def _opra_frame(date: str, underlying: str, bad_total: bool = False, bad_notional: bool = False, notional_residual: bool = False) -> pd.DataFrame:
     total_volume = [5.0, 1.0, 0.0]
     if bad_total:
         total_volume = [999.0, 1.0, 0.0]
+    total_notional = [500.0, 100.0, 0.0]
+    if notional_residual:
+        total_notional = [500.25, 100.0, 0.0]
+    if bad_notional:
+        total_notional = [700.0, 100.0, 0.0]
     return pd.DataFrame(
         {
             "date": [date, date, date],
@@ -135,7 +140,7 @@ def _opra_frame(date: str, underlying: str, bad_total: bool = False) -> pd.DataF
             "CallOptionAtAskVolume1s": [3.0, 0.0, 0.0],
             "PutOptionAtAskVolume1s": [1.0, 0.0, 0.0],
             "TotalOptionContractVolume1s": total_volume,
-            "TotalOptionPremiumNotional1s": [500.0, 100.0, 0.0],
+            "TotalOptionPremiumNotional1s": total_notional,
             "TotalOptionTradeCount1s": [3, 1, 0],
             "TotalOptionQuoteContextCount1s": [3, 1, 0],
             "CallMinusPutVolume1s": [3.0, -1.0, 0.0],
@@ -145,7 +150,7 @@ def _opra_frame(date: str, underlying: str, bad_total: bool = False) -> pd.DataF
     )
 
 
-def build_silver_tree(root: Path, *, bad_opra_total: bool = False) -> None:
+def build_silver_tree(root: Path, *, bad_opra_total: bool = False, bad_opra_notional: bool = False, notional_residual: bool = False) -> None:
     summaries = {"definitions": [], "equs_mbp1_1s": [], "opra_tcbbo_1s": []}
     for date in DATES:
         for source_label in ["equs_definition_20260612", "opra_definition_20260612"]:
@@ -193,7 +198,13 @@ def build_silver_tree(root: Path, *, bad_opra_total: bool = False) -> None:
                     "output_path": str(equs_path),
                 }
             )
-            opra = _opra_frame(date, symbol, bad_total=bad_opra_total and date == DATES[0] and symbol == SYMBOLS[0])
+            opra = _opra_frame(
+                date,
+                symbol,
+                bad_total=bad_opra_total and date == DATES[0] and symbol == SYMBOLS[0],
+                bad_notional=bad_opra_notional and date == DATES[0] and symbol == SYMBOLS[0],
+                notional_residual=notional_residual and date == DATES[0] and symbol == SYMBOLS[0],
+            )
             opra_path = root / "opra_tcbbo_1s" / f"date={date}" / f"{symbol}_opra_tcbbo_1s.csv"
             opra_path.parent.mkdir(parents=True, exist_ok=True)
             opra.to_csv(opra_path, index=False)
@@ -228,7 +239,7 @@ class VerifyDatabentoSilverOutputsTest(unittest.TestCase):
     def test_verify_passes_clean_silver_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "silver"
-            build_silver_tree(root)
+            build_silver_tree(root, notional_residual=True)
             rc = verifier.verify(
                 silver_root=root,
                 output_dir=root / "quality_check",
@@ -239,6 +250,8 @@ class VerifyDatabentoSilverOutputsTest(unittest.TestCase):
                 min_equs_valid_spread_coverage=0.95,
                 max_equs_locked_crossed_frac=0.02,
                 min_opra_active_seconds_frac=0.1,
+                opra_notional_abs_tolerance=1.0,
+                opra_notional_rel_tolerance=1e-9,
                 strict_quality=True,
                 fail_on_warning=True,
             )
@@ -263,6 +276,32 @@ class VerifyDatabentoSilverOutputsTest(unittest.TestCase):
                 min_equs_valid_spread_coverage=0.95,
                 max_equs_locked_crossed_frac=0.02,
                 min_opra_active_seconds_frac=0.1,
+                opra_notional_abs_tolerance=1.0,
+                opra_notional_rel_tolerance=1e-9,
+                strict_quality=True,
+                fail_on_warning=True,
+            )
+
+            self.assertEqual(rc, 2)
+            manifest = json.loads((root / "quality_check" / "silver_quality_manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(any("total consistency failed" in error for error in manifest["errors"]))
+
+    def test_verify_fails_large_opra_notional_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "silver"
+            build_silver_tree(root, bad_opra_notional=True)
+            rc = verifier.verify(
+                silver_root=root,
+                output_dir=root / "quality_check",
+                symbols=SYMBOLS,
+                expected_dates=DATES,
+                expected_rows_per_grid=3,
+                min_equs_state_coverage=0.95,
+                min_equs_valid_spread_coverage=0.95,
+                max_equs_locked_crossed_frac=0.02,
+                min_opra_active_seconds_frac=0.1,
+                opra_notional_abs_tolerance=1.0,
+                opra_notional_rel_tolerance=1e-9,
                 strict_quality=True,
                 fail_on_warning=True,
             )
