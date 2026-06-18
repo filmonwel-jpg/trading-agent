@@ -112,3 +112,46 @@ Note: OPRA premium-notional consistency uses a small dollar/relative tolerance
 notional sums can round-trip through CSV with sub-dollar residuals. Contract
 volume, trade-count, and quote-context totals remain strict.
 
+## Build enriched 30s features from QA-passed silver outputs
+
+After `SILVER_QUALITY_CHECK=PASS`, join the silver 1-second features onto the
+existing fixed-quality baseline 30s bars. This is still a build/QA step only;
+it does **not** train, backtest, promote, or overwrite model artifacts.
+
+Set `BASELINE_30S` to either the baseline build root containing `data_30s/`, a
+`data_30s/` directory, or a combined baseline 30s CSV:
+
+```zsh
+export BASELINE_30S="$LAKE_ROOT/model_training_sets/pilot_10d_fixed_quality_YYYYMMDD_HHMMSS"
+export ENRICHED_30S_ROOT="$LAKE_ROOT/model_training_sets/pilot_10d_six_source_enriched_30s_$(date +%Y%m%d_%H%M%S)"
+
+python3 scripts/build_databento_enriched_30s.py \
+  --silver-root "$SILVER_ROOT" \
+  --baseline-30s "$BASELINE_30S" \
+  --symbols "$SYMBOLS" \
+  --expected-date 2026-05-11 \
+  --expected-date 2026-05-12 \
+  --expected-date 2026-05-13 \
+  --expected-date 2026-05-14 \
+  --expected-date 2026-05-15 \
+  --expected-date 2026-05-18 \
+  --expected-date 2026-05-19 \
+  --expected-date 2026-05-20 \
+  --expected-date 2026-05-21 \
+  --expected-date 2026-05-22 \
+  --expected-rows-per-symbol-day 780 \
+  --output-dir "$ENRICHED_30S_ROOT" \
+  2>&1 | tee "$SILVER_ROOT/logs/enriched_30s_build.log"
+```
+
+Expected output shape for the five-symbol, 10-day pilot is `39,000` rows
+(`5 symbols * 10 dates * 780 bars`). The builder writes:
+
+- `$ENRICHED_30S_ROOT/combined/combined_30s.csv`
+- `$ENRICHED_30S_ROOT/data_30s/<SYMBOL>_30s_training.csv`
+- `$ENRICHED_30S_ROOT/reports/enriched_feature_join_summary.csv`
+- `$ENRICHED_30S_ROOT/manifest.json`
+
+Proceed to the next QA/comparison step only if the command prints
+`DATABENTO_ENRICHED_30S_BUILD=PASS` and the manifest has `errors=[]`.
+
