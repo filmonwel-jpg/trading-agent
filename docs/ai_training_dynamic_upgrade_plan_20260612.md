@@ -500,6 +500,20 @@ For the available OPRA schemas, do not download everything first. Use this prior
 
 For the available EQUS schemas, do not download everything first. Use this priority for the `pilot_core_5` window: `definition` is useful for mapping/auditability; `mbp-1` is the preferred new equity quote-state feed; `bbo` is the lighter alternative if `mbp-1` is too heavy; existing `tbbo`/possible UI label `tboo` should continue to provide trade-linked price/quote context; `statistics` is optional for QA/reference context; `status`, `trades`, `ohlcv-1s`, and `ohlcv-1m` are not first-pilot priorities unless a specific gap appears.
 
+### Phase 1 implementation/runbook status as of 2026-06-17
+
+The first `pilot_core_5` richer-source implementation now exists and should be followed from the operational runbook rather than from the older download-planning notes above:
+
+- Runbook: `scripts/README_databento_silver_normalizers.md`.
+- Silver normalizers:
+  - `scripts/normalize_databento_definitions.py` for `EQUS definition` and `OPRA definition` metadata.
+  - `scripts/normalize_equs_mbp1.py` for `EQUS mbp-1` full-session 1-second quote-state features.
+  - `scripts/normalize_opra_tcbbo.py` for `OPRA tcbbo` full-session 1-second option flow/liquidity features.
+- Silver QA gate: `scripts/verify_databento_silver_outputs.py`.
+- Detailed run ledger and current 48GB-machine artifact status: `docs/computer_capability_task_organization_20260613.md`.
+
+Current stop/go rule: do **not** train enriched setup models directly after normalizing. First require the six-source prebuild pass, silver manifest pass, and `SILVER_QUALITY_CHECK=PASS`; then build and QA the enriched 30s feature join before any setup-model comparison.
+
 ## Databento batch job commands for the pilot downloads
 
 These commands submit Databento batch/download jobs. They do not download completed artifacts from the Download Center after the jobs finish.
