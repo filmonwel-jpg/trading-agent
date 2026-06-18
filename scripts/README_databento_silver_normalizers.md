@@ -170,11 +170,36 @@ export TRAIN_LEGACY_30S_EXIT_MODELS=0
 export MODEL_FAMILY=random_forest
 export REGIME_MODEL_FAMILY=random_forest
 export USE_DATABENTO_SILVER_FEATURES=1
+export DATABENTO_SILVER_FEATURE_SET=all
 
 python3 train_30s_models.py \
   --input-csv "$ENRICHED_30S_ROOT/combined/combined_30s.csv" \
   --output-dir "$ENRICHED_30S_ROOT/training_runs/setup_silver_features_no_onnx_$(date +%Y%m%d_%H%M%S)" \
   --no-onnx
+```
+
+Supported ablation presets are:
+
+- `all` — all 35 active silver research features
+- `equs` — equity L1 spread/imbalance/liquidity features only
+- `opra` — OPRA options context features only
+- `liquidity` — spread, coverage, quote-age, and liquidity-state features
+- `options_flow` — OPRA trade count, volume, premium, at-bid/at-ask, and put/call flow features
+
+To run all ablations into separate no-ONNX directories:
+
+```zsh
+for preset in all equs opra liquidity options_flow; do
+  export DATABENTO_SILVER_FEATURE_SET="$preset"
+  export RUN_ROOT="$ENRICHED_30S_ROOT/training_runs/setup_silver_${preset}_no_onnx_$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$RUN_ROOT"
+
+  python3 train_30s_models.py \
+    --input-csv "$ENRICHED_30S_ROOT/combined/combined_30s.csv" \
+    --output-dir "$RUN_ROOT" \
+    --no-onnx \
+    2>&1 | tee "$RUN_ROOT/train_30s_no_onnx.log"
+done
 ```
 
 This is not a production promotion gate. Promotion still requires calibration,

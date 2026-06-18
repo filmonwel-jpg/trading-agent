@@ -79,6 +79,7 @@ USE_EXTENDED_FEATURES = False
 # Keep disabled by default so production Java shape remains unchanged unless explicitly enabled.
 USE_META_PRODUCER_FEATURES = os.getenv('USE_META_PRODUCER_FEATURES', '0').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_DATABENTO_SILVER_FEATURES = os.getenv('USE_DATABENTO_SILVER_FEATURES', '0').strip().lower() not in ('0', 'false', 'no', 'off')
+DATABENTO_SILVER_FEATURE_SET = os.getenv('DATABENTO_SILVER_FEATURE_SET', 'all').strip().lower() or 'all'
 USE_NEWS_BAR_FEATURES = os.getenv('USE_NEWS_BAR_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 USE_REGIME_PROB_FEATURES = os.getenv('USE_REGIME_PROB_FEATURES', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 TRAIN_LEGACY_30S_EXIT_MODELS = os.getenv('TRAIN_LEGACY_30S_EXIT_MODELS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
@@ -175,6 +176,76 @@ DATABENTO_SILVER_FEATURE_COLS = [
     'OpraTcbboOptionVolumeImbalance30s',
     'OpraTcbboPutCallVolumeRatio30s',
 ]
+
+DATABENTO_SILVER_EQUS_FEATURE_COLS = [
+    col for col in DATABENTO_SILVER_FEATURE_COLS if col.startswith('EqMbp1')
+]
+
+DATABENTO_SILVER_OPRA_FEATURE_COLS = [
+    col for col in DATABENTO_SILVER_FEATURE_COLS if col.startswith('OpraTcbbo')
+]
+
+DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS = [
+    'EqMbp1SpreadBpsMean30s',
+    'EqMbp1SpreadBpsLast30s',
+    'EqMbp1RawSpreadMinBps30s',
+    'EqMbp1RawSpreadMaxBps30s',
+    'EqMbp1L1ImbalanceMean30s',
+    'EqMbp1L1ImbalanceLast30s',
+    'EqMbp1QuoteUpdateCoverage30s',
+    'EqMbp1QuoteStateValidCoverage30s',
+    'EqMbp1ValidSpreadCoverage30s',
+    'EqMbp1LockedCrossedCoverage30s',
+    'EqMbp1QuoteAgeMsMean30s',
+    'EqMbp1QuoteAgeMsMax30s',
+    'OpraTcbboAnyActiveCoverage30s',
+    'OpraTcbboCallAvgSpreadBpsMean30s',
+    'OpraTcbboPutAvgSpreadBpsMean30s',
+    'OpraTcbboCallMedianSpreadBpsMean30s',
+    'OpraTcbboPutMedianSpreadBpsMean30s',
+]
+
+DATABENTO_SILVER_OPTIONS_FLOW_FEATURE_COLS = [
+    'OpraTcbboCallTradeCount30s',
+    'OpraTcbboPutTradeCount30s',
+    'OpraTcbboTotalTradeCount30s',
+    'OpraTcbboCallContractVolume30s',
+    'OpraTcbboPutContractVolume30s',
+    'OpraTcbboTotalContractVolume30s',
+    'OpraTcbboCallPremiumNotional30s',
+    'OpraTcbboPutPremiumNotional30s',
+    'OpraTcbboTotalPremiumNotional30s',
+    'OpraTcbboCallAtBidVolume30s',
+    'OpraTcbboPutAtBidVolume30s',
+    'OpraTcbboCallAtAskVolume30s',
+    'OpraTcbboPutAtAskVolume30s',
+    'OpraTcbboCallMinusPutVolume30s',
+    'OpraTcbboOptionVolumeImbalance30s',
+    'OpraTcbboPutCallVolumeRatio30s',
+]
+
+DATABENTO_SILVER_FEATURE_PRESETS = {
+    'all': DATABENTO_SILVER_FEATURE_COLS,
+    'equs': DATABENTO_SILVER_EQUS_FEATURE_COLS,
+    'opra': DATABENTO_SILVER_OPRA_FEATURE_COLS,
+    'liquidity': DATABENTO_SILVER_LIQUIDITY_FEATURE_COLS,
+    'options_flow': DATABENTO_SILVER_OPTIONS_FLOW_FEATURE_COLS,
+}
+
+DATABENTO_SILVER_FEATURE_SET_ALIASES = {
+    'eq': 'equs',
+    'equity': 'equs',
+    'equs_mbp1': 'equs',
+    'options': 'options_flow',
+    'option_flow': 'options_flow',
+    'options-flow': 'options_flow',
+    'flow': 'options_flow',
+    'flows': 'options_flow',
+    'spread': 'liquidity',
+    'spreads': 'liquidity',
+    'spread_liquidity': 'liquidity',
+    'spread-liquidity': 'liquidity',
+}
 
 NEWS_BAR_FEATURE_COLS = [
     'f_news_intensity_60s',
@@ -2011,6 +2082,20 @@ def append_unique_feature_columns(feature_cols, optional_cols):
     return out
 
 
+def resolve_databento_silver_feature_columns(feature_set=None):
+    requested = (DATABENTO_SILVER_FEATURE_SET if feature_set is None else feature_set)
+    normalized = str(requested or 'all').strip().lower().replace('-', '_') or 'all'
+    normalized = DATABENTO_SILVER_FEATURE_SET_ALIASES.get(normalized, normalized)
+    if normalized not in DATABENTO_SILVER_FEATURE_PRESETS:
+        allowed = ', '.join(sorted(DATABENTO_SILVER_FEATURE_PRESETS))
+        aliases = ', '.join(sorted(DATABENTO_SILVER_FEATURE_SET_ALIASES))
+        raise ValueError(
+            f"Unsupported DATABENTO_SILVER_FEATURE_SET={requested!r}. "
+            f"Supported presets: {allowed}. Aliases: {aliases}."
+        )
+    return list(DATABENTO_SILVER_FEATURE_PRESETS[normalized]), normalized
+
+
 def add_regime_probability_features(df, regime_feature_cols, model_family='random_forest'):
     out = df.copy()
     X_regime = out[regime_feature_cols].values.astype(np.float32)
@@ -2124,6 +2209,8 @@ def main():
     ]
 
     base_feature_count = len(feature_cols)
+    databento_silver_feature_cols: list[str] = []
+    databento_silver_feature_set = None
 
     if USE_EXTENDED_FEATURES:
         feature_cols = feature_cols + extended_feature_cols
@@ -2151,12 +2238,14 @@ def main():
         # Research-only opt-in: accept causal Databento silver columns from enriched 30s CSVs.
         # Missing columns default to zero so baseline-vs-enriched comparisons can run with the
         # same schema; enriched rows with undefined causal aggregates also stay row-preserving.
-        df = ensure_optional_numeric_columns(df, DATABENTO_SILVER_FEATURE_COLS, default_value=0.0)
-        df_rest = ensure_optional_numeric_columns(df_rest, DATABENTO_SILVER_FEATURE_COLS, default_value=0.0)
-        feature_cols = append_unique_feature_columns(feature_cols, DATABENTO_SILVER_FEATURE_COLS)
+        databento_silver_feature_cols, databento_silver_feature_set = resolve_databento_silver_feature_columns()
+        df = ensure_optional_numeric_columns(df, databento_silver_feature_cols, default_value=0.0)
+        df_rest = ensure_optional_numeric_columns(df_rest, databento_silver_feature_cols, default_value=0.0)
+        feature_cols = append_unique_feature_columns(feature_cols, databento_silver_feature_cols)
         print(
             ">>> Databento silver feature block enabled "
-            f"(+{len(DATABENTO_SILVER_FEATURE_COLS)} columns, {DATABENTO_SILVER_FEATURE_SCHEMA_VERSION}, research-only opt-in)."
+            f"(+{len(databento_silver_feature_cols)} columns, set={databento_silver_feature_set}, "
+            f"{DATABENTO_SILVER_FEATURE_SCHEMA_VERSION}, research-only opt-in)."
         )
 
     regime_feature_cols = build_regime_feature_subset(df_rest, feature_cols)
@@ -2494,7 +2583,9 @@ def main():
             'meta_producer_features_enabled': bool(USE_META_PRODUCER_FEATURES),
             'databento_silver_features_enabled': bool(USE_DATABENTO_SILVER_FEATURES),
             'databento_silver_feature_schema_version': DATABENTO_SILVER_FEATURE_SCHEMA_VERSION,
-            'databento_silver_feature_count': len(DATABENTO_SILVER_FEATURE_COLS) if USE_DATABENTO_SILVER_FEATURES else 0,
+            'databento_silver_feature_set': databento_silver_feature_set,
+            'databento_silver_feature_count': len(databento_silver_feature_cols),
+            'databento_silver_available_feature_count': len(DATABENTO_SILVER_FEATURE_COLS),
             'regime_probability_features_enabled': bool(USE_REGIME_PROB_FEATURES),
         },
         'model_family': _normalize_model_family(MODEL_FAMILY),
