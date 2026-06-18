@@ -1535,6 +1535,20 @@ Action done on 2026-06-18 — Databento silver liquidity fine split passed QA, b
 - Research readout: `best_long_precision_delta_preset=liquidity`, `best_short_precision_delta_preset=equs`, `balanced_positive_precision_candidates=[liquidity, equs, equs_liquidity]`.
 - Gate result: `DATABENTO_SILVER_ABLATION_QA=PASS`; production promotion remains **NO-GO**. Next research step should target threshold/fold-stability diagnostics before any ONNX export, frozen-holdout claim, paper/shadow run, or live feature promotion.
 
+Action done on 2026-06-18 — short-entry threshold-floor diagnostics show the zero/thin fold blocker is threshold-policy-sensitive, but precision stability is still **NO-GO**:
+
+- Threshold-floor diagnostic root: `pilot_10d_six_source_enriched_30s_20260617_220849/training_runs/setup_silver_liquidity_split_no_onnx_20260618_154554`.
+- Artifact bundle updated on the 48GB machine: `databento_silver_liquidity_split_summary_setup_silver_liquidity_split_no_onnx_20260618_154554.tar.gz`.
+- `DATABENTO_SHORT_THRESHOLD_FLOOR_QA=PASS` for the serious candidates `liquidity` and `equs`.
+- Floor candidates at `min_pred_pos_rate=0.005` and `min_pred_pos_count=20`:
+  - `liquidity` fold 1 zero blocker: threshold `0.6200 -> 0.4088`, `20` predictions, floor precision `0.950000`.
+  - `liquidity` fold 4 thin blocker: threshold `0.6200 -> 0.6125`, `20` predictions, floor precision `0.400000`.
+  - `equs` fold 1 zero blocker: threshold `0.6000 -> 0.3929`, `20` predictions, floor precision `0.800000`.
+- Hybrid policy simulation (`original threshold` for OK folds; `floor threshold` only for zero/thin folds):
+  - `liquidity`: no zero/thin folds after flooring, total short predictions `208`, estimated true positives `58`, aggregate precision `0.278846`, but fold precision min remains only `0.038462`.
+  - `equs`: no zero/thin folds after flooring, total short predictions `311`, estimated true positives `96`, aggregate precision `0.308682`, but fold precision min remains only `0.033333`.
+- Interpretation: a simple prediction-count floor can fix mechanical zero/thin folds, but it does **not** fix unstable short-entry precision across folds. Promotion remains **NO-GO**. Next research step should evaluate a research-only trainer threshold policy that includes both minimum predicted-positive constraints and a precision floor / fold-stability objective; do not export ONNX from this experiment.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
