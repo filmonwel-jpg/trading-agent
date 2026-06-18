@@ -1484,6 +1484,40 @@ Action follow-up on 2026-06-17 — first 48GB silver QA verifier run failed on t
 - Code follow-up: `scripts/verify_databento_silver_outputs.py` now keeps strict total checks for contract volume/count/context, but applies OPRA premium-notional tolerances (`--opra-notional-abs-tolerance`, default `$1.00`, and `--opra-notional-rel-tolerance`, default `1e-9`). Regression tests now cover sub-dollar residual pass, large notional mismatch fail, and volume mismatch fail.
 - Next 48GB step: pull the tolerance fix and rerun `scripts/verify_databento_silver_outputs.py` against `silver/pilot_10d_six_source_phase1_20260617_193621`.
 
+Action done on 2026-06-17 — 48GB silver QA verifier passed after the OPRA notional tolerance fix:
+
+- QA output dir: `silver/pilot_10d_six_source_phase1_20260617_193621/quality_check`.
+- `errors=[]`.
+- `warnings=[]`.
+- `quality_file_count=120`.
+- Summary row counts: `definitions=20`, `equs_mbp1_1s=50`, `opra_tcbbo_1s=50`.
+- `opra_notional_abs_tolerance=1.0`, `opra_notional_rel_tolerance=1e-09`.
+- `SILVER_QUALITY_CHECK=PASS`.
+- Stop/go decision: **GO for enriched 30s feature-join builder implementation**. Still **NO-GO for model training** until the enriched 30s feature outputs pass row-count, leakage, feature-coverage, and baseline-comparison QA.
+
+Code follow-up on 2026-06-17 — added `scripts/build_databento_enriched_30s.py` plus regression coverage in `tests/test_build_databento_enriched_30s.py`:
+
+- Consumes a baseline 30s CSV/`data_30s`/build root and QA-passed silver `equs_mbp1_1s` + `opra_tcbbo_1s` outputs.
+- Aggregates silver 1s features into exact left-edge 30s buckets and left-joins on `(Symbol, Timestamp bucket)` without forward/asof future fill.
+- Writes `combined/combined_30s.csv`, `data_30s/<SYMBOL>_30s_training.csv`, `reports/databento_enriched_30s_summary.csv`, and `manifest.json`.
+- Default safety behavior fails on missing silver quality manifest errors/warnings, missing silver feature files, missing row joins, row-count drift, or per-symbol/day row-count mismatch when `--expected-rows-per-symbol-day 780` is supplied.
+- Focused Databento pipeline regression tests pass for prebuild, baseline build verifier, silver verifier, silver normalizers, and enriched 30s builder.
+- Next 48GB step: run the enriched builder against `silver/pilot_10d_six_source_phase1_20260617_193621` and the matching baseline fixed-quality 30s pilot build. Still **NO-GO for model training** until `DATABENTO_ENRICHED_30S_BUILD=PASS` and manifest `errors=[]` are reviewed.
+
+Action done on 2026-06-18 — Databento silver ablation readout passed QA, but remains **NO-GO for production promotion**:
+
+- Baseline run root: `pilot_10d_six_source_enriched_30s_20260617_220849/training_runs/setup_compare_no_onnx_after_nan_fix_20260617_231725/baseline`.
+- Silver ablation root: `pilot_10d_six_source_enriched_30s_20260617_220849/training_runs/setup_silver_ablation_no_onnx_20260618_150856`.
+- `RUN_QA` passed for baseline and all silver presets: `all`, `equs`, `opra`, `liquidity`, and `options_flow` all had `training_rows=35685`, `paired_oof_rows=18000`, and expected silver feature counts.
+- Entry precision deltas versus baseline:
+  - `liquidity`: long `+0.032829`, short `+0.055765` — best balanced positive candidate.
+  - `equs`: long `+0.009856`, short `+0.060459` — second balanced positive candidate.
+  - `all`: best short lift `+0.133881`, but long degraded `-0.019800`.
+  - `opra` and `options_flow`: short improved, but long degraded.
+- Fold-stability caveats remain: silver short-entry folds still include zero-prediction folds, and some presets have thin-prediction folds; this blocks promotion even when average precision improves.
+- Research readout: `best_long_precision_delta_preset=liquidity`, `best_short_precision_delta_preset=all`, `balanced_positive_precision_candidates=[liquidity, equs]`.
+- Gate result: `DATABENTO_SILVER_ABLATION_QA=PASS`; promotion decision remains **NO-GO** pending stable fold thresholds, sufficient trade counts, and further frozen-holdout/paper checks.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
