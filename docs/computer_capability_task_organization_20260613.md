@@ -1447,6 +1447,34 @@ Action done on 2026-06-17 — Phase 1 silver normalizer scaffolding implemented 
   - `BarEpochSec` is calculated via explicit UTC timestamp conversion to avoid pandas/numpy timestamp-unit ambiguity.
 - Next 48GB step: run the one-day smoke commands in `scripts/README_databento_silver_normalizers.md` against `PILOT_DIR=$LAKE_ROOT/source_manifests/pilot_dates_latest10_six_source_downloads_20260617_183703`; if all three normalizer manifests have `errors=[]`, run the full 10-day pilot normalization. Do not start enriched setup training until silver-output QA passes.
 
+Action done on 2026-06-17 — 48GB Mac full 10-day Phase 1 silver normalization manifest gate passed:
+
+- Silver root: `silver/pilot_10d_six_source_phase1_20260617_193621` under `$LAKE_ROOT`.
+- `definitions` manifest:
+  - `schema_version=databento_definition_silver_v1`.
+  - `selected_dates=['20260511', '20260512', '20260513', '20260514', '20260515', '20260518', '20260519', '20260520', '20260521', '20260522']`.
+  - `selected_file_count=20`.
+  - `output_file_count=20`.
+  - `output_rows=368416`.
+  - `errors=[]`.
+- `equs_mbp1_1s` manifest:
+  - `schema_version=equs_mbp1_silver_1s_v1`.
+  - `selected_file_count=10`.
+  - `output_file_count=50`.
+  - `output_rows=1170000` (`10` dates × `5` symbols × `23,400` regular-session seconds).
+  - `errors=[]`.
+- `opra_tcbbo_1s` manifest:
+  - `schema_version=opra_tcbbo_silver_1s_v1`.
+  - `selected_file_count=10`.
+  - `output_file_count=50`.
+  - `output_rows=1170000` (`10` dates × `5` underlyings × `23,400` regular-session seconds).
+  - `errors=[]`.
+- Full manifest gate result: `SILVER_FULL_MANIFESTS=PASS`.
+- Code follow-up after smoke: `scripts/normalize_opra_tcbbo.py` now uses `pd.concat(..., sort=False)` to silence a Pandas 4 deprecation warning without changing output semantics.
+- Added next QA gate: `scripts/verify_databento_silver_outputs.py` plus regression tests in `tests/test_verify_databento_silver_outputs.py`.
+  - The verifier checks manifests, summaries, output file existence, required columns, full-session row counts, key/date consistency, monotonic/non-duplicate `BarEpochSec`, definition metadata coverage, EQUS quote-state/locked-crossed coverage, and OPRA call/put total consistency.
+- Stop/go decision: **GO for silver-output QA verification**, still **NO-GO for enriched setup training** until `SILVER_QUALITY_CHECK=PASS` and any warnings are reviewed.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.

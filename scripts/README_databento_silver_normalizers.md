@@ -77,3 +77,32 @@ python3 scripts/normalize_opra_tcbbo.py \
 
 Each output directory writes a `manifest.json` and summary CSV. Review `errors=[]` before using the silver files in an enriched 30s feature build.
 
+## QA the full silver outputs
+
+After the three full normalizers finish and their manifests have `errors=[]`, run the structural/coverage QA gate:
+
+```zsh
+python3 scripts/verify_databento_silver_outputs.py \
+  --silver-root "$SILVER_ROOT" \
+  --symbols "$SYMBOLS" \
+  --expected-date 2026-05-11 \
+  --expected-date 2026-05-12 \
+  --expected-date 2026-05-13 \
+  --expected-date 2026-05-14 \
+  --expected-date 2026-05-15 \
+  --expected-date 2026-05-18 \
+  --expected-date 2026-05-19 \
+  --expected-date 2026-05-20 \
+  --expected-date 2026-05-21 \
+  --expected-date 2026-05-22 \
+  --output-dir "$SILVER_ROOT/quality_check" \
+  2>&1 | tee "$SILVER_ROOT/logs/silver_quality_check.log"
+```
+
+The verifier writes:
+
+- `$SILVER_ROOT/quality_check/silver_quality_manifest.json`
+- `$SILVER_ROOT/quality_check/silver_file_quality.csv`
+
+Proceed to enriched feature-building only if the command prints `SILVER_QUALITY_CHECK=PASS`. Warnings should still be reviewed even when they are not fatal.
+
