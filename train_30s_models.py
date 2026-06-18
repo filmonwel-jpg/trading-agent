@@ -378,6 +378,31 @@ def _groupby_symbol_date(df):
     return df.groupby(['Symbol', 'Date'], sort=False)
 
 
+def drop_rows_missing_training_inputs(df):
+    """Drop rows only for columns that the 30s trainer actually depends on.
+
+    Enriched research CSVs can carry appended audit/feature columns that are not
+    part of the active model schema. Some of those columns legitimately contain
+    NaN when a causal source aggregate is undefined. A blanket ``df.dropna()``
+    would make those unused columns change row eligibility and labels.
+    """
+
+    required_core_cols = [
+        'Symbol', 'Timestamp', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume',
+        'Hour', 'Minute', 'ATR_12',
+    ]
+    engineered_feature_cols = [col for col in df.columns if col.startswith('f_')]
+    subset = [col for col in [*required_core_cols, *engineered_feature_cols] if col in df.columns]
+    if not subset:
+        return df.dropna()
+
+    out = df.copy()
+    numeric_subset = [col for col in subset if col not in {'Symbol', 'Timestamp', 'Date'}]
+    if numeric_subset:
+        out[numeric_subset] = out[numeric_subset].replace([np.inf, -np.inf], np.nan)
+    return out.dropna(subset=subset)
+
+
 def filter_raw_to_regular_session(raw_df):
     parsed = _ensure_symbol_column(raw_df)
     ts_str = parsed['Timestamp'].astype(str).str.strip()
@@ -773,7 +798,7 @@ def calculate_features(df):
     df['f_news_vol_shock'] = news_vol_shock
     df['f_news_event_strength'] = news_event_strength
 
-    df = df.dropna()
+    df = drop_rows_missing_training_inputs(df)
     return df
 
 

@@ -295,6 +295,27 @@ class TestMainArtifacts(unittest.TestCase):
             onnx_files = list(out_dir.glob("*.onnx"))
             self.assertEqual(onnx_files, [], "Expected no ONNX files with --no-onnx")
 
+    def test_unused_nan_enrichment_columns_do_not_change_feature_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            csv_path = tmp / "test_30s.csv"
+            self._make_csv(csv_path, n_days=3, rows_per_day=90)
+            raw = pd.read_csv(csv_path)
+            filtered = t30.filter_raw_to_regular_session(raw)
+
+            baseline = t30.calculate_features(filtered.copy())
+            enriched_like = filtered.copy()
+            enriched_like["EqMbp1BidMean30s"] = np.nan
+            enriched_like["OpraTcbboCallAvgSpreadBpsMean30s"] = np.nan
+            enriched = t30.calculate_features(enriched_like)
+
+            self.assertEqual(len(enriched), len(baseline))
+            pd.testing.assert_series_equal(
+                enriched["Timestamp"].reset_index(drop=True),
+                baseline["Timestamp"].reset_index(drop=True),
+                check_names=False,
+            )
+
 
 class TestRegimeSpecificNoOnnx(unittest.TestCase):
     """Regression: --no-onnx must suppress export in train_regime_specific_models()."""
