@@ -37,6 +37,7 @@ def _write_minimal_run(
     silver_count: int = 0,
     training_rows: int = 100,
     paired_rows: int = 60,
+    short_pred_pos_rates: list[float] | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     _write_json(
@@ -90,6 +91,12 @@ def _write_minimal_run(
     ]:
         side = "long" if model == "long_entry.onnx" else "short"
         for fold_id in range(1, 6):
+            pred_pos_rate = pred_pos_base
+            if model == "short_entry.onnx":
+                if short_pred_pos_rates is not None:
+                    pred_pos_rate = short_pred_pos_rates[fold_id - 1]
+                elif fold_id == 1:
+                    pred_pos_rate = 0.0
             threshold_rows.append(
                 {
                     "model": model,
@@ -102,7 +109,7 @@ def _write_minimal_run(
                     "threshold": 0.60,
                     "test_precision": max(0.0, precision + (fold_id - 3) * 0.01),
                     "test_recall": 0.2,
-                    "pred_pos_rate": pred_pos_base if not (model == "short_entry.onnx" and fold_id == 1) else 0.0,
+                    "pred_pos_rate": pred_pos_rate,
                     "brier_score": 0.25,
                     "ece": 0.1,
                     "calibration_rows": 20,
@@ -167,8 +174,41 @@ class TestDatabentoSilverAblationAnalysis(unittest.TestCase):
                 if row["preset"] == "all" and row["filename"] == "short_entry.onnx"
             )
             self.assertEqual(all_short["zero_pred_folds_current"], 1)
+            blockers = result["short_fold_blockers"]
+            self.assertEqual(len(blockers), 5)
+            self.assertEqual(blockers[0]["preset"], "all")
+            self.assertEqual(blockers[0]["fold_id"], 1)
+            self.assertEqual(blockers[0]["blocker"], "zero")
             self.assertTrue((ablation_root / "databento_silver_ablation_scorecard_compare.csv").is_file())
+            self.assertTrue((ablation_root / "databento_silver_ablation_short_fold_blockers.csv").is_file())
             self.assertTrue((ablation_root / "databento_silver_ablation_summary.json").is_file())
+
+    def test_short_fold_blockers_identify_thin_nonzero_folds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline = root / "baseline"
+            ablation_root = root / "ablation"
+            _write_minimal_run(
+                baseline,
+                feature_count=61,
+                long_precision=BASELINE_LONG,
+                short_precision=BASELINE_SHORT,
+            )
+            _write_minimal_run(
+                ablation_root / "liquidity",
+                feature_count=78,
+                silver_count=17,
+                preset="liquidity",
+                long_precision=0.476100,
+                short_precision=0.168200,
+                short_pred_pos_rates=[0.0, 0.004, 0.006, 0.03, 0.03],
+            )
+
+            result = analyzer.analyze_ablation(baseline, ablation_root, presets=("liquidity",))
+
+            blockers = result["short_fold_blockers"]
+            self.assertEqual([(row["fold_id"], row["blocker"]) for row in blockers], [(1, "zero"), (2, "thin")])
+            self.assertEqual(blockers[1]["pred_pos_count_est"], 0)
 
     def test_analyze_ablation_flags_unexpected_onnx_file(self):
         with tempfile.TemporaryDirectory() as tmp:

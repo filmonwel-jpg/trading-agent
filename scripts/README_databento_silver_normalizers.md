@@ -234,8 +234,9 @@ done
 After the loop completes, compare the preset artifacts against a strict baseline
 no-ONNX run. The helper validates required artifacts, checks that no ONNX files
 were written, verifies row/schema consistency, summarizes fold-level precision
-and predicted-positive-rate stability from `threshold_grid.csv`, and writes a
-comparison CSV/JSON under `$ABLATION_ROOT`:
+and predicted-positive-rate stability from `threshold_grid.csv`, prints
+short-entry zero/thin fold blockers, and writes comparison CSV/JSON plus
+`databento_silver_ablation_short_fold_blockers.csv` under `$ABLATION_ROOT`:
 
 ```zsh
 python3 scripts/analyze_databento_silver_ablation.py \

@@ -78,6 +78,16 @@ FOLD_STABILITY_METRICS = (
     "thin_pred_folds",
 )
 THIN_PRED_POS_RATE = 0.005
+SHORT_FOLD_BLOCKER_COLUMNS = (
+    "preset",
+    "fold_id",
+    "threshold",
+    "test_precision",
+    "pred_pos_rate",
+    "pred_pos_count_est",
+    "test_rows",
+    "blocker",
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -184,6 +194,34 @@ def _series_stat(series: pd.Series, stat: str) -> float:
     raise ValueError(f"Unsupported stat={stat!r}")
 
 
+def _threshold_fold_details(subset: pd.DataFrame) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    if "fold_id" in subset.columns:
+        subset = subset.sort_values("fold_id")
+    for _, row in subset.iterrows():
+        pred_pos_rate = _finite_float(row.get("pred_pos_rate"), math.nan)
+        test_rows = _finite_int(row.get("test_rows"), 0)
+        pred_pos_count_est = (
+            int(round(pred_pos_rate * test_rows))
+            if math.isfinite(pred_pos_rate) and test_rows > 0
+            else None
+        )
+        details.append(
+            {
+                "fold_id": _finite_int(row.get("fold_id"), 0),
+                "threshold": _finite_float(row.get("threshold"), math.nan),
+                "test_precision": _finite_float(row.get("test_precision"), math.nan),
+                "test_recall": _finite_float(row.get("test_recall"), math.nan),
+                "pred_pos_rate": pred_pos_rate,
+                "pred_pos_count_est": pred_pos_count_est,
+                "test_rows": test_rows,
+                "brier_score": _finite_float(row.get("brier_score"), math.nan),
+                "ece": _finite_float(row.get("ece"), math.nan),
+            }
+        )
+    return details
+
+
 def _read_threshold_stability(path: Path, errors: list[str]) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
@@ -222,6 +260,7 @@ def _read_threshold_stability(path: Path, errors: list[str]) -> dict[str, dict[s
             "threshold_max": _series_stat(threshold, "max"),
             "zero_pred_folds": int(pred_pos.le(0.0).sum()),
             "thin_pred_folds": int(pred_pos.le(THIN_PRED_POS_RATE).sum()),
+            "folds": _threshold_fold_details(subset),
         }
     return stability
 
@@ -418,6 +457,30 @@ def build_recommendations(compare_rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def build_short_fold_blockers(preset_summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for summary in preset_summaries:
+        preset = str(summary.get("run_name"))
+        short_stability = (summary.get("threshold_stability") or {}).get("short_entry.onnx") or {}
+        for fold in short_stability.get("folds") or []:
+            pred_pos_rate = _finite_float(fold.get("pred_pos_rate"), math.nan)
+            if not math.isfinite(pred_pos_rate) or pred_pos_rate > THIN_PRED_POS_RATE:
+                continue
+            row = {
+                "preset": preset,
+                "fold_id": _finite_int(fold.get("fold_id"), 0),
+                "threshold": _finite_float(fold.get("threshold"), math.nan),
+                "test_precision": _finite_float(fold.get("test_precision"), math.nan),
+                "pred_pos_rate": pred_pos_rate,
+                "pred_pos_count_est": fold.get("pred_pos_count_est"),
+                "test_rows": _finite_int(fold.get("test_rows"), 0),
+                "blocker": "zero" if pred_pos_rate <= 0.0 else "thin",
+            }
+            rows.append(row)
+    rows.sort(key=lambda row: (row["preset"], row["fold_id"]))
+    return rows
+
+
 def analyze_ablation(
     baseline_dir: Path,
     ablation_root: Path,
@@ -445,11 +508,13 @@ def analyze_ablation(
     compare_rows = build_comparison_rows(baseline, preset_summaries)
     qa_pass = bool(baseline.get("ok")) and all(bool(summary.get("ok")) for summary in preset_summaries)
     recommendations = build_recommendations(compare_rows)
+    short_fold_blockers = build_short_fold_blockers(preset_summaries)
     result = {
         "qa_pass": qa_pass,
         "baseline": baseline,
         "presets": preset_summaries,
         "compare_rows": compare_rows,
+        "short_fold_blockers": short_fold_blockers,
         "recommendations": recommendations,
     }
 
@@ -457,6 +522,10 @@ def analyze_ablation(
         out_dir = Path(output_dir) if output_dir else Path(ablation_root)
         out_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(compare_rows).to_csv(out_dir / "databento_silver_ablation_scorecard_compare.csv", index=False)
+        pd.DataFrame(short_fold_blockers, columns=SHORT_FOLD_BLOCKER_COLUMNS).to_csv(
+            out_dir / "databento_silver_ablation_short_fold_blockers.csv",
+            index=False,
+        )
         (out_dir / "databento_silver_ablation_summary.json").write_text(
             json.dumps(_json_safe(result), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -510,6 +579,13 @@ def print_report(result: dict[str, Any]) -> None:
     ]
     if not frame.empty:
         print(frame[stability_cols].to_string(index=False))
+
+    print("\n== SHORT_FOLD_BLOCKERS")
+    blockers = pd.DataFrame(result.get("short_fold_blockers") or [], columns=SHORT_FOLD_BLOCKER_COLUMNS)
+    if blockers.empty:
+        print("none")
+    else:
+        print(blockers.to_string(index=False))
 
     rec = result["recommendations"]
     print("\n== RESEARCH_READOUT")
