@@ -332,6 +332,11 @@ THRESHOLD_GRID = np.arange(MIN_TUNED_THRESHOLD, 0.91, 0.02)
 # Adaptive thresholding controls (relative to calibration label prevalence).
 MIN_POS_FRACTION_OF_BASE = 0.20
 TARGET_POS_FRACTION_OF_BASE = 0.35
+RESEARCH_SHORT_THRESHOLD_POLICY_SCHEMA_VERSION = 'research_short_threshold_floor_v1'
+RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED = os.getenv('RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED', '0').strip().lower() not in ('0', 'false', 'no', 'off')
+RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE = float(os.getenv('RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE', '0.005'))
+RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT = int(os.getenv('RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT', '20'))
+RESEARCH_SHORT_THRESHOLD_MIN_PRECISION = float(os.getenv('RESEARCH_SHORT_THRESHOLD_MIN_PRECISION', '0.0'))
 
 # RandomForest settings tuned to avoid probability saturation at 0/1.
 RF_N_ESTIMATORS = 220
@@ -1782,6 +1787,117 @@ def maybe_alias_path(filename):
     return str(Path("src") / "main" / "resources" / filename)
 
 
+def research_short_threshold_policy_config():
+    return {
+        'schema_version': RESEARCH_SHORT_THRESHOLD_POLICY_SCHEMA_VERSION,
+        'enabled': bool(RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED),
+        'research_only': True,
+        'requires_no_onnx': True,
+        'mode': 'oof_oracle_floor_for_short_entry_only',
+        'min_pred_pos_rate': RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE,
+        'min_pred_pos_count': RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT,
+        'min_precision': RESEARCH_SHORT_THRESHOLD_MIN_PRECISION,
+        'warning': (
+            'When enabled, short-entry fold thresholds may be lowered using OOF test-fold probabilities '
+            'to satisfy the prediction floor. This is a leakage-prone research diagnostic, not a valid '
+            'production threshold-selection policy.'
+        ),
+    }
+
+
+def _required_research_pred_pos_count(row_count):
+    if row_count <= 0:
+        return 0
+    rate_count = math.floor(max(0.0, RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE) * row_count) + 1
+    return min(row_count, max(1, int(RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT), rate_count))
+
+
+def _threshold_metrics(y_true, probas, threshold):
+    preds = (probas >= threshold).astype(np.int8)
+    pred_count = int(np.sum(preds, dtype=np.int64))
+    positive_count = int(np.sum(y_true, dtype=np.int64))
+    true_positive_count = int(np.sum((preds == 1) & (y_true == 1), dtype=np.int64))
+    return {
+        'threshold': float(threshold),
+        'pred_pos_count': pred_count,
+        'pred_pos_rate': float(pred_count / len(y_true)) if len(y_true) else 0.0,
+        'precision': float(true_positive_count / pred_count) if pred_count else 0.0,
+        'recall': float(true_positive_count / positive_count) if positive_count else 0.0,
+        'true_positive_count': true_positive_count,
+    }
+
+
+def _floor_threshold_for_pred_count(probas, required_count):
+    values = np.asarray(probas, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return math.nan
+    required_count = max(1, min(int(required_count), len(values)))
+    return float(np.sort(values)[::-1][required_count - 1])
+
+
+def _research_threshold_candidates(y_true, probas, original_threshold):
+    values = np.asarray(probas, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return []
+    thresholds = sorted(set(float(v) for v in values) | {float(original_threshold)}, reverse=True)
+    return [_threshold_metrics(y_true, probas, threshold) for threshold in thresholds]
+
+
+def apply_research_short_threshold_floor(y_true, probas, threshold):
+    original = _threshold_metrics(y_true, probas, threshold)
+    required_count = _required_research_pred_pos_count(len(y_true))
+    required_rate = required_count / len(y_true) if len(y_true) else 0.0
+    policy = {
+        'enabled': bool(RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED),
+        'applied': False,
+        'original_threshold': float(threshold),
+        'original_pred_pos_count': original['pred_pos_count'],
+        'original_pred_pos_rate': original['pred_pos_rate'],
+        'original_precision': original['precision'],
+        'required_pred_pos_count': required_count,
+        'required_pred_pos_rate': required_rate,
+        'min_precision': RESEARCH_SHORT_THRESHOLD_MIN_PRECISION,
+        'precision_floor_met': True,
+        'reason': 'disabled' if not RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED else 'original_threshold_satisfies_floor',
+    }
+    if not RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED:
+        return float(threshold), original, policy
+    needs_policy = (
+        original['pred_pos_count'] < required_count
+        or original['precision'] < RESEARCH_SHORT_THRESHOLD_MIN_PRECISION
+    )
+    if not needs_policy:
+        return float(threshold), original, policy
+
+    candidates = [
+        candidate for candidate in _research_threshold_candidates(y_true, probas, threshold)
+        if candidate['pred_pos_count'] >= required_count
+    ]
+    if not candidates:
+        policy['reason'] = 'no_finite_probabilities'
+        policy['precision_floor_met'] = False
+        return float(threshold), original, policy
+
+    eligible = [candidate for candidate in candidates if candidate['precision'] >= RESEARCH_SHORT_THRESHOLD_MIN_PRECISION]
+    precision_floor_met = bool(eligible)
+    pool = eligible if eligible else candidates
+    floored = max(pool, key=lambda candidate: (candidate['precision'], candidate['threshold']))
+    floor_threshold = floored['threshold']
+    policy.update({
+        'applied': True,
+        'floor_threshold': float(floor_threshold),
+        'floor_pred_pos_count': floored['pred_pos_count'],
+        'floor_pred_pos_rate': floored['pred_pos_rate'],
+        'floor_precision': floored['precision'],
+        'threshold_drop': float(threshold - floor_threshold),
+        'precision_floor_met': bool(precision_floor_met),
+        'reason': 'floor_applied_precision_ok' if precision_floor_met else 'floor_applied_precision_below_min',
+    })
+    return float(floor_threshold), floored, policy
+
+
 def optimize_threshold(y_true, probas):
     best_thr = MIN_TUNED_THRESHOLD
     best_prec = -1.0
@@ -1926,19 +2042,28 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
             thr, cal_prec, cal_rec, cal_pos = (MIN_TUNED_THRESHOLD, 0.0, 0.0, 0.0)
 
         test_proba = predict_positive_proba(model, X_test)
-        y_pred = (test_proba >= thr).astype(np.int8)
-        pred_pos_rate = float(y_pred.mean()) if len(y_pred) else 0.0
+        threshold_policy = None
+        if collect_oof and RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED and 'SHORT ENTRY' in name.upper():
+            thr, threshold_metrics, threshold_policy = apply_research_short_threshold_floor(y_test, test_proba, thr)
+            y_pred = (test_proba >= thr).astype(np.int8)
+            rec_for_fold = threshold_metrics['recall']
+            pred_pos_rate = threshold_metrics['pred_pos_rate']
+            pred_pos_count = threshold_metrics['pred_pos_count']
+            prec = threshold_metrics['precision']
+        else:
+            y_pred = (test_proba >= thr).astype(np.int8)
+            pred_pos_rate = float(y_pred.mean()) if len(y_pred) else 0.0
+            pred_pos_count = int(np.sum(y_pred, dtype=np.int64))
+            prec = precision_score(y_test, y_pred, zero_division=0)
+            rec_for_fold = recall_score(y_test, y_pred, zero_division=0)
         test_pos_rate = float(y_test.mean()) if len(y_test) else 0.0
-        pred_pos_count = int(np.sum(y_pred, dtype=np.int64))
-        
-        prec = precision_score(y_test, y_pred, zero_division=0)
         precisions.append(prec)
         thresholds.append(thr)
 
         if collect_oof:
             # Measure raw-probability calibration on the OOF test rows.
             cal = calibration_report(y_test, test_proba)
-            fold_grid.append({
+            fold_record = {
                 'fold_id': fold,
                 'train_days': int(train_days),
                 'test_days': int(test_days),
@@ -1946,12 +2071,15 @@ def perform_walk_forward_testing(X, y, dates, name, model_family='random_forest'
                 'test_rows': int(len(X_test)),
                 'threshold': float(thr),
                 'test_precision': float(prec),
-                'test_recall': float(recall_score(y_test, y_pred, zero_division=0)),
+                'test_recall': float(rec_for_fold),
                 'pred_pos_rate': float(pred_pos_rate),
                 'brier_score': cal['brier_score'],
                 'ece': cal['ece'],
                 'calibration_rows': cal['rows'],
-            })
+            }
+            if threshold_policy:
+                fold_record.update({f"threshold_policy_{key}": value for key, value in threshold_policy.items()})
+            fold_grid.append(fold_record)
             for bin_row in cal.get('bins', []):
                 calibration_reliability_rows.append({'fold_id': int(fold), **bin_row})
             margin = float(thr)
@@ -2179,9 +2307,22 @@ def main():
 
     no_onnx = bool(getattr(args, 'no_onnx', False))
 
+    if RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED and not no_onnx:
+        raise RuntimeError(
+            'RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED=1 is research-only and requires --no-onnx; '
+            'refusing to run an ONNX export with OOF threshold-floor diagnostics enabled.'
+        )
+
     print(f">>> Training model family: {_normalize_model_family(MODEL_FAMILY)}")
     print(f">>> Regime model family: {_normalize_model_family(REGIME_MODEL_FAMILY)}")
     print(f">>> Train legacy 30s exit models: {TRAIN_LEGACY_30S_EXIT_MODELS}")
+    if RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED:
+        print(
+            '>>> Research short threshold floor enabled '
+            f"(min_pred_pos_rate={RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE}, "
+            f"min_pred_pos_count={RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT}, "
+            f"min_precision={RESEARCH_SHORT_THRESHOLD_MIN_PRECISION}; --no-onnx required)."
+        )
 
     require_model_family_available(MODEL_FAMILY, context_name='MODEL_FAMILY')
     require_model_family_available(REGIME_MODEL_FAMILY, context_name='REGIME_MODEL_FAMILY')
@@ -2644,6 +2785,7 @@ def main():
         'walk_forward': {
             'n_splits': N_SPLITS,
             'day_gap': DAY_GAP_BETWEEN_TRAIN_TEST,
+            'research_short_threshold_policy': research_short_threshold_policy_config(),
         },
         'long_entry': {
             'avg_threshold': entry_sr_long.get('avg_threshold', math.nan),

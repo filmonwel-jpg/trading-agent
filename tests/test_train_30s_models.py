@@ -147,6 +147,46 @@ class TestPerformWalkForwardOof(unittest.TestCase):
                 self.assertIn(f, row)
 
 
+class TestResearchShortThresholdPolicy(unittest.TestCase):
+    def test_research_short_threshold_floor_is_disabled_by_default(self):
+        y = np.array([1, 0, 1, 0, 0], dtype=np.int8)
+        p = np.array([0.55, 0.54, 0.53, 0.20, 0.10], dtype=float)
+
+        with unittest.mock.patch.object(t30, 'RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED', False):
+            threshold, metrics, policy = t30.apply_research_short_threshold_floor(y, p, 0.60)
+
+        self.assertEqual(threshold, 0.60)
+        self.assertEqual(metrics['pred_pos_count'], 0)
+        self.assertFalse(policy['applied'])
+        self.assertEqual(policy['reason'], 'disabled')
+
+    def test_research_short_threshold_floor_can_satisfy_count_and_precision(self):
+        y = np.array([1, 0, 1, 0, 0], dtype=np.int8)
+        p = np.array([0.55, 0.54, 0.53, 0.20, 0.10], dtype=float)
+
+        with unittest.mock.patch.object(t30, 'RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED', True), \
+             unittest.mock.patch.object(t30, 'RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE', 0.0), \
+             unittest.mock.patch.object(t30, 'RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT', 2), \
+             unittest.mock.patch.object(t30, 'RESEARCH_SHORT_THRESHOLD_MIN_PRECISION', 0.60):
+            threshold, metrics, policy = t30.apply_research_short_threshold_floor(y, p, 0.60)
+
+        self.assertAlmostEqual(threshold, 0.53)
+        self.assertEqual(metrics['pred_pos_count'], 3)
+        self.assertAlmostEqual(metrics['precision'], 2 / 3)
+        self.assertTrue(policy['applied'])
+        self.assertTrue(policy['precision_floor_met'])
+
+    def test_research_short_threshold_policy_requires_no_onnx(self):
+        old_argv = sys.argv[:]
+        sys.argv = ["train_30s_models.py", "--input-csv", "/tmp/does-not-matter.csv"]
+        try:
+            with unittest.mock.patch.object(t30, 'RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED', True):
+                with self.assertRaisesRegex(RuntimeError, "requires --no-onnx"):
+                    t30.main()
+        finally:
+            sys.argv = old_argv
+
+
 class TestMainArtifacts(unittest.TestCase):
     """Smoke-test that main() writes expected artifacts when --output-dir is given."""
 

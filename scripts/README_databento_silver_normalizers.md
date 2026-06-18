@@ -276,6 +276,29 @@ research triage tool only; threshold-floor candidates still require full
 walk-forward policy changes, frozen-holdout checks, backtests, paper/shadow, and
 live feature-parity validation before any promotion.
 
+For a no-ONNX research-only trainer experiment, the short-entry OOF threshold
+floor can be enabled explicitly. This mode is intentionally leakage-prone: it
+uses OOF test-fold probabilities to lower short-entry thresholds enough to meet
+the configured prediction floor, and optionally searches for a precision floor.
+It refuses to run unless `--no-onnx` is supplied and must never be used for
+production promotion:
+
+```zsh
+export RESEARCH_SHORT_THRESHOLD_FLOOR_ENABLED=1
+export RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_RATE=0.005
+export RESEARCH_SHORT_THRESHOLD_MIN_PRED_POS_COUNT=20
+export RESEARCH_SHORT_THRESHOLD_MIN_PRECISION=0.20
+
+python3 train_30s_models.py \
+  --input-csv "$ENRICHED_30S_ROOT/combined/combined_30s.csv" \
+  --output-dir "$RUN_ROOT" \
+  --no-onnx
+```
+
+The policy settings are recorded under
+`setup_manifest.json -> walk_forward -> research_short_threshold_policy`, and
+per-fold policy fields are appended to `threshold_grid.csv` for audit.
+
 This is not a production promotion gate. Promotion still requires calibration,
 backtest, paper/shadow, and live feature-parity checks for the active silver
 feature schema.
