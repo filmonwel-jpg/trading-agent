@@ -21,6 +21,7 @@ from typing import Any
 DEFAULT_EXPECTED_SOURCES = [
     "equs_tbbo_20260523",
     "opra_ohlcv1s_20260523",
+    "equs_definition_20260612",
     "equs_mbp1_20260612",
     "opra_tcbbo_20260612",
     "opra_definition_20260612",
@@ -32,6 +33,8 @@ class CheckedSourceFile:
     date: str
     source_label: str
     path: str
+    checked_path: str
+    path_remapped: bool
     expected_size: int
     actual_size: int | None
     exists: bool
@@ -69,6 +72,25 @@ def _int(raw: object, default: int = 0) -> int:
         return default
 
 
+def parse_path_prefix_map(raw: str) -> tuple[Path, Path]:
+    if "=" not in raw:
+        raise argparse.ArgumentTypeError("--path-prefix-map must be OLD_PREFIX=NEW_PREFIX")
+    old, new = raw.split("=", 1)
+    if not old.strip() or not new.strip():
+        raise argparse.ArgumentTypeError("--path-prefix-map requires non-empty OLD_PREFIX and NEW_PREFIX")
+    return Path(old).expanduser().resolve(), Path(new).expanduser().resolve()
+
+
+def remap_path(path: Path, prefix_maps: list[tuple[Path, Path]]) -> tuple[Path, bool]:
+    for old_prefix, new_prefix in prefix_maps:
+        try:
+            relative = path.resolve().relative_to(old_prefix)
+        except ValueError:
+            continue
+        return new_prefix / relative, True
+    return path, False
+
+
 def latest_child(root: Path, pattern: str) -> Path:
     matches = sorted(root.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True)
     if not matches:
@@ -92,6 +114,7 @@ def verify(
     output_dir: Path,
     expected_sources: list[str],
     expected_days: int,
+    path_prefix_maps: list[tuple[Path, Path]] | None = None,
 ) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -143,22 +166,27 @@ def verify(
     if unexpected_sources:
         errors.append(f"unexpected source labels selected: {sorted(unexpected_sources)}")
 
+    prefix_maps = path_prefix_maps or []
     checked_rows: list[CheckedSourceFile] = []
     total_bytes = 0
     for row in files:
         path = Path(row.get("path", ""))
+        checked_path, path_remapped = remap_path(path, prefix_maps)
         expected_size = _int(row.get("bytes"))
-        exists = path.exists()
-        actual_size = path.stat().st_size if exists else None
+        exists = checked_path.exists()
+        actual_size = checked_path.stat().st_size if exists else None
         size_ok = exists and actual_size == expected_size
         sha256_status = row.get("sha256_status", "")
         sha256_present = bool(row.get("sha256", ""))
         sha256_error = row.get("sha256_error", "")
 
         if not exists:
-            errors.append(f"missing source file: {path}")
+            if path_remapped:
+                errors.append(f"missing source file: {path} remapped_to={checked_path}")
+            else:
+                errors.append(f"missing source file: {path}")
         elif not size_ok:
-            errors.append(f"size mismatch: {path} expected={expected_size} actual={actual_size}")
+            errors.append(f"size mismatch: {path} checked_path={checked_path} expected={expected_size} actual={actual_size}")
         if sha256_status != "ok":
             errors.append(f"hash status not ok: {path} status={sha256_status}")
         if not sha256_present:
@@ -172,6 +200,8 @@ def verify(
                 date=row.get("date", ""),
                 source_label=row.get("source_label", ""),
                 path=str(path),
+                checked_path=str(checked_path),
+                path_remapped=path_remapped,
                 expected_size=expected_size,
                 actual_size=actual_size,
                 exists=exists,
@@ -188,6 +218,7 @@ def verify(
         "hash_dir": str(hash_dir),
         "audit_dir": str(audit_dir),
         "pilot_dir": str(pilot_dir),
+        "path_prefix_maps": [(str(old), str(new)) for old, new in prefix_maps],
         "selected_dates": date_values,
         "selected_file_count": len(files),
         "expected_file_count": expected_file_count,
@@ -216,7 +247,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pilot-dates-dir", type=Path, help="pilot_dates_latest10_* directory. Defaults to latest.")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory for prebuild check outputs.")
     parser.add_argument("--expected-days", type=int, default=10, help="Expected number of pilot dates.")
-    parser.add_argument("--expected-source", action="append", help="Expected source label. Repeatable. Defaults to the five pilot sources.")
+    parser.add_argument("--expected-source", action="append", help="Expected source label. Repeatable. Defaults to the six pilot sources.")
+    parser.add_argument(
+        "--path-prefix-map",
+        action="append",
+        type=parse_path_prefix_map,
+        help="Remap selected manifest source paths from OLD_PREFIX to NEW_PREFIX. Format: OLD_PREFIX=NEW_PREFIX. Repeatable.",
+    )
     return parser
 
 
@@ -232,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir.expanduser().resolve(),
         expected_sources=expected_sources,
         expected_days=args.expected_days,
+        path_prefix_maps=args.path_prefix_map,
     )
 
 

@@ -1366,6 +1366,33 @@ Action done on 2026-06-16 — lifecycle/micro rerun using the CatBoost no-news s
 - Interpretation: the CatBoost no-news setup OOF is a healthier upstream setup signal and does not break the downstream lifecycle/micro posthoc artifact gate, but the downstream gate profile is broadly similar to the prior RandomForest-setup run. This is still **research/evaluation-only** and still **NO-GO for paper/live promotion** until runtime calibration, replay parity, full PnL/day-dominance backtests, paper/shadow drift checks, and label-economics review pass.
 - Audit hardening after this review: `scripts/run_broader_full_window_cost_aware_chain_20260616.sh` now persists `SETUP_PREDICTIONS`, `RUN_STAGE_INPUTS`, `RUN_SETUP_STAGE`, `RUN_LIFECYCLE_STAGE`, `RUNNER_PREFLIGHT_ONLY`, and lifecycle cap settings into `chain_config.env` for future lifecycle-only reruns. The already-completed CatBoost chain predates this small config-recording hardening, so its setup-skipped proof comes from the screen/log plus the external `SETUP_OUT_DIR` and validated CatBoost OOF path.
 
+Action plan on 2026-06-17 — precision improvement priority before further lifecycle runs:
+
+- Pause additional setup-family/threshold tuning as the primary precision lever. RandomForest, LightGBM, CatBoost, stricter `COST_AWARE_MIN_NET_R_LABEL`, and meta-producer toggles have already shown that model-family changes alone are producing small or mixed setup precision gains.
+- Return to the previously skipped richer-source Phase 1: implement silver normalizers/readers for `EQUS mbp-1`, `OPRA tcbbo`, and both definition sources (`EQUS definition`, `OPRA definition`) before making another full-window setup-quality claim.
+- Treat the next enriched build as a controlled feature-source experiment, not a promotion run: same dates, symbols, labels, CatBoost/no-news baseline settings, and OOF/global/day-concentration review, changing only the added source-derived feature block.
+
+Action done / decision on 2026-06-17:
+
+- Decision: **GO for Phase 1 richer-source normalizer work before more lifecycle/micro reruns**. The current best setup precision remains around the high-30% range, so the next material precision lever is better market-state data rather than more learner tuning on the same baseline columns.
+- Current baseline builder status: `build_30s_from_5s_csv.py` consumes only `EQUS tbbo` via `--dbeq-dir` and `OPRA ohlcv-1s` via `--opra-dir`. The 20260612 `EQUS definition`, `EQUS mbp-1`, `OPRA tcbbo`, and `OPRA definition` folders are still inventory/audit-only until new normalizers/readers are implemented.
+- Expected feature lift from richer sources:
+  - `EQUS mbp-1`: better quote-state coverage, spread/imbalance stability, quote-update intensity, quote age, locked/crossed flags, and liquidity-regime features than the current trade/top-of-book baseline.
+  - `OPRA tcbbo`: option trade + quote context instead of only compact `ohlcv-1s` volume bars; enables option spread/liquidity, call/put pressure quality, quote/trade alignment, and premium-flow features.
+  - `EQUS definition`: stable equity metadata/instrument identity checks; useful mainly for data validation/schema integrity on the current five-symbol equity pilot.
+  - `OPRA definition`: critical option metadata for expiry, strike, right, multiplier, moneyness/tenor buckets, and filtering illiquid or malformed option rows.
+- Guardrail fixed in code: `scripts/verify_databento_pilot_prebuild.py` now defaults to six expected sources and includes `equs_definition_20260612`; `tests/test_verify_databento_pilot_prebuild.py` has a regression test for the six-source default.
+- Validation: `python3 -m py_compile scripts/verify_databento_pilot_prebuild.py tests/test_verify_databento_pilot_prebuild.py` and `python3 -m unittest discover -s tests -p 'test_verify_databento_pilot_prebuild.py' -v` passed on this computer.
+- Current-machine note: `/Volumes/DatabentoVault` was not mounted during this 2026-06-17 control-plane inspection, so raw external-file existence was not reverified here. Run the six-source prebuild check on the 48GB/write-capable machine before any enriched build.
+
+Action follow-up on 2026-06-17 — first 48GB six-source prebuild check failed correctly:
+
+- The first rerun selected stale artifacts: `source_inventory_hashes_20260613_133951`, `pilot_dates_latest10_20260613_153639`, and `dbn_audit_summary_recent_old_20260613_150239`.
+- Failure reason 1: the selected pilot manifest still had only five source files per date (`selected_file_count=50`, each date count `5`) and did not include the corrected `equs_definition_20260612` source. A true six-source 10-day pilot should select `60` files.
+- Failure reason 2: the selected source rows pointed to old raw paths under `/Volumes/DatabentoVault/<raw-folder>/...`, but the 2026-06-16 storage-policy correction says the raw DBNs currently live in `/Users/filmonghezehey/Downloads`; generated outputs only should go under `$LAKE_ROOT`.
+- Code hardening after this failure: `scripts/verify_databento_pilot_prebuild.py` supports `--path-prefix-map OLD_PREFIX=NEW_PREFIX` and records both `path` and `checked_path` in `prebuild_manifest_check_files.csv`. This is useful for validating legacy manifests against moved raw roots, but the preferred fix for Phase 1 is to regenerate source inventory and pilot-date manifests from the current `Downloads` raw root.
+- Validation after this hardening: `python3 -m py_compile scripts/verify_databento_pilot_prebuild.py tests/test_verify_databento_pilot_prebuild.py` and `python3 -m unittest discover -s tests -p 'test_verify_databento_pilot_prebuild.py' -v` passed with `4` focused tests.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
@@ -1404,23 +1431,26 @@ Recommended first 48GB-machine output shape:
 # Example only; adapt paths to the 48GB machine.
 export RAW_EQUS_TBBO=/path/to/EQUS-20260523-6J9KE98BJ9
 export RAW_OPRA_OHLCV=/path/to/OPRA-20260523-MSV68VKVKD
+export RAW_EQUS_DEFINITION=/path/to/EQUS-20260612-GFHRSU6F48
 export RAW_EQUS_MBP1=/path/to/EQUS-20260612-36BEU4G7M8
 export RAW_OPRA_TCBBO=/path/to/OPRA-20260612-KN5TPHB5EF
 export RAW_OPRA_DEFINITION=/path/to/OPRA-20260612-B5D4JV3GV6
 export OUT_ROOT=/path/to/writeable/training_data/dynamic_pilot_20260613
+export DOWNLOAD_ROOT=/Users/filmonghezehey/Downloads
 
 mkdir -p "$OUT_ROOT"/manifests "$OUT_ROOT"/raw_audits "$OUT_ROOT"/pilot_10d "$OUT_ROOT"/logs
 
 export HASH_RUN_ID="source_inventory_hashes_$(date +%Y%m%d_%H%M%S)"
 
 python3 scripts/audit_databento_pilot_sources.py \
+  --vault-root "$DOWNLOAD_ROOT" \
   --output-dir "$OUT_ROOT/manifests/$HASH_RUN_ID" \
-  --include-hashes
+  --include-hashes \
+  --exclude-source-label opra_definition_20260612_duplicate
 
 # If hashing reports an I/O error, pull the version containing resilient hash
 # recording and inspect manifest.json/source_files.csv for the exact file path.
-# If the problem is only the duplicate OPRA definition folder, rerun with:
-#   --exclude-source-label opra_definition_20260612_duplicate
+# The duplicate OPRA definition folder is excluded by default for Phase 1.
 
 export DBN_AUDIT_RUN_ID="dbn_day_audit_20260521_$(date +%Y%m%d_%H%M%S)"
 
