@@ -1549,6 +1549,25 @@ Action done on 2026-06-18 — short-entry threshold-floor diagnostics show the z
   - `equs`: no zero/thin folds after flooring, total short predictions `311`, estimated true positives `96`, aggregate precision `0.308682`, but fold precision min remains only `0.033333`.
 - Interpretation: a simple prediction-count floor can fix mechanical zero/thin folds, but it does **not** fix unstable short-entry precision across folds. Promotion remains **NO-GO**. Next research step should evaluate a research-only trainer threshold policy that includes both minimum predicted-positive constraints and a precision floor / fold-stability objective; do not export ONNX from this experiment.
 
+Action done on 2026-06-18 — local no-news CatBoost/meta plus Databento silver tests completed one-by-one, reading the external vault and writing only under repository `runtime/`:
+
+- Local experiment root: `/Users/FXG06FA/trading-agent-main/runtime/databento_catboost_meta_silver_no_news_20260619_012148`.
+- All runs used `MODEL_FAMILY=catboost`, `REGIME_MODEL_FAMILY=catboost`, `USE_NEWS_BAR_FEATURES=0`, `TRAIN_LEGACY_30S_EXIT_MODELS=0`, `UPDATE_CANONICAL_MODEL_ALIASES=0`, and `--no-onnx`. No outputs were written to `/Volumes/DatabentoVault`.
+- Runner/analyzer QA completed for all planned runs:
+  - `catboost_nonews_nometa`: baseline `feature_count=34`, `liquidity` `feature_count=51`, `silver_count=17`, `training_rows=35685`, `paired_oof_rows=18000`, `DATABENTO_SILVER_ABLATION_QA=PASS`.
+  - `catboost_nonews_meta`: baseline `feature_count=66`, `liquidity` `feature_count=83`, `all` `feature_count=101`, `equs` `feature_count=80`, expected silver counts `17/35/14`, `training_rows=35685`, `paired_oof_rows=18000`, `DATABENTO_SILVER_ABLATION_QA=PASS`.
+- Main precision/fold-stability result versus the matching CatBoost no-news baseline for each feature mode:
+  - `catboost_nonews_nometa/liquidity`: long precision `0.333391` (`-0.004128` delta), short precision `0.224950` (`-0.016055` delta), short fold 1 remained a zero-prediction blocker.
+  - `catboost_nonews_meta/liquidity`: long precision `0.351004` (`+0.013359` delta), but short precision collapsed to `0.232106` (`-0.188231` delta), short fold 1 zero-prediction blocker.
+  - `catboost_nonews_meta/all`: long precision `0.337336` (`-0.000309` delta), short precision `0.211361` (`-0.208977` delta), short fold 1 thin blocker.
+  - `catboost_nonews_meta/equs`: best long lift in this local matrix, long precision `0.358769` (`+0.021123` delta), but short precision `0.215185` (`-0.205153` delta), short fold 1 thin blocker.
+- Short-threshold floor diagnostics also passed QA but were not encouraging:
+  - no-meta `liquidity` fold 1: threshold `0.6200 -> 0.4241`, `20` predictions, floor precision `0.000000`.
+  - meta `liquidity` fold 1: threshold `0.6600 -> 0.3865`, `20` predictions, floor precision `0.150000`.
+  - meta `all` fold 1: threshold `0.6000 -> 0.3856`, `20` predictions, floor precision `0.000000`.
+  - meta `equs` fold 1: threshold `0.6200 -> 0.5023`, `20` predictions, floor precision `0.000000`.
+- Interpretation: combining CatBoost, meta producer features, no-news mode, and the new silver/liquidity/all/equs blocks did **not** improve the actual blocker. The best long-side readout was `catboost_nonews_meta/equs`, but every combined CatBoost/meta silver candidate materially degraded short-entry precision versus its matching no-silver CatBoost/meta baseline and retained a zero/thin short fold. This matrix is **NO-GO** for promotion and should not be used as the next production candidate. The earlier RandomForest silver `liquidity` readout remains the more useful silver-source signal, but still requires solving short-fold stability and precision before any paper/live step.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.
