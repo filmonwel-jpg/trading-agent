@@ -1,0 +1,1 @@
+model,filename,calibration_method,threshold,precision,recall,pred_pos_rate,predicted_positive_count,brier_score,ece,calibration_rows,max_predicted_day_fraction

@@ -193,7 +193,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         command.add(System.getProperty("backtest.databento.python", System.getProperty("trading.databento.python-bin", "python3")));
         command.add(System.getProperty("backtest.databento.streamer", "scripts/databento_historical_streamer.py"));
         command.add("--source");
-        command.add("api");
+        command.add(System.getProperty("backtest.databento.source", "api"));
         command.add("--symbols");
         command.add(symbol);
         addOptionalArg(command, "--start", System.getProperty("backtest.databento.start", ""));
@@ -204,6 +204,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         addOptionalArg(command, "--options-dataset", System.getProperty("backtest.databento.optionsDataset", "OPRA.PILLAR"));
         addOptionalArg(command, "--options-schema", System.getProperty("backtest.databento.optionsSchema", "ohlcv-1s"));
         addOptionalArg(command, "--options-stype-in", System.getProperty("backtest.databento.optionsStypeIn", "parent"));
+        addRepeatedOptionalArg(command, "--input-file", System.getProperty("backtest.databento.inputFile", System.getProperty("backtest.databento.recordedEventsFile", "")));
         if (Boolean.parseBoolean(System.getProperty("backtest.databento.dryRun", "false"))) {
             command.add("--dry-run");
         }
@@ -214,6 +215,15 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         if (value != null && !value.isBlank()) {
             command.add(flag);
             command.add(value.trim());
+        }
+    }
+
+    private static void addRepeatedOptionalArg(List<String> command, String flag, String rawValues) {
+        if (rawValues == null || rawValues.isBlank()) {
+            return;
+        }
+        for (String rawValue : rawValues.split(",")) {
+            addOptionalArg(command, flag, rawValue);
         }
     }
 

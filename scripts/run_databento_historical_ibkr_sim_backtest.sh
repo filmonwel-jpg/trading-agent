@@ -20,6 +20,8 @@ DRY_RUN="${DRY_RUN:-false}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 BACKTEST_MAX_TRADES="${BACKTEST_MAX_TRADES:-2000}"
 BACKTEST_MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-500}"
+BACKTEST_DATABENTO_SOURCE="${BACKTEST_DATABENTO_SOURCE:-api}"
+BACKTEST_RECORDED_EVENTS_FILE="${BACKTEST_RECORDED_EVENTS_FILE:-}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 ROUTING_CSV="${TRADING_DATABENTO_MODEL_ROUTING_CSV:-runtime/databento/model-routing.csv}"
 CLASSPATH_FILE="${BACKTEST_CLASSPATH_FILE:-runtime/backtests/databento_ibkr_sim_backtest_cp.txt}"
@@ -50,6 +52,8 @@ Options:
   --model-dir DIR          30s ONNX model bundle directory. If omitted, runtime/databento/model-routing.csv is used when possible.
   --python-bin PATH        Python with databento installed. If omitted, common python3 locations are searched.
   --databento-env-file F   Env file containing DATABENTO_API_KEY. Default: runtime/databento.env
+  --source api|ndjson     Stream source for the Java backtester. Default: api
+  --recorded-events FILE  Recorded normalized NDJSON/NDJSON.GZ file for --source ndjson. Can be comma-separated.
   --dry-run                Validate wiring without downloading Databento data.
   --timeout-seconds N      Kill the Databento stream if it has not completed after N seconds. Default: 0 (no timeout)
   --max-trades N           Strategy max trades during replay. Default: 2000
@@ -288,7 +292,7 @@ resolve_python_bin() {
   local configured="$1" candidate resolved
   local -a candidates=()
   [[ -n "$configured" ]] && candidates+=("$configured")
-  candidates+=("$ROOT/runtime/databento/python-venv/bin/python3" "$HOME/miniforge3/bin/python3" python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3)
+  candidates+=("$ROOT/.venv/bin/python" "$ROOT/.venv/bin/python3" "$ROOT/runtime/databento/python-venv/bin/python3" "$HOME/miniforge3/bin/python3" python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3)
   for candidate in "${candidates[@]}"; do
     if [[ -x "$candidate" ]]; then
       resolved="$candidate"
@@ -296,6 +300,25 @@ resolve_python_bin() {
       resolved="$(command -v "$candidate" 2>/dev/null || true)"
     fi
     if [[ -n "$resolved" ]] && "$resolved" -c 'import databento, pandas' >/dev/null 2>&1; then
+      printf '%s' "$resolved"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_basic_python_bin() {
+  local configured="$1" candidate resolved
+  local -a candidates=()
+  [[ -n "$configured" ]] && candidates+=("$configured")
+  candidates+=("$ROOT/.venv/bin/python" "$ROOT/.venv/bin/python3" "$ROOT/runtime/databento/python-venv/bin/python3" "$HOME/miniforge3/bin/python3" python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3)
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      resolved="$candidate"
+    else
+      resolved="$(command -v "$candidate" 2>/dev/null || true)"
+    fi
+    if [[ -n "$resolved" ]] && "$resolved" -c 'import pandas' >/dev/null 2>&1; then
       printf '%s' "$resolved"
       return 0
     fi
@@ -313,7 +336,22 @@ csv_threshold() {
   local model_name="$1" default_value="$2" scorecard="$3"
   if [[ -f "$scorecard" ]]; then
     awk -F, -v model="$model_name" -v fallback="$default_value" '
-      NR > 1 && $1 == model {printf "%.4f", $6 + 0; found=1; exit}
+      function trim(s) { gsub(/^[[:space:]\r\n]+|[[:space:]\r\n]+$/, "", s); return s }
+      function field(name) { return idx[name] ? trim($(idx[name])) : "" }
+      NR == 1 {
+        for (i = 1; i <= NF; i++) idx[trim($i)] = i
+        next
+      }
+      field("model") == model {
+        value = fallback
+        raw_threshold = field("threshold")
+        posthoc_threshold = field("posthoc_threshold")
+        if (raw_threshold != "") value = raw_threshold
+        if (posthoc_threshold != "") value = posthoc_threshold
+        printf "%.4f", value + 0
+        found=1
+        exit
+      }
       END {if (!found) printf "%.4f", fallback + 0}
     ' "$scorecard"
   else
@@ -342,6 +380,10 @@ while [[ $# -gt 0 ]]; do
     --model-dir) MODEL_DIR="$2"; shift 2 ;;
     --python-bin) PYTHON_BIN="$2"; shift 2 ;;
     --databento-env-file) DATABENTO_ENV_FILE="$2"; shift 2 ;;
+    --source) BACKTEST_DATABENTO_SOURCE="$2"; shift 2 ;;
+    --source=*) BACKTEST_DATABENTO_SOURCE="${1#--source=}"; shift ;;
+    --recorded-events|--input-file) BACKTEST_RECORDED_EVENTS_FILE="$2"; shift 2 ;;
+    --recorded-events=*|--input-file=*) BACKTEST_RECORDED_EVENTS_FILE="${1#*=}"; shift ;;
     --dry-run) DRY_RUN="true"; shift ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --max-trades) BACKTEST_MAX_TRADES="$2"; shift 2 ;;
@@ -375,8 +417,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! truthy "$LIST_SYMBOLS_ONLY" && [[ -z "$START_DATE" || -z "$END_DATE" ]]; then
+BACKTEST_DATABENTO_SOURCE="$(printf '%s' "$BACKTEST_DATABENTO_SOURCE" | tr '[:upper:]' '[:lower:]')"
+if [[ "$BACKTEST_DATABENTO_SOURCE" != "api" && "$BACKTEST_DATABENTO_SOURCE" != "ndjson" ]]; then
+  echo "[BACKTEST][ERROR] --source must be api or ndjson." >&2
+  exit 2
+fi
+if ! truthy "$LIST_SYMBOLS_ONLY" && [[ "$BACKTEST_DATABENTO_SOURCE" == "api" && ( -z "$START_DATE" || -z "$END_DATE" ) ]]; then
   echo "[BACKTEST][ERROR] --start and --end are required." >&2
+  usage >&2
+  exit 2
+fi
+if ! truthy "$LIST_SYMBOLS_ONLY" && [[ "$BACKTEST_DATABENTO_SOURCE" == "ndjson" && -z "$BACKTEST_RECORDED_EVENTS_FILE" ]]; then
+  echo "[BACKTEST][ERROR] --source ndjson requires --recorded-events." >&2
   usage >&2
   exit 2
 fi
@@ -437,6 +489,7 @@ fi
 printf '[BACKTEST] symbols=%s\n' "$(printf '%s,' "${symbols[@]}" | sed 's/,$//')"
 printf '[BACKTEST] symbols_count=%s symbols_file=%s\n' "${#symbols[@]}" "$SYMBOLS_FILE"
 printf '[BACKTEST] classpath_file=%s\n' "$CLASSPATH_FILE"
+printf '[BACKTEST] source=%s recorded_events=%s\n' "$BACKTEST_DATABENTO_SOURCE" "${BACKTEST_RECORDED_EVENTS_FILE:-<none>}"
 
 if usable_databento_key "${DATABENTO_API_KEY:-}"; then
   DATABENTO_API_KEY_SOURCE="environment"
@@ -455,15 +508,19 @@ else
   fi
 fi
 printf '[BACKTEST] databento_api_key_source=%s\n' "$DATABENTO_API_KEY_SOURCE"
-if ! truthy "$DRY_RUN" && ! usable_databento_key "${DATABENTO_API_KEY:-}"; then
+if [[ "$BACKTEST_DATABENTO_SOURCE" == "api" ]] && ! truthy "$DRY_RUN" && ! usable_databento_key "${DATABENTO_API_KEY:-}"; then
   echo "[BACKTEST][ERROR] Missing valid DATABENTO_API_KEY for non-dry-run historical API streaming." >&2
   echo "[BACKTEST][ERROR] Set it in the parent environment or in $DATABENTO_ENV_FILE, matching the live Databento sidecar path." >&2
   exit 1
 fi
 
-PYTHON_BIN="$(resolve_python_bin "$PYTHON_BIN" || true)"
+if [[ "$BACKTEST_DATABENTO_SOURCE" == "ndjson" ]]; then
+  PYTHON_BIN="$(resolve_basic_python_bin "$PYTHON_BIN" || true)"
+else
+  PYTHON_BIN="$(resolve_python_bin "$PYTHON_BIN" || true)"
+fi
 if [[ -z "$PYTHON_BIN" ]]; then
-  echo "[BACKTEST][ERROR] Could not find Python with databento and pandas installed." >&2
+  echo "[BACKTEST][ERROR] Could not find Python with required replay packages installed." >&2
   echo "[BACKTEST][ERROR] Try: python3 -m pip install -r requirements.txt" >&2
   exit 1
 fi
@@ -503,8 +560,8 @@ elif [[ ! -f "$CLASSPATH_FILE" ]]; then
 fi
 
 RUN_TS="$(date +%Y%m%d_%H%M%S)"
-SAFE_START="$(printf '%s' "$START_DATE" | tr -c '[:alnum:]' '_')"
-SAFE_END="$(printf '%s' "$END_DATE" | tr -c '[:alnum:]' '_')"
+SAFE_START="$(printf '%s' "${START_DATE:-recorded}" | tr -c '[:alnum:]' '_')"
+SAFE_END="$(printf '%s' "${END_DATE:-recorded}" | tr -c '[:alnum:]' '_')"
 CLASSPATH="target/classes:$(cat "$CLASSPATH_FILE")"
 
 failures=0
@@ -540,11 +597,13 @@ for SYMBOL in "${symbols[@]}"; do
   TRADE_LOG="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-trades.csv"
   ORDER_HISTORY="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-orders.csv"
   TRADE_LIFECYCLE_SUMMARY="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-trade-lifecycle-summary.csv"
+  STREAM_SANITY_REPORT="$OUTPUT_DIR/${SYMBOL}-${SAFE_START}-to-${SAFE_END}-${RUN_TS}-stream-sanity.json"
   JAVA_PROPS=(
     "-Dbacktest.symbol=$SYMBOL"
     "-Dbacktest.ibkrSimulation=true"
     "-Dbacktest.databento.python=$PYTHON_BIN"
     "-Dbacktest.databento.streamer=scripts/databento_historical_streamer.py"
+    "-Dbacktest.databento.source=$BACKTEST_DATABENTO_SOURCE"
     "-Dbacktest.databento.start=$START_DATE"
     "-Dbacktest.databento.end=$END_DATE"
     "-Dbacktest.databento.equityDataset=${DATABENTO_EQUITY_DATASET:-EQUS.MINI}"
@@ -560,9 +619,11 @@ for SYMBOL in "${symbols[@]}"; do
     "-Dbacktest.tradeLogFile=$TRADE_LOG"
     "-Dbacktest.orderHistoryFile=$ORDER_HISTORY"
     "-Dbacktest.tradeLifecycleSummaryFile=$TRADE_LIFECYCLE_SUMMARY"
+    "-Dbacktest.streamSanityReportFile=$STREAM_SANITY_REPORT"
   )
   [[ -n "$MODEL_DIR" ]] && JAVA_PROPS+=("-Dtrading.model.dir=$MODEL_DIR")
   [[ -n "$BACKTEST_PREVIOUS_CLOSE" ]] && JAVA_PROPS+=("-Dbacktest.previousClose=$BACKTEST_PREVIOUS_CLOSE")
+  [[ -n "$BACKTEST_RECORDED_EVENTS_FILE" ]] && JAVA_PROPS+=("-Dbacktest.databento.inputFile=$BACKTEST_RECORDED_EVENTS_FILE")
   MICRO_LONG_ENTRY_THRESHOLD_RESOLVED=""
   MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED=""
   LIFECYCLE_LONG_EXIT_THRESHOLD_RESOLVED=""
@@ -602,7 +663,7 @@ for SYMBOL in "${symbols[@]}"; do
 
   cat <<SUMMARY
 [BACKTEST] ------------------------------------------------------------
-[BACKTEST] symbol=$SYMBOL start=$START_DATE end=$END_DATE dry_run=$DRY_RUN ibkr_simulation=true
+[BACKTEST] symbol=$SYMBOL start=${START_DATE:-<recorded>} end=${END_DATE:-<recorded>} dry_run=$DRY_RUN ibkr_simulation=true source=$BACKTEST_DATABENTO_SOURCE
 [BACKTEST] python_bin=$PYTHON_BIN
 [BACKTEST] model_dir=${MODEL_DIR:-<none>}
 [BACKTEST] lifecycle_micro_enabled=$LIFECYCLE_MICRO_ENABLED lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
@@ -612,6 +673,7 @@ for SYMBOL in "${symbols[@]}"; do
 [BACKTEST] trade_log=$TRADE_LOG
 [BACKTEST] order_history=$ORDER_HISTORY
 [BACKTEST] trade_lifecycle_summary=$TRADE_LIFECYCLE_SUMMARY
+[BACKTEST] stream_sanity_report=$STREAM_SANITY_REPORT
 SUMMARY
 
   if java -cp "$CLASSPATH" \

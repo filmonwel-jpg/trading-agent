@@ -361,6 +361,7 @@ public class PingPongStrategy implements TradingStrategy {
     private static final boolean LIFECYCLE_DIAGNOSTIC_FALLBACK = Boolean.parseBoolean(System.getProperty("strategy.lifecycle.diagnosticFallback", "false"));
     private static final boolean MICRO_ENTRY_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.entryEnabled", "false"));
     private static final boolean MICRO_EXIT_GUARD_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.exitGuardEnabled", "false"));
+    private static final boolean POSTHOC_CALIBRATION_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.calibration.posthocEnabled", "true"));
     private static final String LIFECYCLE_MODEL_DIR = System.getProperty("strategy.lifecycle.modelDir", "").trim();
     private static final String MICRO_MODEL_DIR = System.getProperty("strategy.micro.modelDir", "").trim();
     private static final double LIFECYCLE_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.longThreshold", "0.60"));
@@ -617,6 +618,8 @@ public class PingPongStrategy implements TradingStrategy {
     private LazyAiPredictor shortMicroEntryAi;
     private LazyAiPredictor longMicroExitGuardAi;
     private LazyAiPredictor shortMicroExitGuardAi;
+    private final Map<String, ProbabilityCalibrator> upgradedRouteCalibrators = new ConcurrentHashMap<>();
+    private final Map<String, Double> upgradedRouteThresholds = new ConcurrentHashMap<>();
     private volatile boolean upgradedModelRouteValid = true;
     private volatile MarketRegime lastDetectedRegime = MarketRegime.CHOPPY;
 
@@ -1159,8 +1162,25 @@ public class PingPongStrategy implements TradingStrategy {
                     rowByModel.put(name, row);
                 }
             }
+            boolean anyPosthocEnabled = rowByModel.values().stream().anyMatch(this::routePosthocEnabled);
+            Map<String, ProbabilityCalibrator> selectedCalibrators = anyPosthocEnabled
+                ? loadSelectedPosthocCalibrators(new File(modelDir, "posthoc_calibrators.json"))
+                : Map.of();
+            if (!upgradedModelRouteValid) {
+                return;
+            }
             for (Map.Entry<String, List<String>> expected : expectedSchemas.entrySet()) {
-                validateManifestSchemaRow(rowByModel.get(expected.getKey()), expected.getKey(), expected.getValue());
+                String modelName = expected.getKey();
+                Map<String, Object> row = rowByModel.get(modelName);
+                validateManifestSchemaRow(row, modelName, expected.getValue());
+                if (!upgradedModelRouteValid) {
+                    return;
+                }
+                validateAndRecordRouteThreshold(row, modelName);
+                if (!upgradedModelRouteValid) {
+                    return;
+                }
+                validateAndRecordPosthocCalibrator(row, modelName, selectedCalibrators);
                 if (!upgradedModelRouteValid) {
                     return;
                 }
@@ -1169,6 +1189,119 @@ public class PingPongStrategy implements TradingStrategy {
         } catch (Exception exception) {
             invalidateUpgradedRoute("failed to read/validate lifecycle_micro_route_manifest.json reason=" + exception.getMessage());
         }
+    }
+
+    private Map<String, ProbabilityCalibrator> loadSelectedPosthocCalibrators(File artifact) {
+        if (!POSTHOC_CALIBRATION_ENABLED) {
+            invalidateUpgradedRoute("route manifest requires post-hoc calibration but strategy.calibration.posthocEnabled=false");
+            return Map.of();
+        }
+        if (artifact == null || !artifact.isFile()) {
+            invalidateUpgradedRoute("route manifest requires post-hoc calibration but missing posthoc_calibrators.json under " + (artifact == null ? "<unknown>" : artifact.getParent()));
+            return Map.of();
+        }
+        try {
+            Map<String, Object> export = JSON_MAPPER.readValue(artifact, new TypeReference<Map<String, Object>>() {});
+            Object rawModels = export.get("models");
+            if (!(rawModels instanceof List<?> models)) {
+                invalidateUpgradedRoute("posthoc_calibrators.json missing models list path=" + artifact.getAbsolutePath());
+                return Map.of();
+            }
+            Map<String, ProbabilityCalibrator> selected = new HashMap<>();
+            for (Object item : models) {
+                if (!(item instanceof Map<?, ?> rawRow)) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> row = (Map<String, Object>) rawRow;
+                ProbabilityCalibrator calibrator = ProbabilityCalibrator.fromPosthocExportRow(row);
+                if (!calibrator.selected()) {
+                    continue;
+                }
+                ProbabilityCalibrator existing = selected.putIfAbsent(calibrator.modelName(), calibrator);
+                if (existing != null) {
+                    invalidateUpgradedRoute("duplicate selected posthoc calibrator model=" + calibrator.modelName() + " path=" + artifact.getAbsolutePath());
+                    return Map.of();
+                }
+            }
+            flowInfo("AI.CALIBRATION", "Loaded selected posthoc calibrators symbol=" + symbol + " count=" + selected.size() + " artifact=" + artifact.getAbsolutePath());
+            return selected;
+        } catch (Exception exception) {
+            invalidateUpgradedRoute("failed to read/validate posthoc_calibrators.json reason=" + exception.getMessage());
+            return Map.of();
+        }
+    }
+
+    private void validateAndRecordRouteThreshold(Map<String, Object> row, String modelName) {
+        double routeThreshold = finiteProbability(row == null ? null : row.get("threshold"), Double.NaN);
+        if (!Double.isFinite(routeThreshold)) {
+            invalidateUpgradedRoute("route manifest model=" + modelName + " missing finite probability threshold");
+            return;
+        }
+        double runtimeThreshold = routeThreshold;
+        Map<String, Object> posthoc = routePosthoc(row);
+        if (posthoc != null && routePosthocEnabled(row)) {
+            Map<String, Object> selectedMetrics = objectMap(posthoc.get("selected_metrics"));
+            double posthocThreshold = finiteProbability(selectedMetrics == null ? null : selectedMetrics.get("threshold"), Double.NaN);
+            if (Double.isFinite(posthocThreshold)) {
+                runtimeThreshold = posthocThreshold;
+                if (Math.abs(routeThreshold - posthocThreshold) > 1.0e-9) {
+                    flowWarn("AI.CALIBRATION", "Route manifest raw threshold differs from selected posthoc threshold; using selected posthoc threshold symbol=" + symbol + " model=" + modelName + " routeThreshold=" + formatProb(routeThreshold) + " posthocThreshold=" + formatProb(posthocThreshold));
+                }
+            }
+        }
+        upgradedRouteThresholds.put(modelName, runtimeThreshold);
+    }
+
+    private void validateAndRecordPosthocCalibrator(Map<String, Object> row, String modelName, Map<String, ProbabilityCalibrator> selectedCalibrators) {
+        if (!routePosthocEnabled(row)) {
+            upgradedRouteCalibrators.remove(modelName);
+            return;
+        }
+        Map<String, Object> posthoc = routePosthoc(row);
+        String selectedMethod = optionalString(posthoc == null ? null : posthoc.get("selected_method"));
+        if (selectedMethod.isBlank() || !ProbabilityCalibrator.isSupportedMethodName(selectedMethod)) {
+            invalidateUpgradedRoute("route manifest model=" + modelName + " has unsupported posthoc selected_method=" + selectedMethod);
+            return;
+        }
+        ProbabilityCalibrator calibrator = selectedCalibrators.get(modelName);
+        if (calibrator == null) {
+            invalidateUpgradedRoute("route manifest model=" + modelName + " requires selected posthoc calibrator but artifact has none");
+            return;
+        }
+        String normalizedRouteMethod = ProbabilityCalibrator.normalizeMethodName(selectedMethod);
+        if (!normalizedRouteMethod.equals(calibrator.methodName())) {
+            invalidateUpgradedRoute("posthoc selected_method mismatch model=" + modelName + " route=" + normalizedRouteMethod + " artifact=" + calibrator.methodName());
+            return;
+        }
+        String routeSchemaHash = optionalString(row == null ? null : row.get("feature_schema_sha256"));
+        if (!routeSchemaHash.isBlank() && !calibrator.featureSchemaSha256().isBlank() && !routeSchemaHash.equalsIgnoreCase(calibrator.featureSchemaSha256())) {
+            invalidateUpgradedRoute("posthoc feature_schema_sha256 mismatch model=" + modelName + " route=" + routeSchemaHash + " artifact=" + calibrator.featureSchemaSha256());
+            return;
+        }
+        upgradedRouteCalibrators.put(modelName, calibrator);
+        flowInfo(
+            "AI.CALIBRATION",
+            "Applied runtime posthoc calibrator symbol=" + symbol
+                + " model=" + modelName
+                + " method=" + calibrator.methodName()
+                + " threshold=" + formatProb(upgradedRouteThreshold(modelName, Double.NaN))
+                + " featureSchemaSha256=" + routeSchemaHash
+                + " holdoutFingerprintSha256=" + calibrator.holdoutFingerprintSha256()
+        );
+    }
+
+    private boolean routePosthocEnabled(Map<String, Object> row) {
+        Map<String, Object> posthoc = routePosthoc(row);
+        return posthoc != null && booleanValue(posthoc.get("enabled"));
+    }
+
+    private Map<String, Object> routePosthoc(Map<String, Object> row) {
+        if (row == null) {
+            return null;
+        }
+        Map<String, Object> calibration = objectMap(row.get("calibration"));
+        return calibration == null ? null : objectMap(calibration.get("posthoc"));
     }
 
     private Map<String, List<String>> expectedUpgradedRouteSchemas() {
@@ -1218,6 +1351,50 @@ public class PingPongStrategy implements TradingStrategy {
         if (!expectedHash.equalsIgnoreCase(actualHash.trim())) {
             invalidateUpgradedRoute("route manifest feature_schema_sha256 mismatch model=" + modelName + " actual=" + actualHash + " expected=" + expectedHash);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> objectMap(Object raw) {
+        return raw instanceof Map<?, ?> map ? (Map<String, Object>) map : null;
+    }
+
+    private boolean booleanValue(Object raw) {
+        if (raw instanceof Boolean bool) {
+            return bool;
+        }
+        return raw != null && Boolean.parseBoolean(raw.toString());
+    }
+
+    private String optionalString(Object raw) {
+        return raw == null ? "" : raw.toString().trim();
+    }
+
+    private double finiteProbability(Object raw, double fallback) {
+        double value;
+        if (raw instanceof Number number) {
+            value = number.doubleValue();
+        } else {
+            try {
+                value = raw == null ? Double.NaN : Double.parseDouble(raw.toString());
+            } catch (NumberFormatException exception) {
+                value = Double.NaN;
+            }
+        }
+        if (!Double.isFinite(value) || value < 0.0 || value > 1.0) {
+            return fallback;
+        }
+        return value;
+    }
+
+    private double upgradedRouteThreshold(String modelName, double fallback) {
+        Double threshold = upgradedRouteThresholds.get(modelName);
+        return threshold == null ? fallback : threshold;
+    }
+
+    private double predictUpgradedRouteProbability(String modelName, LazyAiPredictor predictor, float[] features) {
+        double rawProbability = predictor == null ? 0.0 : predictor.predictProbability(features);
+        ProbabilityCalibrator calibrator = upgradedRouteCalibrators.get(modelName);
+        return calibrator == null ? ProbabilityCalibrator.clipProbability(rawProbability) : calibrator.apply(rawProbability);
     }
 
     private String firstSchemaDifference(List<String> actualColumns, List<String> expectedColumns) {
@@ -2059,9 +2236,10 @@ public class PingPongStrategy implements TradingStrategy {
         features.put("f_seconds_since_arm", (float) secondsSinceArm);
 
         if (microLongEntryArmed && longMicroEntryAi != null && longMicroEntryAi.isAvailable()) {
-            double prob = longMicroEntryAi.predictProbability(buildFeatureVector(MICRO_ENTRY_FEATURE_COLUMNS, features));
-            boolean pass = prob >= MICRO_LONG_ENTRY_THRESHOLD;
-            flowCondition("AI.MICRO.LONG.ENTRY", "MICRO_ENTRY_CONFIRMS", pass, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_LONG_ENTRY_THRESHOLD) + " secondsSinceArm=" + secondsSinceArm);
+            double threshold = upgradedRouteThreshold("longMicroEntryAi", MICRO_LONG_ENTRY_THRESHOLD);
+            double prob = predictUpgradedRouteProbability("longMicroEntryAi", longMicroEntryAi, buildFeatureVector(MICRO_ENTRY_FEATURE_COLUMNS, features));
+            boolean pass = prob >= threshold;
+            flowCondition("AI.MICRO.LONG.ENTRY", "MICRO_ENTRY_CONFIRMS", pass, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(threshold) + " secondsSinceArm=" + secondsSinceArm);
             if (pass) {
                 int qty = sharesForAmount("BUY", microBar.close());
                 if (qty > 0) {
@@ -2069,7 +2247,7 @@ public class PingPongStrategy implements TradingStrategy {
                     pendingEntryThreshold = armedSetupThreshold;
                     pendingEntryThresholdMargin = armedSetupThresholdMargin;
                     long confirmedArmEpoch = microArmEpoch;
-                    emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "long", confirmedArmEpoch, microBar.epoch(), prob, MICRO_LONG_ENTRY_THRESHOLD, qty, microBar.close()));
+                    emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "long", confirmedArmEpoch, microBar.epoch(), prob, threshold, qty, microBar.close()));
                     clearMicroEntryArms("long-confirmed");
                     this.inFlightOrder = true;
                     parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), qty, "FAST_LMT");
@@ -2079,9 +2257,10 @@ public class PingPongStrategy implements TradingStrategy {
         }
 
         if (microShortEntryArmed && shortMicroEntryAi != null && shortMicroEntryAi.isAvailable()) {
-            double prob = shortMicroEntryAi.predictProbability(buildFeatureVector(MICRO_ENTRY_FEATURE_COLUMNS, features));
-            boolean pass = prob >= MICRO_SHORT_ENTRY_THRESHOLD;
-            flowCondition("AI.MICRO.SHORT.ENTRY", "MICRO_ENTRY_CONFIRMS", pass, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_SHORT_ENTRY_THRESHOLD) + " secondsSinceArm=" + secondsSinceArm);
+            double threshold = upgradedRouteThreshold("shortMicroEntryAi", MICRO_SHORT_ENTRY_THRESHOLD);
+            double prob = predictUpgradedRouteProbability("shortMicroEntryAi", shortMicroEntryAi, buildFeatureVector(MICRO_ENTRY_FEATURE_COLUMNS, features));
+            boolean pass = prob >= threshold;
+            flowCondition("AI.MICRO.SHORT.ENTRY", "MICRO_ENTRY_CONFIRMS", pass, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(threshold) + " secondsSinceArm=" + secondsSinceArm);
             if (pass) {
                 int qty = sharesForAmount("SELL", microBar.close());
                 if (qty > 0) {
@@ -2089,7 +2268,7 @@ public class PingPongStrategy implements TradingStrategy {
                     pendingEntryThreshold = armedSetupThreshold;
                     pendingEntryThresholdMargin = armedSetupThresholdMargin;
                     long confirmedArmEpoch = microArmEpoch;
-                    emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "short", confirmedArmEpoch, microBar.epoch(), prob, MICRO_SHORT_ENTRY_THRESHOLD, qty, microBar.close()));
+                    emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "short", confirmedArmEpoch, microBar.epoch(), prob, threshold, qty, microBar.close()));
                     clearMicroEntryArms("short-confirmed");
                     this.inFlightOrder = true;
                     parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), qty, "FAST_LMT");
@@ -2108,19 +2287,21 @@ public class PingPongStrategy implements TradingStrategy {
         features.putAll(positionFeatureValues(microBar.close(), false));
 
         if (currentPosition > 0 && longMicroExitGuardAi != null && longMicroExitGuardAi.isAvailable()) {
-            double prob = longMicroExitGuardAi.predictProbability(buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
-            boolean shouldExit = prob >= MICRO_LONG_EXIT_GUARD_THRESHOLD;
-            flowCondition("AI.MICRO.LONG.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_LONG_EXIT_GUARD_THRESHOLD));
-            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroExitGuardEvaluated(symbol, "long", microBar.epoch(), prob, MICRO_LONG_EXIT_GUARD_THRESHOLD, shouldExit));
+            double threshold = upgradedRouteThreshold("longMicroExitGuardAi", MICRO_LONG_EXIT_GUARD_THRESHOLD);
+            double prob = predictUpgradedRouteProbability("longMicroExitGuardAi", longMicroExitGuardAi, buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
+            boolean shouldExit = prob >= threshold;
+            flowCondition("AI.MICRO.LONG.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(threshold));
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroExitGuardEvaluated(symbol, "long", microBar.epoch(), prob, threshold, shouldExit));
             if (shouldExit) {
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), Math.abs(currentPosition), "MKT");
             }
         } else if (currentPosition < 0 && shortMicroExitGuardAi != null && shortMicroExitGuardAi.isAvailable()) {
-            double prob = shortMicroExitGuardAi.predictProbability(buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
-            boolean shouldExit = prob >= MICRO_SHORT_EXIT_GUARD_THRESHOLD;
-            flowCondition("AI.MICRO.SHORT.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(MICRO_SHORT_EXIT_GUARD_THRESHOLD));
-            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroExitGuardEvaluated(symbol, "short", microBar.epoch(), prob, MICRO_SHORT_EXIT_GUARD_THRESHOLD, shouldExit));
+            double threshold = upgradedRouteThreshold("shortMicroExitGuardAi", MICRO_SHORT_EXIT_GUARD_THRESHOLD);
+            double prob = predictUpgradedRouteProbability("shortMicroExitGuardAi", shortMicroExitGuardAi, buildFeatureVector(MICRO_EXIT_GUARD_FEATURE_COLUMNS, features));
+            boolean shouldExit = prob >= threshold;
+            flowCondition("AI.MICRO.SHORT.EXIT", "MICRO_EXIT_GUARD_TRIGGERS", shouldExit, "symbol=" + symbol + " prob=" + formatProb(prob) + " threshold=" + formatProb(threshold));
+            emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroExitGuardEvaluated(symbol, "short", microBar.epoch(), prob, threshold, shouldExit));
             if (shouldExit) {
                 this.inFlightOrder = true;
                 parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), Math.abs(currentPosition), "MKT");
@@ -2613,7 +2794,8 @@ public class PingPongStrategy implements TradingStrategy {
         }
         Map<String, Float> features = new LinkedHashMap<>(lastTraining30sFeatureValues);
         features.putAll(positionFeatureValues(referencePrice, true));
-        double prob = predictor.predictProbability(buildFeatureVector(LIFECYCLE_FEATURE_COLUMNS, features));
+        String modelName = "long".equalsIgnoreCase(side) ? "longExitLifecycleAi" : "shortExitLifecycleAi";
+        double prob = predictUpgradedRouteProbability(modelName, predictor, buildFeatureVector(LIFECYCLE_FEATURE_COLUMNS, features));
         boolean shouldExit = prob >= threshold;
         flowCondition(
             "AI.LIFECYCLE.EXIT",
@@ -2798,7 +2980,7 @@ public class PingPongStrategy implements TradingStrategy {
 
         boolean shouldExitLong = false;
         if (currentPosition > 0 && LIFECYCLE_EXIT_ENABLED) {
-            shouldExitLong = evaluateLifecycleExitSignal("long", longExitLifecycleAi, LIFECYCLE_LONG_EXIT_THRESHOLD, barClose);
+            shouldExitLong = evaluateLifecycleExitSignal("long", longExitLifecycleAi, upgradedRouteThreshold("longExitLifecycleAi", LIFECYCLE_LONG_EXIT_THRESHOLD), barClose);
         } else if (currentPosition >= 0 && LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
             boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi > RSI_LONG_EXIT_THRESHOLD;
             shouldExitLong = evaluateExitSignal(
@@ -2817,7 +2999,7 @@ public class PingPongStrategy implements TradingStrategy {
 
         boolean shouldExitShort = false;
         if (currentPosition < 0 && LIFECYCLE_EXIT_ENABLED) {
-            shouldExitShort = evaluateLifecycleExitSignal("short", shortExitLifecycleAi, LIFECYCLE_SHORT_EXIT_THRESHOLD, barClose);
+            shouldExitShort = evaluateLifecycleExitSignal("short", shortExitLifecycleAi, upgradedRouteThreshold("shortExitLifecycleAi", LIFECYCLE_SHORT_EXIT_THRESHOLD), barClose);
         } else if (currentPosition <= 0 && LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
             boolean rsiGate = !USE_RSI_PRE_GATES || currentRsi < RSI_SHORT_EXIT_THRESHOLD;
             shouldExitShort = evaluateExitSignal(

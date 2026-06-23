@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -490,10 +491,80 @@ def stream_api_events(args: argparse.Namespace, symbols: set[str]) -> int:
     return total
 
 
+def open_text_lines(path: Path):
+    if str(path).endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8")
+    return path.open("r", encoding="utf-8")
+
+
+def recorded_event_symbol(payload: dict[str, Any]) -> str:
+    event = str(payload.get("event", "")).strip().lower()
+    if event == "option_bar":
+        return str(payload.get("underlying", payload.get("symbol", ""))).strip().upper()
+    return str(payload.get("symbol", payload.get("underlying", ""))).strip().upper()
+
+
+def normalized_recorded_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    payload.setdefault("historical", True)
+    payload.setdefault("EventSchemaVersion", EVENT_SCHEMA_VERSION)
+    payload.setdefault("EventSource", "recorded_ndjson")
+    if "tsEventNs" in payload and "EventTsEventNs" not in payload:
+        payload["EventTsEventNs"] = payload["tsEventNs"]
+    return payload
+
+
+def stream_ndjson_events(args: argparse.Namespace, symbols: set[str]) -> int:
+    input_files = [Path(p).expanduser() for p in args.input_file]
+    if not input_files:
+        raise ValueError("--source ndjson requires at least one --input-file/--recorded-events path")
+    total = 0
+    emitted = 0
+    skipped = 0
+    emit({
+        "event": "status",
+        "message": "recorded-ndjson-replay-start",
+        "EventSchemaVersion": EVENT_SCHEMA_VERSION,
+        "symbols": sorted(symbols),
+        "inputFiles": [str(path) for path in input_files],
+    })
+    for path in input_files:
+        if not path.is_file():
+            raise FileNotFoundError(f"Recorded NDJSON file not found: {path}")
+        with open_text_lines(path) as handle:
+            for line_no, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                total += 1
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    skipped += 1
+                    emit({"event": "status", "message": f"recorded-ndjson-skip malformed file={path} line={line_no} error={exc}"})
+                    continue
+                if not isinstance(payload, dict):
+                    skipped += 1
+                    continue
+                event = str(payload.get("event", "")).strip().lower()
+                if event == "status":
+                    emit(payload)
+                    emitted += 1
+                    continue
+                event_symbol = recorded_event_symbol(payload)
+                if event_symbol and event_symbol not in symbols:
+                    skipped += 1
+                    continue
+                emit(normalized_recorded_payload(payload))
+                emitted += 1
+        emit({"event": "status", "message": f"recorded-ndjson-file-complete file={path} emitted={emitted} skipped={skipped}"})
+    emit({"event": "status", "message": f"recorded-ndjson-replay-complete events={emitted} skipped={skipped} inputLines={total}"})
+    return emitted
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stream historical Databento data as live-normalized NDJSON for backtests.")
     parser.add_argument("--symbols", required=True, help="Comma-separated underlyings, e.g. TSLA,NVDA")
-    parser.add_argument("--source", choices=["dbn", "api"], default="dbn", help="Use local DBN files or Databento Historical API streaming.")
+    parser.add_argument("--source", choices=["dbn", "api", "ndjson"], default="dbn", help="Use local DBN files, Databento Historical API streaming, or recorded normalized NDJSON.")
     parser.add_argument("--equity-dir", default="/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9")
     parser.add_argument("--options-dir", default="/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD")
     parser.add_argument("--start", default="", help="API mode start time/date. Date-only values use 09:30 America/New_York.")
@@ -506,6 +577,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--options-schema", default=os.getenv("DATABENTO_OPTIONS_SCHEMA", "ohlcv-1s"))
     parser.add_argument("--options-stype-in", default=os.getenv("DATABENTO_OPTIONS_STYPE_IN", "parent"))
     parser.add_argument("--previous-close-lookback-days", type=int, default=int(os.getenv("DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS", "10")), help="API mode calendar-day lookback used to emit a previous_close context event. Set 0 to disable.")
+    parser.add_argument("--input-file", "--recorded-events", action="append", default=[], help="Recorded normalized NDJSON/NDJSON.GZ file for --source ndjson. Can be repeated.")
     parser.add_argument("--max-days", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -516,6 +588,9 @@ def main() -> int:
     symbols = set(split_csv(args.symbols))
     if not symbols:
         raise SystemExit("No symbols supplied")
+    if args.source == "ndjson":
+        stream_ndjson_events(args, symbols)
+        return 0
     if args.source == "api":
         stream_api_events(args, symbols)
         return 0

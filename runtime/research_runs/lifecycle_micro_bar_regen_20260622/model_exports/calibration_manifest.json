@@ -1,0 +1,101 @@
+{
+  "schema_version": "lifecycle_micro_calibration_v1",
+  "generated_at_utc": "2026-06-22T22:09:31Z",
+  "method": "raw_random_forest_probability_no_posthoc_calibrator",
+  "holdout_split": "chronological_last_20_percent_from_train_test_split_time",
+  "bins": 10,
+  "errors": [],
+  "warnings": [
+    "Metrics describe raw RandomForest predict_proba outputs; no isotonic/Platt post-hoc calibrator is exported yet. Treat bundles as research-only until calibration and holdout gates pass."
+  ],
+  "artifacts": {
+    "scorecard_csv": "lifecycle_micro_scorecard.csv",
+    "reliability_csv": "calibration_reliability.csv",
+    "posthoc_comparison_csv": "posthoc_calibration_comparison.csv",
+    "posthoc_reliability_csv": "posthoc_calibration_reliability.csv",
+    "posthoc_threshold_stability_csv": "posthoc_threshold_stability.csv",
+    "posthoc_threshold_stability_report_json": "posthoc_threshold_stability_report.json",
+    "posthoc_calibrators_json": "posthoc_calibrators.json",
+    "route_manifest_json": "lifecycle_micro_route_manifest.json"
+  },
+  "models": [
+    {
+      "model": "longExitLifecycleAi",
+      "filename": "long_exit_lifecycle.onnx",
+      "method": "raw_random_forest_probability_no_posthoc_calibrator",
+      "rows": 10000,
+      "calibration_rows": 10000,
+      "brier_score": 0.07715966166613801,
+      "ece": 0.016589253811718,
+      "threshold": 0.5,
+      "posthoc": {
+        "enabled": false
+      }
+    },
+    {
+      "model": "shortExitLifecycleAi",
+      "filename": "short_exit_lifecycle.onnx",
+      "method": "raw_random_forest_probability_no_posthoc_calibrator",
+      "rows": 10000,
+      "calibration_rows": 10000,
+      "brier_score": 0.08519949861544424,
+      "ece": 0.023082470576617407,
+      "threshold": 0.5800000000000001,
+      "posthoc": {
+        "enabled": false
+      }
+    },
+    {
+      "model": "longMicroEntryAi",
+      "filename": "long_micro_entry_5s.onnx",
+      "method": "raw_random_forest_probability_no_posthoc_calibrator",
+      "rows": 3449,
+      "calibration_rows": 3449,
+      "brier_score": 0.10159664339049282,
+      "ece": 0.02526426926320498,
+      "threshold": 0.6200000000000001,
+      "posthoc": {
+        "enabled": false
+      }
+    },
+    {
+      "model": "shortMicroEntryAi",
+      "filename": "short_micro_entry_5s.onnx",
+      "method": "raw_random_forest_probability_no_posthoc_calibrator",
+      "rows": 3473,
+      "calibration_rows": 3473,
+      "brier_score": 0.09409857729829892,
+      "ece": 0.02514481289204025,
+      "threshold": 0.52,
+      "posthoc": {
+        "enabled": false
+      }
+    },
+    {
+      "model": "longMicroExitGuardAi",
+      "filename": "long_micro_exit_guard_5s.onnx",
+      "method": "raw_random_forest_probability_no_posthoc_calibrator",
+      "rows": 3101,
+      "calibration_rows": 3101,
+      "brier_score": 0.1073776650152035,
+      "ece": 0.033187704219047605,
+      "threshold": 0.6,
+      "posthoc": {
+        "enabled": false
+      }
+    },
+    {
+      "model": "shortMicroExitGuardAi",
+      "filename": "short_micro_exit_guard_5s.onnx",
+      "method": "raw_random_forest_probability_no_posthoc_calibrator",
+      "rows": 3024,
+      "calibration_rows": 3024,
+      "brier_score": 0.10957762672527106,
+      "ece": 0.027742502305684768,
+      "threshold": 0.6,
+      "posthoc": {
+        "enabled": false
+      }
+    }
+  ]
+}
