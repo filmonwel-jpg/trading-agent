@@ -1,0 +1,20 @@
+{
+  "bar_seconds": 5,
+  "epoch_source": "timestamp",
+  "equity_events": 4680,
+  "event_schema_version": "databento_ndjson_v2",
+  "first_bar_epoch_sec": 1753104600,
+  "first_source_bar_epoch_sec": 1753104604,
+  "generated_at_ms": 1782242067790,
+  "last_bar_epoch_sec": 1753127995,
+  "last_source_bar_epoch_sec": 1753127999,
+  "misaligned_source_epoch_rows": 4680,
+  "option_events": 9319,
+  "output": "runtime/replay/example-recorded-events.ndjson.gz",
+  "previous_close": 334.41,
+  "rows_seen": 4680,
+  "schema_version": "recorded_training_bars_manifest_v1",
+  "session_date": "2025-07-21",
+  "source_csv": "runtime/research_runs/lifecycle_micro_bar_regen_20260622/bars_5s_by_symbol/TSLA_5s_training.csv",
+  "symbol": "TSLA"
+}

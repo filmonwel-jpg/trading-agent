@@ -64,6 +64,9 @@ runtime/lifecycle_micro_*/
 runtime/tmp_*/
 runtime/**/*.csv
 runtime/**/*.json
+!runtime/replay/
+!runtime/replay/example-recorded-events.ndjson.gz
+!runtime/replay/example-recorded-events.manifest.json
 runtime/databento_ibkr_sim_backtest_cp.txt
 hs_err_pid*.log
 
