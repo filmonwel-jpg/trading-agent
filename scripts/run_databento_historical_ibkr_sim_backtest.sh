@@ -438,7 +438,6 @@ fi
 [[ "$SYMBOLS_FILE" != /* ]] && SYMBOLS_FILE="$ROOT/$SYMBOLS_FILE"
 [[ "$LIFECYCLE_MODEL_DIR" != /* ]] && LIFECYCLE_MODEL_DIR="$ROOT/$LIFECYCLE_MODEL_DIR"
 [[ "$CLASSPATH_FILE" != /* ]] && CLASSPATH_FILE="$ROOT/$CLASSPATH_FILE"
-mkdir -p "$OUTPUT_DIR"
 
 CLASSPATH_PARENT="$(dirname "$CLASSPATH_FILE")"
 mkdir -p "$CLASSPATH_PARENT" 2>/dev/null || true
@@ -485,6 +484,16 @@ if truthy "$LIST_SYMBOLS_ONLY"; then
   printf '[BACKTEST] symbols_count=%s symbols_file=%s\n' "${#symbols[@]}" "$SYMBOLS_FILE" >&2
   printf '%s\n' "${symbols[@]}"
   exit 0
+fi
+if ! mkdir -p "$OUTPUT_DIR"; then
+  echo "[BACKTEST][ERROR] Could not create output directory: $OUTPUT_DIR" >&2
+  echo "[BACKTEST][ERROR] If this points at /Volumes/DatabentoVault, remount the external disk read/write, run on the write-capable computer, or pass --output-dir/CORE5_OUTPUT_DIR/BACKTEST_OUTPUT_DIR to a writable directory." >&2
+  exit 1
+fi
+if [[ ! -d "$OUTPUT_DIR" || ! -w "$OUTPUT_DIR" ]]; then
+  echo "[BACKTEST][ERROR] Output directory is not writable: $OUTPUT_DIR" >&2
+  echo "[BACKTEST][ERROR] If this points at /Volumes/DatabentoVault, this computer may have the disk mounted read-only; run on the write-capable computer or override --output-dir." >&2
+  exit 1
 fi
 printf '[BACKTEST] symbols=%s\n' "$(printf '%s,' "${symbols[@]}" | sed 's/,$//')"
 printf '[BACKTEST] symbols_count=%s symbols_file=%s\n' "${#symbols[@]}" "$SYMBOLS_FILE"

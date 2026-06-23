@@ -45,7 +45,13 @@ SPY
 QQQ
 ```
 
-Use the convenience wrapper when moving to another computer. It pins the core-five symbols, a portable tracked setup model bundle, the June 22 lifecycle/micro model bundle, and a local writable output directory:
+Use the convenience wrapper when moving to another computer. It pins the core-five symbols, a portable tracked setup model bundle, the June 22 lifecycle/micro model bundle, and writes outputs to the connected external disk by default:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/backtests/databento_api_core5
+```
+
+This Mac currently mounts `DatabentoVault` read-only, so real runs should be launched from the computer that can write to that disk. After the run, bring the disk back here and analyze the generated CSV/JSON outputs from that folder.
 
 ```bash
 scripts/run_databento_api_backtest_core5.sh \
@@ -63,7 +69,7 @@ scripts/run_databento_historical_ibkr_sim_backtest.sh \
   --end 2026-05-21 \
   --model-dir model_exports/20260320_192113 \
   --lifecycle-model-dir runtime/research_runs/lifecycle_micro_bar_regen_20260622/model_exports \
-  --output-dir runtime/local-backtests/databento_api_core5 \
+  --output-dir /Volumes/DatabentoVault/trading-agent-offload/databento/runtime/backtests/databento_api_core5 \
   --timeout-seconds 1800
 ```
 
@@ -75,6 +81,15 @@ scripts/run_databento_api_backtest_core5.sh \
   --end 2026-05-21 \
   --dry-run \
   --timeout-seconds 60
+```
+
+If the writable computer mounts the disk at a different path, override just the output folder:
+
+```bash
+CORE5_OUTPUT_DIR=/path/to/external-disk/trading-agent-offload/databento/runtime/backtests/databento_api_core5 \
+  scripts/run_databento_api_backtest_core5.sh \
+    --start 2026-05-21 \
+    --end 2026-05-21
 ```
 
 ## Use another symbol list

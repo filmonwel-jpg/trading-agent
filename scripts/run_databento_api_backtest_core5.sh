@@ -16,7 +16,7 @@ Environment overrides:
   CORE5_SYMBOLS_FILE       Default: config/databento_core_5_symbols.txt
   CORE5_SETUP_MODEL_DIR    Default: model_exports/20260320_192113
   CORE5_LIFECYCLE_MODEL_DIR Default: runtime/research_runs/lifecycle_micro_bar_regen_20260622/model_exports
-  CORE5_OUTPUT_DIR         Default: runtime/local-backtests/databento_api_core5
+  CORE5_OUTPUT_DIR         Default: /Volumes/DatabentoVault/trading-agent-offload/databento/runtime/backtests/databento_api_core5
   CORE5_TIMEOUT_SECONDS    Default: 1800
   CORE5_SKIP_BUILD         Default: false
 
@@ -30,7 +30,7 @@ USAGE
 SYMBOLS_FILE="${CORE5_SYMBOLS_FILE:-config/databento_core_5_symbols.txt}"
 SETUP_MODEL_DIR="${CORE5_SETUP_MODEL_DIR:-model_exports/20260320_192113}"
 LIFECYCLE_MODEL_DIR="${CORE5_LIFECYCLE_MODEL_DIR:-runtime/research_runs/lifecycle_micro_bar_regen_20260622/model_exports}"
-OUTPUT_DIR="${CORE5_OUTPUT_DIR:-runtime/local-backtests/databento_api_core5}"
+OUTPUT_DIR="${CORE5_OUTPUT_DIR:-/Volumes/DatabentoVault/trading-agent-offload/databento/runtime/backtests/databento_api_core5}"
 TIMEOUT_SECONDS="${CORE5_TIMEOUT_SECONDS:-1800}"
 SKIP_BUILD="${CORE5_SKIP_BUILD:-false}"
 
