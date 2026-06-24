@@ -189,6 +189,20 @@ csv_threshold() {
   fi
 }
 
+setup_threshold() {
+  local property_key="$1"
+  local default_value="$2"
+  local value=""
+  if [[ -n "${SETUP_THRESHOLDS_FILE:-}" && -f "$SETUP_THRESHOLDS_FILE" ]]; then
+    value="$(get_prop "$property_key" "$SETUP_THRESHOLDS_FILE")"
+  fi
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$default_value"
+  fi
+}
+
 if [[ -f "$PROPERTIES_FILE" ]]; then
   CONFIG_MODEL_DIR="$(get_prop trading.model.dir "$PROPERTIES_FILE")"
   CONFIG_PYTHON_BIN="$(get_prop trading.databento.python-bin "$PROPERTIES_FILE")"
@@ -206,6 +220,17 @@ if [[ -z "$MODEL_DIR" ]]; then
   else
     MODEL_DIR="${CONFIG_MODEL_DIR:-$(route_model_dir "$SYMBOL" "$ROUTING_CSV")}"
   fi
+fi
+SETUP_THRESHOLDS_FILE="${TRADING_SETUP_THRESHOLDS_FILE:-$MODEL_DIR/setup_runtime_thresholds.properties}"
+SETUP_THRESHOLDS_FILE_LOWER="$(printf '%s' "$SETUP_THRESHOLDS_FILE" | tr '[:upper:]' '[:lower:]')"
+if [[ "$SETUP_THRESHOLDS_FILE_LOWER" == "none" ]]; then
+  SETUP_THRESHOLDS_FILE=""
+elif [[ -n "$SETUP_THRESHOLDS_FILE" && "$SETUP_THRESHOLDS_FILE" != /* ]]; then
+  SETUP_THRESHOLDS_FILE="$ROOT/$SETUP_THRESHOLDS_FILE"
+fi
+SETUP_THRESHOLDS_SOURCE="default"
+if [[ -n "$SETUP_THRESHOLDS_FILE" && -f "$SETUP_THRESHOLDS_FILE" ]]; then
+  SETUP_THRESHOLDS_SOURCE="properties:$SETUP_THRESHOLDS_FILE"
 fi
 PYTHON_BIN="$(resolve_python_bin "${PYTHON_BIN:-$CONFIG_PYTHON_BIN}" || true)"
 if [[ -z "$PYTHON_BIN" ]] && truthy_env "$DRY_RUN"; then
@@ -273,8 +298,37 @@ fi
 BACKTEST_RUN_TIMESTAMP="${BACKTEST_RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
 BACKTEST_FILE_PREFIX="$BACKTEST_WORK_DIR/databento-stream-$(printf '%s' "$SYMBOL" | tr '[:upper:]' '[:lower:]')-$BACKTEST_RUN_TIMESTAMP"
 
+SETUP_LONG_ENTRY_THRESHOLD="${TRADING_AI_LONG_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.long-entry-threshold 0.68)}"
+SETUP_SHORT_ENTRY_THRESHOLD="${TRADING_AI_SHORT_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.short-entry-threshold 0.63)}"
+SETUP_LONG_EXIT_THRESHOLD="${TRADING_AI_LONG_EXIT_THRESHOLD:-$(setup_threshold trading.ai.long-exit-threshold 0.58)}"
+SETUP_SHORT_EXIT_THRESHOLD="${TRADING_AI_SHORT_EXIT_THRESHOLD:-$(setup_threshold trading.ai.short-exit-threshold 0.60)}"
+SETUP_REGIME_THRESHOLD="${TRADING_AI_REGIME_THRESHOLD:-$(setup_threshold trading.ai.regime-threshold 0.50)}"
+SETUP_ENTRY_THRESHOLD_RAISE_PERCENT="${TRADING_AI_ENTRY_THRESHOLD_RAISE_PERCENT:-$(setup_threshold trading.ai.entry-threshold-raise-percent 0.0)}"
+SETUP_OPEN30_LONG_ENTRY_THRESHOLD="${TRADING_AI_OPEN30_LONG_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.open30.long-entry-threshold "$SETUP_LONG_ENTRY_THRESHOLD")}"
+SETUP_OPEN30_SHORT_ENTRY_THRESHOLD="${TRADING_AI_OPEN30_SHORT_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.open30.short-entry-threshold "$SETUP_SHORT_ENTRY_THRESHOLD")}"
+SETUP_CHOPPY_LONG_ENTRY_THRESHOLD="${TRADING_AI_REGIME_CHOPPY_LONG_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.regime.choppy.long-entry-threshold "$SETUP_LONG_ENTRY_THRESHOLD")}"
+SETUP_CHOPPY_SHORT_ENTRY_THRESHOLD="${TRADING_AI_REGIME_CHOPPY_SHORT_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.regime.choppy.short-entry-threshold "$SETUP_SHORT_ENTRY_THRESHOLD")}"
+SETUP_TREND_LONG_ENTRY_THRESHOLD="${TRADING_AI_REGIME_TREND_LONG_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.regime.trend.long-entry-threshold "$SETUP_LONG_ENTRY_THRESHOLD")}"
+SETUP_TREND_SHORT_ENTRY_THRESHOLD="${TRADING_AI_REGIME_TREND_SHORT_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.regime.trend.short-entry-threshold "$SETUP_SHORT_ENTRY_THRESHOLD")}"
+SETUP_VOLATILE_LONG_ENTRY_THRESHOLD="${TRADING_AI_REGIME_VOLATILE_LONG_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.regime.volatile.long-entry-threshold "$SETUP_LONG_ENTRY_THRESHOLD")}"
+SETUP_VOLATILE_SHORT_ENTRY_THRESHOLD="${TRADING_AI_REGIME_VOLATILE_SHORT_ENTRY_THRESHOLD:-$(setup_threshold trading.ai.regime.volatile.short-entry-threshold "$SETUP_SHORT_ENTRY_THRESHOLD")}"
+
 JAVA_PROPS=(
   "-Dtrading.model.dir=$MODEL_DIR"
+  "-Dtrading.ai.long-entry-threshold=$SETUP_LONG_ENTRY_THRESHOLD"
+  "-Dtrading.ai.short-entry-threshold=$SETUP_SHORT_ENTRY_THRESHOLD"
+  "-Dtrading.ai.long-exit-threshold=$SETUP_LONG_EXIT_THRESHOLD"
+  "-Dtrading.ai.short-exit-threshold=$SETUP_SHORT_EXIT_THRESHOLD"
+  "-Dtrading.ai.regime-threshold=$SETUP_REGIME_THRESHOLD"
+  "-Dtrading.ai.entry-threshold-raise-percent=$SETUP_ENTRY_THRESHOLD_RAISE_PERCENT"
+  "-Dtrading.ai.open30.long-entry-threshold=$SETUP_OPEN30_LONG_ENTRY_THRESHOLD"
+  "-Dtrading.ai.open30.short-entry-threshold=$SETUP_OPEN30_SHORT_ENTRY_THRESHOLD"
+  "-Dtrading.ai.regime.choppy.long-entry-threshold=$SETUP_CHOPPY_LONG_ENTRY_THRESHOLD"
+  "-Dtrading.ai.regime.choppy.short-entry-threshold=$SETUP_CHOPPY_SHORT_ENTRY_THRESHOLD"
+  "-Dtrading.ai.regime.trend.long-entry-threshold=$SETUP_TREND_LONG_ENTRY_THRESHOLD"
+  "-Dtrading.ai.regime.trend.short-entry-threshold=$SETUP_TREND_SHORT_ENTRY_THRESHOLD"
+  "-Dtrading.ai.regime.volatile.long-entry-threshold=$SETUP_VOLATILE_LONG_ENTRY_THRESHOLD"
+  "-Dtrading.ai.regime.volatile.short-entry-threshold=$SETUP_VOLATILE_SHORT_ENTRY_THRESHOLD"
   "-Dbacktest.symbol=$SYMBOL"
   "-Dbacktest.ibkrSimulation=true"
   "-Dbacktest.tradeLogFile=$BACKTEST_FILE_PREFIX.csv"
@@ -322,6 +376,17 @@ fi
 
 printf '[BACKTEST] symbol=%s dry_run=%s ibkr_simulation=true\n' "$SYMBOL" "$DRY_RUN"
 printf '[BACKTEST] model_dir=%s\n' "$MODEL_DIR"
+printf '[BACKTEST] setup_thresholds_file=%s source=%s\n' "${SETUP_THRESHOLDS_FILE:-disabled}" "$SETUP_THRESHOLDS_SOURCE"
+printf '[BACKTEST] setup_thresholds long=%s short=%s regime=%s raisePercent=%s\n' "$SETUP_LONG_ENTRY_THRESHOLD" "$SETUP_SHORT_ENTRY_THRESHOLD" "$SETUP_REGIME_THRESHOLD" "$SETUP_ENTRY_THRESHOLD_RAISE_PERCENT"
+printf '[BACKTEST] setup_variant_entry_thresholds open30Long=%s open30Short=%s choppyLong=%s choppyShort=%s trendLong=%s trendShort=%s volatileLong=%s volatileShort=%s\n' \
+  "$SETUP_OPEN30_LONG_ENTRY_THRESHOLD" \
+  "$SETUP_OPEN30_SHORT_ENTRY_THRESHOLD" \
+  "$SETUP_CHOPPY_LONG_ENTRY_THRESHOLD" \
+  "$SETUP_CHOPPY_SHORT_ENTRY_THRESHOLD" \
+  "$SETUP_TREND_LONG_ENTRY_THRESHOLD" \
+  "$SETUP_TREND_SHORT_ENTRY_THRESHOLD" \
+  "$SETUP_VOLATILE_LONG_ENTRY_THRESHOLD" \
+  "$SETUP_VOLATILE_SHORT_ENTRY_THRESHOLD"
 printf '[BACKTEST] lifecycle_micro_enabled=%s lifecycle_model_dir=%s\n' "$LIFECYCLE_MICRO_ENABLED" "$LIFECYCLE_MODEL_DIR"
 printf '[BACKTEST] python_bin=%s\n' "$PYTHON_BIN"
 printf '[BACKTEST] databento_api_key_source=%s\n' "$DATABENTO_API_KEY_SOURCE"

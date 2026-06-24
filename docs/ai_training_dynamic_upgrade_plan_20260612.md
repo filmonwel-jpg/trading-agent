@@ -686,7 +686,13 @@ Backtest/live branch wiring:
 - `run_symbol.sh` and `scripts/run_databento_historical_streaming_backtest_20260523.sh` now default to the June 24 setup bundle and external lifecycle/micro bundle when present:
   - setup: `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`
   - lifecycle/micro: `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`
-- Explicit overrides still win: `MODEL_DIR`, `TRADING_MODEL_DIR`, `TRADING_SETUP_MODEL_DIR`, `TRADING_LIFECYCLE_MODEL_DIR`, or extra-arg/property overrides can still point a run elsewhere.
+- 2026-06-24 threshold handoff follow-up: the setup bundle now carries `setup_runtime_thresholds.properties`, and the live/backtest launchers read it by default so the CatBoost setup entry thresholds match today's training artifacts instead of stale bot-template values:
+  - base setup: long `0.612`, short `0.612`
+  - open30 setup: long `0.620`, short `0.624`
+  - regime setup: choppy long/short `0.656` / `0.644`, trend long/short `0.636` / `0.648`, volatile long/short `0.604` / `0.608`
+  - `trading.ai.entry-threshold-raise-percent=0.0` for this bundle so the selected training thresholds are not automatically lifted another `10%` during backtest/live evaluation.
+- Lifecycle/micro thresholds continue to come from the lifecycle bundle scorecard/route manifest: lifecycle exits `0.52` / `0.50`, micro entries `0.64` / `0.62`, and micro exit guards `0.60` / `0.60`.
+- Explicit run-scoped overrides still win: `MODEL_DIR`, `TRADING_MODEL_DIR`, `TRADING_SETUP_MODEL_DIR`, `TRADING_LIFECYCLE_MODEL_DIR`, `TRADING_SETUP_THRESHOLDS_FILE`, threshold environment variables, or explicit Java/launcher extra args can still point an experiment elsewhere. Stale per-symbol bot properties are intentionally not allowed to silently override the June 24 default bundle/threshold handoff when that bundle is present.
 
 Current stop/go decision:
 

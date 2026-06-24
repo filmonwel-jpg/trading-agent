@@ -1847,12 +1847,21 @@ Backtest/live handoff wiring:
   - setup model dir: `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`
   - lifecycle/micro dir: `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`
 - `scripts/run_databento_historical_streaming_backtest_20260523.sh` now uses the same defaults.
+- 2026-06-24 threshold handoff follow-up: `setup_runtime_thresholds.properties` was added to the setup bundle and both launchers now load it by default. This prevents stale per-symbol bot properties from carrying old setup thresholds into June 24 backtests/live previews.
+  - base setup thresholds: long `0.612`, short `0.612`
+  - open30 setup thresholds: long `0.620`, short `0.624`
+  - regime setup thresholds: choppy `0.656` / `0.644`, trend `0.636` / `0.648`, volatile `0.604` / `0.608`
+  - entry-threshold lift is set to `0.0` for this bundle; if a reviewer wants a conservative lift, set `TRADING_AI_ENTRY_THRESHOLD_RAISE_PERCENT` or an explicit Java property for that experiment.
+  - lifecycle/micro thresholds are still sourced from `lifecycle_micro_scorecard.csv` / `lifecycle_micro_route_manifest.json`: lifecycle exits `0.52` / `0.50`, micro entries `0.64` / `0.62`, micro exit guards `0.60` / `0.60`.
 - Overrides still win:
   - `MODEL_DIR`
   - `TRADING_MODEL_DIR`
   - `TRADING_SETUP_MODEL_DIR`
   - `TRADING_LIFECYCLE_MODEL_DIR`
-  - explicit `trading.model.dir` extra args/properties.
+  - `TRADING_SETUP_THRESHOLDS_FILE`
+  - threshold environment variables such as `TRADING_AI_LONG_ENTRY_THRESHOLD`
+  - explicit Java/launcher extra args such as `--trading.model.dir=...` or `--trading.ai.long-entry-threshold=...`.
+- Stale per-symbol bot properties from older bundles are intentionally not allowed to silently override the June 24 default model directory or setup-threshold handoff when the June 24 bundle is present.
 
 Next computer tasks:
 

@@ -253,8 +253,10 @@ ensure_packaged_jar_current() {
   jar_status="fresh"
 }
 
-get_prop() {
+get_prop_from_file() {
   local key="$1"
+  local file="$2"
+  [[ -f "$file" ]] || return 0
   awk -F= -v search_key="$key" '
     /^[[:space:]]*#/ {next}
     /^[[:space:]]*$/ {next}
@@ -270,7 +272,11 @@ get_prop() {
     END {
       if (found != "") print found
     }
-  ' "$properties_file"
+  ' "$file"
+}
+
+get_prop() {
+  get_prop_from_file "$1" "$properties_file"
 }
 
 resolve_extra_arg_override() {
@@ -303,6 +309,14 @@ extra_arg_is_managed_override() {
     --trading.ai.short-exit-threshold=*|\
     --trading.ai.regime-threshold=*|\
     --trading.ai.entry-threshold-raise-percent=*|\
+    --trading.ai.open30.long-entry-threshold=*|\
+    --trading.ai.open30.short-entry-threshold=*|\
+    --trading.ai.regime.choppy.long-entry-threshold=*|\
+    --trading.ai.regime.choppy.short-entry-threshold=*|\
+    --trading.ai.regime.trend.long-entry-threshold=*|\
+    --trading.ai.regime.trend.short-entry-threshold=*|\
+    --trading.ai.regime.volatile.long-entry-threshold=*|\
+    --trading.ai.regime.volatile.short-entry-threshold=*|\
     --trading.micro.long-entry-threshold=*|\
     --trading.micro.short-entry-threshold=*|\
     --trading.shared-capital.enabled=*|\
@@ -489,6 +503,14 @@ ai_long_exit_threshold="$(get_prop trading.ai.long-exit-threshold)"
 ai_short_exit_threshold="$(get_prop trading.ai.short-exit-threshold)"
 ai_regime_threshold="$(get_prop trading.ai.regime-threshold)"
 ai_entry_threshold_raise_percent="$(get_prop trading.ai.entry-threshold-raise-percent)"
+ai_open30_long_entry_threshold="$(get_prop trading.ai.open30.long-entry-threshold)"
+ai_open30_short_entry_threshold="$(get_prop trading.ai.open30.short-entry-threshold)"
+ai_choppy_long_entry_threshold="$(get_prop trading.ai.regime.choppy.long-entry-threshold)"
+ai_choppy_short_entry_threshold="$(get_prop trading.ai.regime.choppy.short-entry-threshold)"
+ai_trend_long_entry_threshold="$(get_prop trading.ai.regime.trend.long-entry-threshold)"
+ai_trend_short_entry_threshold="$(get_prop trading.ai.regime.trend.short-entry-threshold)"
+ai_volatile_long_entry_threshold="$(get_prop trading.ai.regime.volatile.long-entry-threshold)"
+ai_volatile_short_entry_threshold="$(get_prop trading.ai.regime.volatile.short-entry-threshold)"
 shared_capital_enabled="$(get_prop trading.shared-capital.enabled)"
 shared_capital_file="$(get_prop trading.shared-capital.file)"
 shared_capital_total_notional="$(get_prop trading.shared-capital.total-notional)"
@@ -511,6 +533,14 @@ elif [[ -d "$default_catboost_setup_model_dir" ]]; then
 else
   model_dir="${model_dir_prop:-$runtime_dir/models/$symbol_upper}"
 fi
+setup_thresholds_file="${TRADING_SETUP_THRESHOLDS_FILE:-$model_dir/setup_runtime_thresholds.properties}"
+setup_thresholds_file_lower="$(printf '%s' "$setup_thresholds_file" | tr '[:upper:]' '[:lower:]')"
+if [[ "$setup_thresholds_file_lower" == "none" ]]; then
+  setup_thresholds_file=""
+elif [[ -n "$setup_thresholds_file" && "$setup_thresholds_file" != /* ]]; then
+  setup_thresholds_file="$repo_root/$setup_thresholds_file"
+fi
+setup_thresholds_source=""
 lifecycle_model_dir="${TRADING_LIFECYCLE_MODEL_DIR:-$default_lifecycle_micro_model_dir}"
 lifecycle_scorecard="$lifecycle_model_dir/lifecycle_micro_scorecard.csv"
 calibrated_micro_thresholds_file="${TRADING_CALIBRATED_MICRO_THRESHOLDS_FILE:-$repo_root/config/databento_calibrated_micro_entry_thresholds.csv}"
@@ -588,6 +618,54 @@ csv_symbol_value() {
   ' "$file_path"
 }
 
+apply_setup_threshold_default() {
+  local property_key="$1"
+  local variable_name="$2"
+  local value=""
+  [[ -n "$setup_thresholds_file" && -f "$setup_thresholds_file" ]] || return 0
+  value="$(get_prop_from_file "$property_key" "$setup_thresholds_file")"
+  if [[ -n "$value" ]]; then
+    printf -v "$variable_name" '%s' "$value"
+    setup_thresholds_source="properties:$setup_thresholds_file"
+  fi
+}
+
+apply_env_override() {
+  local env_name="$1"
+  local variable_name="$2"
+  if [[ -n "${!env_name:-}" ]]; then
+    printf -v "$variable_name" '%s' "${!env_name}"
+  fi
+}
+
+apply_setup_threshold_default trading.ai.long-entry-threshold ai_long_entry_threshold
+apply_setup_threshold_default trading.ai.short-entry-threshold ai_short_entry_threshold
+apply_setup_threshold_default trading.ai.regime-threshold ai_regime_threshold
+apply_setup_threshold_default trading.ai.entry-threshold-raise-percent ai_entry_threshold_raise_percent
+apply_setup_threshold_default trading.ai.open30.long-entry-threshold ai_open30_long_entry_threshold
+apply_setup_threshold_default trading.ai.open30.short-entry-threshold ai_open30_short_entry_threshold
+apply_setup_threshold_default trading.ai.regime.choppy.long-entry-threshold ai_choppy_long_entry_threshold
+apply_setup_threshold_default trading.ai.regime.choppy.short-entry-threshold ai_choppy_short_entry_threshold
+apply_setup_threshold_default trading.ai.regime.trend.long-entry-threshold ai_trend_long_entry_threshold
+apply_setup_threshold_default trading.ai.regime.trend.short-entry-threshold ai_trend_short_entry_threshold
+apply_setup_threshold_default trading.ai.regime.volatile.long-entry-threshold ai_volatile_long_entry_threshold
+apply_setup_threshold_default trading.ai.regime.volatile.short-entry-threshold ai_volatile_short_entry_threshold
+
+apply_env_override TRADING_AI_LONG_ENTRY_THRESHOLD ai_long_entry_threshold
+apply_env_override TRADING_AI_SHORT_ENTRY_THRESHOLD ai_short_entry_threshold
+apply_env_override TRADING_AI_LONG_EXIT_THRESHOLD ai_long_exit_threshold
+apply_env_override TRADING_AI_SHORT_EXIT_THRESHOLD ai_short_exit_threshold
+apply_env_override TRADING_AI_REGIME_THRESHOLD ai_regime_threshold
+apply_env_override TRADING_AI_ENTRY_THRESHOLD_RAISE_PERCENT ai_entry_threshold_raise_percent
+apply_env_override TRADING_AI_OPEN30_LONG_ENTRY_THRESHOLD ai_open30_long_entry_threshold
+apply_env_override TRADING_AI_OPEN30_SHORT_ENTRY_THRESHOLD ai_open30_short_entry_threshold
+apply_env_override TRADING_AI_REGIME_CHOPPY_LONG_ENTRY_THRESHOLD ai_choppy_long_entry_threshold
+apply_env_override TRADING_AI_REGIME_CHOPPY_SHORT_ENTRY_THRESHOLD ai_choppy_short_entry_threshold
+apply_env_override TRADING_AI_REGIME_TREND_LONG_ENTRY_THRESHOLD ai_trend_long_entry_threshold
+apply_env_override TRADING_AI_REGIME_TREND_SHORT_ENTRY_THRESHOLD ai_trend_short_entry_threshold
+apply_env_override TRADING_AI_REGIME_VOLATILE_LONG_ENTRY_THRESHOLD ai_volatile_long_entry_threshold
+apply_env_override TRADING_AI_REGIME_VOLATILE_SHORT_ENTRY_THRESHOLD ai_volatile_short_entry_threshold
+
 server_port_override="$(resolve_extra_arg_override server.port)"
 client_id_override="$(resolve_extra_arg_override trading.client-id)"
 market_data_request_id_override="$(resolve_extra_arg_override trading.market-data-request-id)"
@@ -607,6 +685,14 @@ ai_long_exit_threshold_override="$(resolve_extra_arg_override trading.ai.long-ex
 ai_short_exit_threshold_override="$(resolve_extra_arg_override trading.ai.short-exit-threshold)"
 ai_regime_threshold_override="$(resolve_extra_arg_override trading.ai.regime-threshold)"
 ai_entry_threshold_raise_percent_override="$(resolve_extra_arg_override trading.ai.entry-threshold-raise-percent)"
+ai_open30_long_entry_threshold_override="$(resolve_extra_arg_override trading.ai.open30.long-entry-threshold)"
+ai_open30_short_entry_threshold_override="$(resolve_extra_arg_override trading.ai.open30.short-entry-threshold)"
+ai_choppy_long_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.choppy.long-entry-threshold)"
+ai_choppy_short_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.choppy.short-entry-threshold)"
+ai_trend_long_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.trend.long-entry-threshold)"
+ai_trend_short_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.trend.short-entry-threshold)"
+ai_volatile_long_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.volatile.long-entry-threshold)"
+ai_volatile_short_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.volatile.short-entry-threshold)"
 micro_long_entry_threshold_override="$(resolve_extra_arg_override trading.micro.long-entry-threshold)"
 micro_short_entry_threshold_override="$(resolve_extra_arg_override trading.micro.short-entry-threshold)"
 shared_capital_enabled_override="$(resolve_extra_arg_override trading.shared-capital.enabled)"
@@ -669,7 +755,31 @@ fi
 if [[ -n "$ai_entry_threshold_raise_percent_override" ]]; then
   ai_entry_threshold_raise_percent="$ai_entry_threshold_raise_percent_override"
 fi
-ai_entry_threshold_raise_percent="${ai_entry_threshold_raise_percent:-${TRADING_AI_ENTRY_THRESHOLD_RAISE_PERCENT:-10.0}}"
+if [[ -n "$ai_open30_long_entry_threshold_override" ]]; then
+  ai_open30_long_entry_threshold="$ai_open30_long_entry_threshold_override"
+fi
+if [[ -n "$ai_open30_short_entry_threshold_override" ]]; then
+  ai_open30_short_entry_threshold="$ai_open30_short_entry_threshold_override"
+fi
+if [[ -n "$ai_choppy_long_entry_threshold_override" ]]; then
+  ai_choppy_long_entry_threshold="$ai_choppy_long_entry_threshold_override"
+fi
+if [[ -n "$ai_choppy_short_entry_threshold_override" ]]; then
+  ai_choppy_short_entry_threshold="$ai_choppy_short_entry_threshold_override"
+fi
+if [[ -n "$ai_trend_long_entry_threshold_override" ]]; then
+  ai_trend_long_entry_threshold="$ai_trend_long_entry_threshold_override"
+fi
+if [[ -n "$ai_trend_short_entry_threshold_override" ]]; then
+  ai_trend_short_entry_threshold="$ai_trend_short_entry_threshold_override"
+fi
+if [[ -n "$ai_volatile_long_entry_threshold_override" ]]; then
+  ai_volatile_long_entry_threshold="$ai_volatile_long_entry_threshold_override"
+fi
+if [[ -n "$ai_volatile_short_entry_threshold_override" ]]; then
+  ai_volatile_short_entry_threshold="$ai_volatile_short_entry_threshold_override"
+fi
+ai_entry_threshold_raise_percent="${ai_entry_threshold_raise_percent:-10.0}"
 if [[ -n "${TRADING_MICRO_LONG_ENTRY_THRESHOLD:-}" ]]; then
   micro_long_entry_threshold="$TRADING_MICRO_LONG_ENTRY_THRESHOLD"
   micro_long_entry_threshold_source="env:TRADING_MICRO_LONG_ENTRY_THRESHOLD"
@@ -872,8 +982,8 @@ fi
 if [[ -n "$max_share_cap" ]]; then
   cmd+=("--trading.risk.max-share-cap=$max_share_cap")
 fi
-if [[ -n "$model_dir_prop" ]]; then
-  cmd+=("--trading.model.dir=$model_dir_prop")
+if [[ -n "$model_dir" ]]; then
+  cmd+=("--trading.model.dir=$model_dir")
 fi
 if [[ -n "$state_file" ]]; then
   cmd+=("--trading.state.file=$state_file")
@@ -902,6 +1012,30 @@ if [[ -n "$ai_regime_threshold" ]]; then
 fi
 if [[ -n "$ai_entry_threshold_raise_percent" ]]; then
   cmd+=("--trading.ai.entry-threshold-raise-percent=$ai_entry_threshold_raise_percent")
+fi
+if [[ -n "$ai_open30_long_entry_threshold" ]]; then
+  cmd+=("--trading.ai.open30.long-entry-threshold=$ai_open30_long_entry_threshold")
+fi
+if [[ -n "$ai_open30_short_entry_threshold" ]]; then
+  cmd+=("--trading.ai.open30.short-entry-threshold=$ai_open30_short_entry_threshold")
+fi
+if [[ -n "$ai_choppy_long_entry_threshold" ]]; then
+  cmd+=("--trading.ai.regime.choppy.long-entry-threshold=$ai_choppy_long_entry_threshold")
+fi
+if [[ -n "$ai_choppy_short_entry_threshold" ]]; then
+  cmd+=("--trading.ai.regime.choppy.short-entry-threshold=$ai_choppy_short_entry_threshold")
+fi
+if [[ -n "$ai_trend_long_entry_threshold" ]]; then
+  cmd+=("--trading.ai.regime.trend.long-entry-threshold=$ai_trend_long_entry_threshold")
+fi
+if [[ -n "$ai_trend_short_entry_threshold" ]]; then
+  cmd+=("--trading.ai.regime.trend.short-entry-threshold=$ai_trend_short_entry_threshold")
+fi
+if [[ -n "$ai_volatile_long_entry_threshold" ]]; then
+  cmd+=("--trading.ai.regime.volatile.long-entry-threshold=$ai_volatile_long_entry_threshold")
+fi
+if [[ -n "$ai_volatile_short_entry_threshold" ]]; then
+  cmd+=("--trading.ai.regime.volatile.short-entry-threshold=$ai_volatile_short_entry_threshold")
 fi
 if [[ -n "$shared_capital_enabled" ]]; then
   cmd+=("--trading.shared-capital.enabled=$shared_capital_enabled")
@@ -941,6 +1075,7 @@ printf '[RUN] jar_path=%s jar_status=%s\n' "$jar_path" "$jar_status"
 printf '[RUN] require_prebuilt_jar=%s\n' "$require_prebuilt_jar"
 printf '[RUN] model_dir=%s\n' "$model_dir"
 printf '[RUN] configured_model_dir=%s\n' "$model_dir_prop"
+printf '[RUN] setup_thresholds_file=%s source=%s\n' "${setup_thresholds_file:-disabled}" "${setup_thresholds_source:-default/properties}"
 printf '[RUN] onnx_count=%s\n' "$onnx_count"
 printf '[RUN] lifecycle_micro_enabled=%s lifecycle_model_dir=%s\n' "$lifecycle_micro_enabled" "$lifecycle_model_dir"
 if truthy_env "$lifecycle_micro_enabled"; then
@@ -962,6 +1097,15 @@ printf '[RUN] ai_thresholds longEntry=%s shortEntry=%s longExit=%s shortExit=%s 
   "${ai_short_exit_threshold:-default}" \
   "${ai_regime_threshold:-default}"
 printf '[RUN] ai_entry_threshold_raise_percent=%s\n' "${ai_entry_threshold_raise_percent:-default}"
+printf '[RUN] ai_variant_entry_thresholds open30Long=%s open30Short=%s choppyLong=%s choppyShort=%s trendLong=%s trendShort=%s volatileLong=%s volatileShort=%s\n' \
+  "${ai_open30_long_entry_threshold:-default}" \
+  "${ai_open30_short_entry_threshold:-default}" \
+  "${ai_choppy_long_entry_threshold:-default}" \
+  "${ai_choppy_short_entry_threshold:-default}" \
+  "${ai_trend_long_entry_threshold:-default}" \
+  "${ai_trend_short_entry_threshold:-default}" \
+  "${ai_volatile_long_entry_threshold:-default}" \
+  "${ai_volatile_short_entry_threshold:-default}"
 if [[ $uses_databento_sidecar -eq 1 ]]; then
   printf '[RUN] databento_python_bin=%s\n' "$databento_python_bin"
 fi

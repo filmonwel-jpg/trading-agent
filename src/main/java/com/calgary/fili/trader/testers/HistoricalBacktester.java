@@ -480,15 +480,60 @@ public class HistoricalBacktester extends IBKRTrader {
             0.70,       // trendStrengthThreshold
             modelDir.isBlank() ? null : modelDir
         );
-        testStrategy.setAiThresholds(
-            parseThresholdProperty("trading.ai.long-entry-threshold", 0.68),
-            parseThresholdProperty("trading.ai.short-entry-threshold", 0.63),
-            parseThresholdProperty("trading.ai.long-exit-threshold", 0.58),
-            parseThresholdProperty("trading.ai.short-exit-threshold", 0.60),
-            parseThresholdProperty("trading.ai.regime-threshold", 0.50)
-        );
+        testStrategy.setAiThresholds(buildAiThresholdConfig());
         testStrategy.setMaxVolatilityPercent(10.0);
         testStrategy.setPositionSynced(true);
+    }
+
+    private static PingPongStrategy.AiThresholdConfig buildAiThresholdConfig() {
+        double baseLongEntry = parseThresholdProperty("trading.ai.long-entry-threshold", 0.68);
+        double baseShortEntry = parseThresholdProperty("trading.ai.short-entry-threshold", 0.63);
+        double baseLongExit = parseThresholdProperty("trading.ai.long-exit-threshold", 0.58);
+        double baseShortExit = parseThresholdProperty("trading.ai.short-exit-threshold", 0.60);
+        double raisePercent = parseNonNegativeDouble(System.getProperty("trading.ai.entry-threshold-raise-percent"), 0.0);
+        return new PingPongStrategy.AiThresholdConfig(
+            applyEntryThresholdLift(baseLongEntry, raisePercent),
+            applyEntryThresholdLift(baseShortEntry, raisePercent),
+            baseLongExit,
+            baseShortExit,
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.open30.long-entry-threshold", baseLongEntry), raisePercent),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.open30.short-entry-threshold", baseShortEntry), raisePercent),
+            parseThresholdProperty("trading.ai.open30.long-exit-threshold", baseLongExit),
+            parseThresholdProperty("trading.ai.open30.short-exit-threshold", baseShortExit),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.regime.choppy.long-entry-threshold", baseLongEntry), raisePercent),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.regime.choppy.short-entry-threshold", baseShortEntry), raisePercent),
+            parseThresholdProperty("trading.ai.regime.choppy.long-exit-threshold", baseLongExit),
+            parseThresholdProperty("trading.ai.regime.choppy.short-exit-threshold", baseShortExit),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.regime.trend.long-entry-threshold", baseLongEntry), raisePercent),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.regime.trend.short-entry-threshold", baseShortEntry), raisePercent),
+            parseThresholdProperty("trading.ai.regime.trend.long-exit-threshold", baseLongExit),
+            parseThresholdProperty("trading.ai.regime.trend.short-exit-threshold", baseShortExit),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.regime.volatile.long-entry-threshold", baseLongEntry), raisePercent),
+            applyEntryThresholdLift(parseThresholdProperty("trading.ai.regime.volatile.short-entry-threshold", baseShortEntry), raisePercent),
+            parseThresholdProperty("trading.ai.regime.volatile.long-exit-threshold", baseLongExit),
+            parseThresholdProperty("trading.ai.regime.volatile.short-exit-threshold", baseShortExit),
+            parseThresholdProperty("trading.ai.regime-threshold", 0.50)
+        );
+    }
+
+    private static double applyEntryThresholdLift(double threshold, double raisePercent) {
+        if (!Double.isFinite(threshold) || raisePercent <= 0.0) {
+            return threshold;
+        }
+        double lifted = threshold * (1.0 + (raisePercent / 100.0));
+        return Math.max(0.0, Math.min(0.99, lifted));
+    }
+
+    private static double parseNonNegativeDouble(String raw, double fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            double parsed = Double.parseDouble(raw.trim());
+            return parsed >= 0.0 && Double.isFinite(parsed) ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     private static double parseThresholdProperty(String key, double fallback) {
