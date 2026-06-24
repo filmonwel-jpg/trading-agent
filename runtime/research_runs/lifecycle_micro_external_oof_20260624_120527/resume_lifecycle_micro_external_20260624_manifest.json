@@ -1,0 +1,25 @@
+{
+  "appended_tsla_micro_rows": {
+    "long_micro_entry": 69667,
+    "long_micro_exit": 56184,
+    "short_micro_entry": 69765,
+    "short_micro_exit": 53376
+  },
+  "model_count": 6,
+  "staged_row_counts": {
+    "long_lifecycle_rows.csv": 718477,
+    "long_micro_entry_rows.csv": 249557,
+    "long_micro_exit_rows.csv": 225120,
+    "short_lifecycle_rows.csv": 716394,
+    "short_micro_entry_rows.csv": 249216,
+    "short_micro_exit_rows.csv": 213120
+  },
+  "trained_models": [
+    "longExitLifecycleAi",
+    "shortExitLifecycleAi",
+    "longMicroEntryAi",
+    "shortMicroEntryAi",
+    "longMicroExitGuardAi",
+    "shortMicroExitGuardAi"
+  ]
+}

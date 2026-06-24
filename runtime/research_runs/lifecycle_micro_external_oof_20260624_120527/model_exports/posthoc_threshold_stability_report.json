@@ -1,0 +1,9 @@
+{
+  "schema_version": "lifecycle_micro_posthoc_threshold_stability_v1",
+  "generated_at_utc": "2026-06-24T19:15:00Z",
+  "description": "Frozen-holdout threshold grid plus contiguous eligible-threshold island around each candidate's selected threshold. Eligibility uses the configured minimum predicted-positive count and maximum one-day dominance fraction.",
+  "models": [],
+  "warnings": [
+    "This is threshold-neighborhood stability on one frozen chronological holdout, not cross-fold stability or live/paper promotion approval."
+  ]
+}

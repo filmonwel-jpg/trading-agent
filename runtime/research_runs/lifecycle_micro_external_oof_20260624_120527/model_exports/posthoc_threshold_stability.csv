@@ -1,0 +1,1 @@
+model,filename,calibration_method,threshold_index,threshold,is_selected_threshold,precision,recall,pred_pos_rate,predicted_positive_count,max_predicted_day_fraction,dominant_day,pass_min_predicted_positive_count,pass_max_day_dominance,eligible_threshold

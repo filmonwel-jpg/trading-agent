@@ -464,6 +464,7 @@ public class PingPongStrategy implements TradingStrategy {
     private static final List<String> EXTENDED_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS = concatFeatureColumns(EXTENDED_FEATURE_COLUMNS, NEWS_BAR_FEATURE_COLUMNS, REGIME_PROBABILITY_FEATURE_COLUMNS);
     private static final List<String> BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS = concatFeatureColumns(BASE_PLUS_NEWS_FEATURE_COLUMNS, META_PRODUCER_FEATURE_COLUMNS);
     private static final List<String> ENHANCED_MAIN_FEATURE_COLUMNS = concatFeatureColumns(BASE_PLUS_NEWS_PLUS_META_PRODUCER_COLUMNS, REGIME_PROBABILITY_FEATURE_COLUMNS);
+    private static final List<String> SUPPORTED_LIVE_FEATURE_COLUMNS = concatFeatureColumns(EXTENDED_FEATURE_COLUMNS, NEWS_BAR_FEATURE_COLUMNS, META_PRODUCER_FEATURE_COLUMNS, REGIME_PROBABILITY_FEATURE_COLUMNS);
     private static final List<String> LEGACY_REGIME_FEATURE_COLUMNS = filterRegimeColumns(LEGACY_FEATURE_COLUMNS);
     private static final List<String> BASE_REGIME_FEATURE_COLUMNS = filterRegimeColumns(BASE_FEATURE_COLUMNS);
     private static final List<String> EXTENDED_REGIME_FEATURE_COLUMNS = filterRegimeColumns(EXTENDED_FEATURE_COLUMNS);
@@ -620,6 +621,8 @@ public class PingPongStrategy implements TradingStrategy {
     private LazyAiPredictor shortMicroExitGuardAi;
     private final Map<String, ProbabilityCalibrator> upgradedRouteCalibrators = new ConcurrentHashMap<>();
     private final Map<String, Double> upgradedRouteThresholds = new ConcurrentHashMap<>();
+    private volatile List<String> setupFeatureColumns;
+    private volatile List<String> setupRegimeFeatureColumns;
     private volatile boolean upgradedModelRouteValid = true;
     private volatile MarketRegime lastDetectedRegime = MarketRegime.CHOPPY;
 
@@ -1031,6 +1034,7 @@ public class PingPongStrategy implements TradingStrategy {
         this.open30ShortEntryAi = tryLoadOptionalModel("open30_short_entry.onnx", modelDir, "Open30 short-entry model unavailable. Using regime/base model.");
         this.open30LongExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("open30_long_exit.onnx", modelDir, "Open30 legacy long-exit model unavailable. Using regime/base model.") : null;
         this.open30ShortExitAi = loadLegacy30sExitModels ? tryLoadOptionalModel("open30_short_exit.onnx", modelDir, "Open30 legacy short-exit model unavailable. Using regime/base model.") : null;
+        loadSetupManifestSchemas(modelDir);
 
         String lifecycleModelDir = LIFECYCLE_MODEL_DIR.isEmpty() ? modelDir : LIFECYCLE_MODEL_DIR;
         String microModelDir = MICRO_MODEL_DIR.isEmpty() ? lifecycleModelDir : MICRO_MODEL_DIR;
@@ -1104,6 +1108,102 @@ public class PingPongStrategy implements TradingStrategy {
 
     private boolean lifecycleMicroRouteActive() {
         return UPGRADED_MODEL_ROUTE_REQUIRED || LIFECYCLE_EXIT_ENABLED || MICRO_ENTRY_ENABLED || MICRO_EXIT_GUARD_ENABLED;
+    }
+
+    private void loadSetupManifestSchemas(String modelDir) {
+        File manifest = setupManifestFile(modelDir);
+        if (manifest == null) {
+            return;
+        }
+        try {
+            Map<String, Object> row = JSON_MAPPER.readValue(manifest, new TypeReference<Map<String, Object>>() {});
+            List<String> mainColumns = stringListValue(row.get("feature_columns"));
+            if (mainColumns.isEmpty()) {
+                invalidateSetupRoute("setup_manifest.json missing feature_columns list path=" + manifest.getAbsolutePath());
+                return;
+            }
+            int longEntryExpected = expectedFeatureCountForModel(longEntryAi, mainColumns.size());
+            int shortEntryExpected = expectedFeatureCountForModel(shortEntryAi, mainColumns.size());
+            if (!validateSetupManifestSchema(row, "setup", "feature_count", "feature_schema_sha256", mainColumns, longEntryExpected, manifest)
+                || !validateSetupManifestSchema(row, "setup", "feature_count", "feature_schema_sha256", mainColumns, shortEntryExpected, manifest)) {
+                return;
+            }
+            this.setupFeatureColumns = List.copyOf(mainColumns);
+
+            List<String> regimeColumns = stringListValue(row.get("regime_feature_columns"));
+            if (!regimeColumns.isEmpty()) {
+                int regimeExpected = expectedFeatureCountForModel(regimeClassifierAi, regimeColumns.size());
+                if (!validateSetupManifestSchema(row, "regime", "regime_feature_count", "regime_feature_schema_sha256", regimeColumns, regimeExpected, manifest)) {
+                    return;
+                }
+                this.setupRegimeFeatureColumns = List.copyOf(regimeColumns);
+            }
+            flowInfo(
+                "AI.SCHEMA",
+                "Loaded setup_manifest.json feature schemas symbol=" + symbol
+                    + " featureCount=" + setupFeatureColumns.size()
+                    + " regimeFeatureCount=" + (setupRegimeFeatureColumns == null ? 0 : setupRegimeFeatureColumns.size())
+                    + " path=" + manifest.getAbsolutePath()
+            );
+        } catch (Exception exception) {
+            invalidateSetupRoute("failed to read/validate setup_manifest.json reason=" + exception.getMessage() + " path=" + manifest.getAbsolutePath());
+        }
+    }
+
+    private File setupManifestFile(String modelDir) {
+        if (modelDir == null || modelDir.isBlank()) {
+            return null;
+        }
+        File manifest = new File(modelDir, "setup_manifest.json");
+        return manifest.isFile() ? manifest : null;
+    }
+
+    private List<String> stringListValue(Object rawColumns) {
+        if (!(rawColumns instanceof List<?> rawColumnList)) {
+            return List.of();
+        }
+        return rawColumnList.stream().map(Object::toString).toList();
+    }
+
+    private boolean validateSetupManifestSchema(
+        Map<String, Object> row,
+        String schemaName,
+        String countKey,
+        String hashKey,
+        List<String> columns,
+        int expectedModelFeatureCount,
+        File manifest
+    ) {
+        Object rawCount = row.get(countKey);
+        int manifestCount = rawCount instanceof Number number ? number.intValue() : columns.size();
+        if (manifestCount != columns.size()) {
+            invalidateSetupRoute("setup_manifest.json " + schemaName + " count mismatch key=" + countKey + " actual=" + manifestCount + " columns=" + columns.size() + " path=" + manifest.getAbsolutePath());
+            return false;
+        }
+        if (expectedModelFeatureCount > 0 && expectedModelFeatureCount != columns.size()) {
+            invalidateSetupRoute("setup_manifest.json " + schemaName + " model input mismatch expected=" + expectedModelFeatureCount + " manifest=" + columns.size() + " path=" + manifest.getAbsolutePath());
+            return false;
+        }
+        String actualHash = optionalString(row.get(hashKey));
+        String expectedHash = featureSchemaHash(columns);
+        if (actualHash.isBlank() || !expectedHash.equalsIgnoreCase(actualHash)) {
+            invalidateSetupRoute("setup_manifest.json " + schemaName + " feature_schema_sha256 mismatch key=" + hashKey + " actual=" + actualHash + " expected=" + expectedHash + " path=" + manifest.getAbsolutePath());
+            return false;
+        }
+        List<String> unsupportedColumns = columns.stream()
+            .filter(column -> !SUPPORTED_LIVE_FEATURE_COLUMNS.contains(column))
+            .toList();
+        if (!unsupportedColumns.isEmpty()) {
+            invalidateSetupRoute("setup_manifest.json " + schemaName + " has unsupported live columns=" + unsupportedColumns + " path=" + manifest.getAbsolutePath());
+            return false;
+        }
+        return true;
+    }
+
+    private void invalidateSetupRoute(String reason) {
+        enabled = false;
+        allowNewEntries = false;
+        flowError("AI.SCHEMA", "FATAL setup model feature schema invalid; trading disabled symbol=" + symbol + " reason=" + reason);
     }
 
     private void validateUpgradedRouteManifest(String lifecycleModelDir, String microModelDir) {
@@ -2958,8 +3058,8 @@ public class PingPongStrategy implements TradingStrategy {
 
         int longEntryFeatureCount = expectedFeatureCountForModel(activeLongEntryAi, BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size());
         int shortEntryFeatureCount = expectedFeatureCountForModel(activeShortEntryAi, BASE_PLUS_NEWS_PLUS_REGIME_PROBABILITY_COLUMNS.size());
-        float[] longEntryFeatures = buildFeatureVectorForExpectedCount(longEntryFeatureCount, liveFeatureValues);
-        float[] shortEntryFeatures = buildFeatureVectorForExpectedCount(shortEntryFeatureCount, liveFeatureValues);
+        float[] longEntryFeatures = buildSetupFeatureVectorForExpectedCount(longEntryFeatureCount, liveFeatureValues);
+        float[] shortEntryFeatures = buildSetupFeatureVectorForExpectedCount(shortEntryFeatureCount, liveFeatureValues);
         float[] longExitFeatures = new float[0];
         float[] shortExitFeatures = new float[0];
         if (LEGACY_30S_EXIT_ENABLED && !LIFECYCLE_EXIT_ENABLED) {
@@ -3282,7 +3382,7 @@ public class PingPongStrategy implements TradingStrategy {
             "AI.REGIME",
             "symbol=" + symbol
                 + " regimeFeatureCount=" + regimeFeatures.length
-                + " baseFeatureCount=" + liveFeatureColumnsForExpectedCount(expectedFeatureCount).size()
+                + " baseFeatureCount=" + setupFeatureColumnsForExpectedCount(expectedFeatureCount).size()
                 + " expectedFeatureCount=" + expectedFeatureCount
         );
         return regimeFeatures;
@@ -3294,6 +3394,18 @@ public class PingPongStrategy implements TradingStrategy {
 
     private float[] buildFeatureVectorForExpectedCount(int expectedFeatureCount, Map<String, Float> liveFeatureValues) {
         return buildFeatureVector(liveFeatureColumnsForExpectedCount(expectedFeatureCount), liveFeatureValues);
+    }
+
+    private float[] buildSetupFeatureVectorForExpectedCount(int expectedFeatureCount, Map<String, Float> liveFeatureValues) {
+        return buildFeatureVector(setupFeatureColumnsForExpectedCount(expectedFeatureCount), liveFeatureValues);
+    }
+
+    private List<String> setupFeatureColumnsForExpectedCount(int expectedFeatureCount) {
+        List<String> manifestColumns = setupFeatureColumns;
+        if (manifestColumns != null && manifestColumns.size() == expectedFeatureCount) {
+            return manifestColumns;
+        }
+        return liveFeatureColumnsForExpectedCount(expectedFeatureCount);
     }
 
     private List<String> liveFeatureColumnsForExpectedCount(int expectedFeatureCount) {
@@ -3322,6 +3434,10 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private List<String> regimeFeatureColumnsForExpectedCount(int expectedFeatureCount) {
+        List<String> manifestColumns = setupRegimeFeatureColumns;
+        if (manifestColumns != null && manifestColumns.size() == expectedFeatureCount) {
+            return manifestColumns;
+        }
         if (expectedFeatureCount <= LEGACY_LIVE_FEATURE_COUNT) {
             return LEGACY_REGIME_FEATURE_COLUMNS;
         }

@@ -1,0 +1,23 @@
+TSLA existing micro rows {'long_micro_entry': 0, 'short_micro_entry': 0, 'long_micro_exit': 0, 'short_micro_exit': 0}
+RESUME_LOAD_30S /Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413/input_slice/data_30s/TSLA_30s_training.csv
+OOF_SETUP_JOIN dropped_unscored_30s_rows=40140 retained_rows=126000
+OOF_SETUP_JOIN summary={"errors": [], "min_unique_values": 3, "rows": 126000, "sides": {"long": {"finite_count": 126000, "max": 0.94990437275204, "mean": 0.5283497739347188, "min": 0.0053896158683973, "missing_count": 0, "unique_values": 125486}, "short": {"finite_count": 126000, "max": 0.8846582623955661, "mean": 0.5188461554704541, "min": 0.0126055342756975, "missing_count": 0, "unique_values": 125572}}}
+RESUME_LOAD_5S /Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413/input_slice/data_5s/TSLA_5s_training.csv
+RESUME_BUILD_TSLA_MICRO
+TSLA_MICRO_APPENDED long_micro_entry 69667
+TSLA_MICRO_APPENDED short_micro_entry 69765
+TSLA_MICRO_APPENDED long_micro_exit 56184
+TSLA_MICRO_APPENDED short_micro_exit 53376
+Loaded sampled staged dataset runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/staged_rows_from_external_oof_setup/long_lifecycle_rows.csv rows=500000 total_rows=718477 cap=500000
+TRAINED longExitLifecycleAi: rows=500000 positives=160688 threshold=0.52 precision=99.60% recall=64.99% export=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/long_exit_lifecycle.onnx
+Loaded sampled staged dataset runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/staged_rows_from_external_oof_setup/short_lifecycle_rows.csv rows=500000 total_rows=716394 cap=500000
+TRAINED shortExitLifecycleAi: rows=500000 positives=158243 threshold=0.50 precision=99.54% recall=59.96% export=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/short_exit_lifecycle.onnx
+Loading staged dataset runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/staged_rows_from_external_oof_setup/long_micro_entry_rows.csv rows=249557
+TRAINED longMicroEntryAi: rows=249557 positives=38653 threshold=0.64 precision=86.14% recall=16.74% export=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/long_micro_entry_5s.onnx
+Loading staged dataset runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/staged_rows_from_external_oof_setup/short_micro_entry_rows.csv rows=249216
+TRAINED shortMicroEntryAi: rows=249216 positives=36686 threshold=0.62 precision=88.42% recall=12.29% export=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/short_micro_entry_5s.onnx
+Loading staged dataset runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/staged_rows_from_external_oof_setup/long_micro_exit_rows.csv rows=225120
+TRAINED longMicroExitGuardAi: rows=225120 positives=54541 threshold=0.60 precision=100.00% recall=41.36% export=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/long_micro_exit_guard_5s.onnx
+Loading staged dataset runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/staged_rows_from_external_oof_setup/short_micro_exit_rows.csv rows=213120
+TRAINED shortMicroExitGuardAi: rows=213120 positives=51502 threshold=0.60 precision=100.00% recall=38.93% export=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/short_micro_exit_guard_5s.onnx
+RESUME_TRAIN trained 6 output_dir runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports

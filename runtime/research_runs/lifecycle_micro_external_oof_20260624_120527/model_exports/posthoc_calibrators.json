@@ -1,0 +1,8 @@
+{
+  "schema_version": "lifecycle_micro_posthoc_calibrators_v1",
+  "generated_at_utc": "2026-06-24T19:15:00Z",
+  "models": [],
+  "warnings": [
+    "These calibrators are research-only until Java/runtime applies calibration hashes and full promotion gates pass."
+  ]
+}

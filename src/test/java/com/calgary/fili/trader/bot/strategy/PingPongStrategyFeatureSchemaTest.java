@@ -73,6 +73,8 @@ class PingPongStrategyFeatureSchemaTest {
         "seq_model_consensus_up_prob_30s", "setup_breakout_prob", "setup_pullback_continuation_prob",
         "setup_reversal_prob", "setup_trend_exhaustion_prob", "setup_failed_breakout_prob"
     );
+    private static final List<String> EXPECTED_BASE_PLUS_REGIME_PROBABILITY_SCHEMA = basePlusRegimeProbabilitySchema();
+    private static final List<String> EXPECTED_BASE_REGIME_SCHEMA = EXPECTED_ENHANCED_REGIME_SCHEMA.subList(0, 24);
 
     @Test
     void buildFeatureVectorForExpectedCountMatchesSupportedLiveSchemas() {
@@ -124,6 +126,50 @@ class PingPongStrategyFeatureSchemaTest {
             assertEquals(extendedFeatures[30], extendedRegime[24], 1.0e-6f);
             assertEquals(extendedFeatures[32], extendedRegime[25], 1.0e-6f);
             assertEquals(extendedFeatures[33], extendedRegime[26], 1.0e-6f);
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
+    void setupManifestColumnsOverrideAmbiguousThirtyFourFeatureEntrySchema() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            seedFeatureState(strategy);
+            @SuppressWarnings("unchecked")
+            Map<String, Float> featureValues = ReflectionTestUtils.invokeMethod(strategy, "constructFeatureValueMap", 55.0);
+            featureValues.put("f_regime_prob_choppy", 0.20f);
+            featureValues.put("f_regime_prob_trend", 0.30f);
+            featureValues.put("f_regime_prob_volatile", 0.40f);
+            featureValues.put("f_regime_prob_entropy", 0.90f);
+            ReflectionTestUtils.setField(strategy, "setupFeatureColumns", EXPECTED_BASE_PLUS_REGIME_PROBABILITY_SCHEMA);
+
+            float[] setupFeatures = ReflectionTestUtils.invokeMethod(strategy, "buildSetupFeatureVectorForExpectedCount", 34, featureValues);
+            float[] countBasedFeatures = ReflectionTestUtils.invokeMethod(strategy, "buildFeatureVectorForExpectedCount", 34, featureValues);
+
+            assertEquals(34, setupFeatures.length);
+            assertEquals(34, countBasedFeatures.length);
+            assertEquals(0.20f, setupFeatures[30], 1.0e-6f);
+            assertEquals(0.30f, setupFeatures[31], 1.0e-6f);
+            assertEquals(0.40f, setupFeatures[32], 1.0e-6f);
+            assertEquals(0.90f, setupFeatures[33], 1.0e-6f);
+            assertEquals(featureValues.get("f_spread_pct"), countBasedFeatures[30], 1.0e-6f);
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
+    void setupManifestRegimeColumnsOverrideAmbiguousTwentyFourFeatureRegimeSchema() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            Map<String, Float> orderedValues = indexedFeatureValues(EXPECTED_ENHANCED_MAIN_SCHEMA);
+            ReflectionTestUtils.setField(strategy, "setupRegimeFeatureColumns", EXPECTED_BASE_REGIME_SCHEMA);
+
+            float[] regimeFeatures = ReflectionTestUtils.invokeMethod(strategy, "buildRegimeClassifierFeaturesForExpectedCount", 24, orderedValues);
+
+            assertEquals(24, regimeFeatures.length);
+            assertArrayEquals(expectedVector(EXPECTED_BASE_REGIME_SCHEMA, orderedValues), regimeFeatures, 1.0e-6f);
         } finally {
             strategy.stop();
         }
@@ -375,6 +421,12 @@ class PingPongStrategyFeatureSchemaTest {
             values.put(distinctColumns.get(i), i + 1.0f);
         }
         return values;
+    }
+
+    private static List<String> basePlusRegimeProbabilitySchema() {
+        List<String> columns = new ArrayList<>(EXPECTED_ENHANCED_MAIN_SCHEMA.subList(0, 30));
+        columns.addAll(EXPECTED_ENHANCED_MAIN_SCHEMA.subList(EXPECTED_ENHANCED_MAIN_SCHEMA.size() - 4, EXPECTED_ENHANCED_MAIN_SCHEMA.size()));
+        return List.copyOf(columns);
     }
 
     private static float[] expectedVector(List<String> schema, Map<String, Float> values) {

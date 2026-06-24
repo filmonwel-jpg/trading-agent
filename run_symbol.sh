@@ -501,8 +501,17 @@ model_dir_prop="$(get_prop trading.model.dir)"
 state_file="$(get_prop trading.state.file)"
 trade_log_file="$(get_prop trading.log.file)"
 app_log_file="$(get_prop logging.file.name)"
-model_dir="${model_dir_prop:-$runtime_dir/models/$symbol_upper}"
-lifecycle_model_dir="${TRADING_LIFECYCLE_MODEL_DIR:-$repo_root/model_exports/lifecycle_micro_20260523}"
+default_catboost_setup_model_dir="$repo_root/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854"
+default_lifecycle_micro_model_dir="$repo_root/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports"
+model_dir_env_override="${TRADING_MODEL_DIR:-${TRADING_SETUP_MODEL_DIR:-}}"
+if [[ -n "$model_dir_env_override" ]]; then
+  model_dir="$model_dir_env_override"
+elif [[ -d "$default_catboost_setup_model_dir" ]]; then
+  model_dir="$default_catboost_setup_model_dir"
+else
+  model_dir="${model_dir_prop:-$runtime_dir/models/$symbol_upper}"
+fi
+lifecycle_model_dir="${TRADING_LIFECYCLE_MODEL_DIR:-$default_lifecycle_micro_model_dir}"
 lifecycle_scorecard="$lifecycle_model_dir/lifecycle_micro_scorecard.csv"
 calibrated_micro_thresholds_file="${TRADING_CALIBRATED_MICRO_THRESHOLDS_FILE:-$repo_root/config/databento_calibrated_micro_entry_thresholds.csv}"
 [[ "$calibrated_micro_thresholds_file" != /* ]] && calibrated_micro_thresholds_file="$repo_root/$calibrated_micro_thresholds_file"
@@ -529,7 +538,22 @@ csv_threshold() {
   local default_value="$2"
   if [[ -f "$lifecycle_scorecard" ]]; then
     awk -F, -v model="$model_name" -v fallback="$default_value" '
-      NR > 1 && $1 == model {printf "%.4f", $6 + 0; found=1; exit}
+      function trim(s) { gsub(/^[[:space:]\r\n]+|[[:space:]\r\n]+$/, "", s); return s }
+      function field(name) { return idx[name] ? trim($(idx[name])) : "" }
+      NR == 1 {
+        for (i = 1; i <= NF; i++) idx[trim($i)] = i
+        next
+      }
+      field("model") == model {
+        value = fallback
+        raw_threshold = field("threshold")
+        posthoc_threshold = field("posthoc_threshold")
+        if (raw_threshold != "") value = raw_threshold
+        if (posthoc_threshold != "") value = posthoc_threshold
+        printf "%.4f", value + 0
+        found=1
+        exit
+      }
       END {if (!found) printf "%.4f", fallback + 0}
     ' "$lifecycle_scorecard"
   else

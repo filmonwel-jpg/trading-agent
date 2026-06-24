@@ -1,0 +1,246 @@
+>>> Training model family: catboost
+>>> Regime model family: catboost
+>>> Train legacy 30s exit models: False
+>>> Loading historical data from /Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413/input_slice/combined_30s.csv...
+>>> Regular-session filter applied: kept 830700/830700 rows (09:30-15:59 ET).
+>>> Calculating Java-equivalent features (30-second adjusted)...
+>>> Generating entry labels only; legacy 30s exit labels/model training disabled.
+>>> Entry fill config: mode=next_open_with_slippage entry_slippage_bps=2.00 exit_slippage_bps=2.00 net_r_multiple=1.07
+WARNING: Net entry reward/risk after configured costs is below MIN_NET_R_MULTIPLE=1.20: 1.07
+
+>>> Regime distribution (% rows):
+  choppy:  27.55%
+   trend:  26.95%
+volatile:  45.50%
+>>> Soft separation enabled: training non-open models on >=10:00 ET rows only (766485/830085 rows).
+
+>>> Label prevalence by hour (ET):
+      Label_Long_Entry  Label_Short_Entry  Label_Long_Exit  Label_Short_Exit
+Hour
+9                0.367              0.367              0.0               0.0
+10               0.355              0.349              0.0               0.0
+11               0.334              0.313              0.0               0.0
+12               0.299              0.303              0.0               0.0
+13               0.294              0.283              0.0               0.0
+14               0.270              0.279              0.0               0.0
+15               0.288              0.284              0.0               0.0
+>>> Using base 30-feature set (Java-compatible).
+>>> Regime classifier feature subset: 24 (excluded direct regime-rule proxies).
+>>> Regime probability features enabled (+4 columns from walk-forward regime model outputs).
+>>> Feature count used for training: 34
+
+=========================================
+--- Training Market Regime Classifier ---
+Rows: 766485 | Classes: [0, 1, 2] | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train: 125705 | Test: 126000 | Accuracy: 74.55%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train: 251705 | Test: 126000 | Accuracy: 77.82%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train: 377705 | Test: 126000 | Accuracy: 74.08%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train: 503705 | Test: 126000 | Accuracy: 75.85%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train: 629705 | Test: 126000 | Accuracy: 76.17%
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/regime_classifier.onnx (ir=3, opset=2)
+>>> Regime classifier average walk-forward accuracy: 75.69%
+>>> Skipping legacy base 30s exit model training (long_exit.onnx, short_exit.onnx).
+
+=========================================
+--- Walk-Forward Testing: LONG ENTRY (Dip Buyer) ---
+Total signals found: 235094 / 766485 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 125705 | Test Size: 126000 | Thr: 0.64 | CalP/R/Pos: 73.51%/30.77%/13.05% | Test Pos: 29.38% | Pred Pos: 10.55% (13299) | Out-of-Sample Precision: 36.13%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 251705 | Test Size: 126000 | Thr: 0.62 | CalP/R/Pos: 66.24%/24.68%/11.99% | Test Pos: 31.61% | Pred Pos: 12.10% (15246) | Out-of-Sample Precision: 35.90%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 377705 | Test Size: 126000 | Thr: 0.60 | CalP/R/Pos: 61.47%/21.31%/10.99% | Test Pos: 28.02% | Pred Pos: 8.53% (10750) | Out-of-Sample Precision: 36.68%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 503705 | Test Size: 126000 | Thr: 0.60 | CalP/R/Pos: 56.86%/18.88%/10.07% | Test Pos: 31.43% | Pred Pos: 12.46% (15702) | Out-of-Sample Precision: 38.02%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 629705 | Test Size: 126000 | Thr: 0.60 | CalP/R/Pos: 54.75%/14.29%/7.81% | Test Pos: 33.46% | Pred Pos: 10.78% (13578) | Out-of-Sample Precision: 41.74%
+>>> Average Walk-Forward Precision: 37.69%
+>>> Average Tuned Threshold: 0.61
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/long_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Walk-Forward Testing: SHORT ENTRY (Rip Seller) ---
+Total signals found: 231363 / 766485 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 125705 | Test Size: 126000 | Thr: 0.62 | CalP/R/Pos: 74.46%/35.17%/14.08% | Test Pos: 28.73% | Pred Pos: 15.03% (18935) | Out-of-Sample Precision: 34.82%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 251705 | Test Size: 126000 | Thr: 0.64 | CalP/R/Pos: 74.43%/16.72%/6.67% | Test Pos: 32.00% | Pred Pos: 6.47% (8158) | Out-of-Sample Precision: 37.73%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 377705 | Test Size: 126000 | Thr: 0.60 | CalP/R/Pos: 58.69%/22.54%/11.42% | Test Pos: 29.36% | Pred Pos: 13.23% (16669) | Out-of-Sample Precision: 37.88%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 503705 | Test Size: 126000 | Thr: 0.60 | CalP/R/Pos: 58.21%/18.06%/9.21% | Test Pos: 34.98% | Pred Pos: 13.97% (17602) | Out-of-Sample Precision: 36.94%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 629705 | Test Size: 126000 | Thr: 0.60 | CalP/R/Pos: 0.00%/0.00%/0.00% | Test Pos: 27.49% | Pred Pos: 10.47% (13186) | Out-of-Sample Precision: 34.03%
+>>> Average Walk-Forward Precision: 36.28%
+>>> Average Tuned Threshold: 0.61
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/short_entry.onnx (ir=3, opset=2)
+
+>>> MODEL SCORECARD
+Model | Signals/Rows | SignalRate | AvgPrecision | AvgThreshold | ThrStd | Brier | ECE | Folds | Export
+LONG ENTRY (Dip Buyer) | 235094/766485 | 30.67% | 37.69% | 0.61 | 0.0160 | 0.2471 | 0.1845 | 5 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/long_entry.onnx
+SHORT ENTRY (Rip Seller) | 231363/766485 | 30.18% | 36.28% | 0.61 | 0.0160 | 0.2476 | 0.1894 | 5 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/short_entry.onnx
+>>> Skipping 2 legacy 30s exit model(s) for regime-specific training (TRAIN_LEGACY_30S_EXIT_MODELS=0).
+
+=========================================
+--- Training CHOPPY Specialized Models ---
+Rows in regime subset: 223381
+
+=========================================
+--- Walk-Forward Testing: CHOPPY LONG ENTRY (Dip Buyer) ---
+Total signals found: 62804 / 223381 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 40844 | Test Size: 39167 | Thr: 0.68 | CalP/R/Pos: 89.20%/50.76%/18.71% | Test Pos: 26.34% | Pred Pos: 8.12% (3180) | Out-of-Sample Precision: 34.37%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 80011 | Test Size: 34026 | Thr: 0.66 | CalP/R/Pos: 81.13%/42.67%/17.69% | Test Pos: 28.08% | Pred Pos: 7.29% (2482) | Out-of-Sample Precision: 32.92%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 114037 | Test Size: 38891 | Thr: 0.66 | CalP/R/Pos: 82.66%/27.20%/10.87% | Test Pos: 25.30% | Pred Pos: 2.82% (1096) | Out-of-Sample Precision: 31.57%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 152928 | Test Size: 34718 | Thr: 0.64 | CalP/R/Pos: 77.12%/25.66%/9.89% | Test Pos: 30.43% | Pred Pos: 6.33% (2198) | Out-of-Sample Precision: 37.67%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 187646 | Test Size: 34637 | Thr: 0.64 | CalP/R/Pos: 78.02%/17.64%/6.59% | Test Pos: 31.05% | Pred Pos: 3.82% (1324) | Out-of-Sample Precision: 40.11%
+>>> Average Walk-Forward Precision: 35.33%
+>>> Average Tuned Threshold: 0.66
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/choppy_long_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Walk-Forward Testing: CHOPPY SHORT ENTRY (Rip Seller) ---
+Total signals found: 63626 / 223381 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 40844 | Test Size: 39167 | Thr: 0.62 | CalP/R/Pos: 83.04%/69.32%/25.05% | Test Pos: 26.69% | Pred Pos: 16.24% (6361) | Out-of-Sample Precision: 34.81%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 80011 | Test Size: 34026 | Thr: 0.68 | CalP/R/Pos: 85.73%/26.70%/8.85% | Test Pos: 28.45% | Pred Pos: 3.93% (1338) | Out-of-Sample Precision: 37.67%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 114037 | Test Size: 38891 | Thr: 0.64 | CalP/R/Pos: 79.54%/29.31%/10.39% | Test Pos: 28.24% | Pred Pos: 9.43% (3667) | Out-of-Sample Precision: 35.94%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 152928 | Test Size: 34718 | Thr: 0.64 | CalP/R/Pos: 77.07%/23.24%/8.73% | Test Pos: 34.27% | Pred Pos: 11.52% (4000) | Out-of-Sample Precision: 33.75%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 187646 | Test Size: 34637 | Thr: 0.64 | CalP/R/Pos: 80.57%/19.08%/7.09% | Test Pos: 26.71% | Pred Pos: 4.91% (1700) | Out-of-Sample Precision: 29.24%
+>>> Average Walk-Forward Precision: 34.28%
+>>> Average Tuned Threshold: 0.64
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/choppy_short_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Training TREND Specialized Models ---
+Rows in regime subset: 217024
+
+=========================================
+--- Walk-Forward Testing: TREND LONG ENTRY (Dip Buyer) ---
+Total signals found: 63026 / 217024 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 39737 | Test Size: 37421 | Thr: 0.64 | CalP/R/Pos: 87.01%/53.99%/18.80% | Test Pos: 27.63% | Pred Pos: 9.60% (3594) | Out-of-Sample Precision: 33.44%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 77158 | Test Size: 32227 | Thr: 0.66 | CalP/R/Pos: 83.70%/30.06%/11.25% | Test Pos: 30.34% | Pred Pos: 7.85% (2530) | Out-of-Sample Precision: 35.61%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 109385 | Test Size: 39006 | Thr: 0.64 | CalP/R/Pos: 78.59%/27.57%/11.06% | Test Pos: 26.67% | Pred Pos: 6.93% (2703) | Out-of-Sample Precision: 37.62%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 148391 | Test Size: 32122 | Thr: 0.62 | CalP/R/Pos: 72.40%/28.01%/11.54% | Test Pos: 30.08% | Pred Pos: 18.81% (6043) | Out-of-Sample Precision: 36.42%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 180513 | Test Size: 34938 | Thr: 0.62 | CalP/R/Pos: 74.76%/20.47%/8.05% | Test Pos: 32.02% | Pred Pos: 6.84% (2390) | Out-of-Sample Precision: 37.41%
+>>> Average Walk-Forward Precision: 36.10%
+>>> Average Tuned Threshold: 0.64
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/trend_long_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Walk-Forward Testing: TREND SHORT ENTRY (Rip Seller) ---
+Total signals found: 61843 / 217024 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 39737 | Test Size: 37421 | Thr: 0.64 | CalP/R/Pos: 84.06%/59.91%/22.89% | Test Pos: 26.56% | Pred Pos: 9.63% (3602) | Out-of-Sample Precision: 34.79%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 77158 | Test Size: 32227 | Thr: 0.66 | CalP/R/Pos: 83.52%/32.96%/12.31% | Test Pos: 29.70% | Pred Pos: 6.30% (2029) | Out-of-Sample Precision: 36.67%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 109385 | Test Size: 39006 | Thr: 0.64 | CalP/R/Pos: 78.32%/29.69%/11.66% | Test Pos: 27.15% | Pred Pos: 7.65% (2983) | Out-of-Sample Precision: 35.64%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 148391 | Test Size: 32122 | Thr: 0.66 | CalP/R/Pos: 82.04%/19.14%/7.09% | Test Pos: 34.66% | Pred Pos: 2.69% (865) | Out-of-Sample Precision: 38.96%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 180513 | Test Size: 34938 | Thr: 0.64 | CalP/R/Pos: 77.56%/18.68%/7.53% | Test Pos: 25.62% | Pred Pos: 4.39% (1535) | Out-of-Sample Precision: 33.49%
+>>> Average Walk-Forward Precision: 35.91%
+>>> Average Tuned Threshold: 0.65
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/trend_short_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Training VOLATILE Specialized Models ---
+Rows in regime subset: 326080
+
+=========================================
+--- Walk-Forward Testing: VOLATILE LONG ENTRY (Dip Buyer) ---
+Total signals found: 109264 / 326080 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 45124 | Test Size: 49412 | Thr: 0.60 | CalP/R/Pos: 81.20%/51.22%/19.51% | Test Pos: 33.13% | Pred Pos: 18.46% (9121) | Out-of-Sample Precision: 35.51%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 94536 | Test Size: 62912 | Thr: 0.62 | CalP/R/Pos: 83.41%/28.02%/11.16% | Test Pos: 33.75% | Pred Pos: 11.24% (7069) | Out-of-Sample Precision: 34.83%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 157448 | Test Size: 48313 | Thr: 0.60 | CalP/R/Pos: 0.00%/0.00%/0.00% | Test Pos: 31.14% | Pred Pos: 6.41% (3097) | Out-of-Sample Precision: 41.14%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 205761 | Test Size: 58899 | Thr: 0.60 | CalP/R/Pos: 0.00%/0.00%/0.00% | Test Pos: 33.88% | Pred Pos: 8.84% (5204) | Out-of-Sample Precision: 36.41%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 264660 | Test Size: 56510 | Thr: 0.60 | CalP/R/Pos: 0.00%/0.00%/0.00% | Test Pos: 34.99% | Pred Pos: 9.00% (5088) | Out-of-Sample Precision: 43.81%
+>>> Average Walk-Forward Precision: 38.34%
+>>> Average Tuned Threshold: 0.60
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/volatile_long_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Walk-Forward Testing: VOLATILE SHORT ENTRY (Rip Seller) ---
+Total signals found: 105894 / 326080 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 45124 | Test Size: 49412 | Thr: 0.60 | CalP/R/Pos: 82.41%/55.40%/19.59% | Test Pos: 31.98% | Pred Pos: 20.02% (9892) | Out-of-Sample Precision: 32.65%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 94536 | Test Size: 62912 | Thr: 0.62 | CalP/R/Pos: 83.28%/28.96%/10.75% | Test Pos: 34.58% | Pred Pos: 8.30% (5220) | Out-of-Sample Precision: 39.10%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 157448 | Test Size: 48313 | Thr: 0.62 | CalP/R/Pos: 79.86%/16.41%/6.40% | Test Pos: 32.19% | Pred Pos: 6.13% (2960) | Out-of-Sample Precision: 42.09%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 205761 | Test Size: 58899 | Thr: 0.60 | CalP/R/Pos: 72.79%/14.89%/6.35% | Test Pos: 35.11% | Pred Pos: 8.89% (5237) | Out-of-Sample Precision: 36.59%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 264660 | Test Size: 56510 | Thr: 0.60 | CalP/R/Pos: 0.00%/0.00%/0.00% | Test Pos: 29.26% | Pred Pos: 8.20% (4632) | Out-of-Sample Precision: 35.77%
+>>> Average Walk-Forward Precision: 37.24%
+>>> Average Tuned Threshold: 0.61
+!!! WARNING: This model shows poor out-of-sample prediction power.
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/volatile_short_entry.onnx (ir=3, opset=2)
+
+>>> REGIME-SPECIFIC MODEL SCORECARD
+Regime | Model | Signals/Rows | AvgPrecision | AvgThreshold | Export
+choppy | LONG ENTRY (Dip Buyer) | 62804/223381 | 35.33% | 0.66 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/choppy_long_entry.onnx
+choppy | SHORT ENTRY (Rip Seller) | 63626/223381 | 34.28% | 0.64 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/choppy_short_entry.onnx
+trend | LONG ENTRY (Dip Buyer) | 63026/217024 | 36.10% | 0.64 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/trend_long_entry.onnx
+trend | SHORT ENTRY (Rip Seller) | 61843/217024 | 35.91% | 0.65 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/trend_short_entry.onnx
+volatile | LONG ENTRY (Dip Buyer) | 109264/326080 | 38.34% | 0.60 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/volatile_long_entry.onnx
+volatile | SHORT ENTRY (Rip Seller) | 105894/326080 | 37.24% | 0.61 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/volatile_short_entry.onnx
+>>> Skipping 2 legacy 30s exit model(s) for opening-30m training (TRAIN_LEGACY_30S_EXIT_MODELS=0).
+
+=========================================
+--- Training OPENING-30M Specialized Models ---
+Rows in opening subset: 64660
+
+=========================================
+--- Walk-Forward Testing: OPEN30 LONG ENTRY (Dip Buyer) ---
+Total signals found: 23753 / 64660 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 10675 | Test Size: 10675 | Thr: 0.62 | CalP/R/Pos: 94.36%/82.58%/29.88% | Test Pos: 40.20% | Pred Pos: 1.74% (186) | Out-of-Sample Precision: 44.62%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 21350 | Test Size: 10675 | Thr: 0.60 | CalP/R/Pos: 88.88%/66.86%/27.38% | Test Pos: 35.86% | Pred Pos: 29.90% (3192) | Out-of-Sample Precision: 40.66%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 32025 | Test Size: 10675 | Thr: 0.64 | CalP/R/Pos: 89.41%/44.46%/18.28% | Test Pos: 33.83% | Pred Pos: 17.57% (1876) | Out-of-Sample Precision: 28.30%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 42700 | Test Size: 10675 | Thr: 0.64 | CalP/R/Pos: 89.09%/29.38%/11.70% | Test Pos: 38.23% | Pred Pos: 10.55% (1126) | Out-of-Sample Precision: 45.74%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 53375 | Test Size: 10675 | Thr: 0.60 | CalP/R/Pos: 81.82%/32.37%/13.91% | Test Pos: 37.53% | Pred Pos: 14.44% (1541) | Out-of-Sample Precision: 40.95%
+>>> Average Walk-Forward Precision: 40.06%
+>>> Average Tuned Threshold: 0.62
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/open30_long_entry.onnx (ir=3, opset=2)
+
+=========================================
+--- Walk-Forward Testing: OPEN30 SHORT ENTRY (Rip Seller) ---
+Total signals found: 23730 / 64660 | ModelFamily: catboost
+Fold 1 | TrainDays: 35 | TestDays: 35 | Train Size: 10675 | Test Size: 10675 | Thr: 0.60 | CalP/R/Pos: 93.22%/74.60%/28.34% | Test Pos: 31.32% | Pred Pos: 43.98% (4695) | Out-of-Sample Precision: 29.35%
+Fold 2 | TrainDays: 70 | TestDays: 35 | Train Size: 21350 | Test Size: 10675 | Thr: 0.68 | CalP/R/Pos: 94.90%/42.87%/14.68% | Test Pos: 39.92% | Pred Pos: 6.78% (724) | Out-of-Sample Precision: 50.83%
+Fold 3 | TrainDays: 105 | TestDays: 35 | Train Size: 32025 | Test Size: 10675 | Thr: 0.60 | CalP/R/Pos: 83.69%/49.98%/19.81% | Test Pos: 40.01% | Pred Pos: 13.49% (1440) | Out-of-Sample Precision: 44.03%
+Fold 4 | TrainDays: 140 | TestDays: 35 | Train Size: 42700 | Test Size: 10675 | Thr: 0.64 | CalP/R/Pos: 89.58%/26.29%/9.78% | Test Pos: 37.54% | Pred Pos: 10.90% (1164) | Out-of-Sample Precision: 43.56%
+Fold 5 | TrainDays: 175 | TestDays: 35 | Train Size: 53375 | Test Size: 10675 | Thr: 0.60 | CalP/R/Pos: 81.89%/29.72%/12.10% | Test Pos: 32.74% | Pred Pos: 12.80% (1366) | Out-of-Sample Precision: 37.77%
+>>> Average Walk-Forward Precision: 41.11%
+>>> Average Tuned Threshold: 0.62
+
+>>> Training Final Production Model on 100% of data...
+>>> Exported Production Model: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/open30_short_entry.onnx (ir=3, opset=2)
+
+>>> OPENING-30M MODEL SCORECARD
+Model | Signals/Rows | AvgPrecision | AvgThreshold | Export
+LONG ENTRY (Dip Buyer) | 23753/64660 | 40.06% | 0.62 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/open30_long_entry.onnx
+SHORT ENTRY (Rip Seller) | 23730/64660 | 41.11% | 0.62 | /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/open30_short_entry.onnx
+
+>>> REGIME CLASSIFIER
+MarketRegimeClassifier | AvgAccuracy=75.69% | Export=/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/regime_classifier.onnx
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/cost_aware_setup_labels.csv
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/cost_aware_label_manifest.json
+
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_scorecard.csv
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/threshold_grid.csv (10 fold rows)
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/oof_setup_predictions.csv (total_rows=766485 paired_oof_rows=630000)
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/calibration_manifest.json
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/calibration_reliability.csv
+>>> Wrote /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_manifest.json
+
+==================================================
+>>> PIPELINE COMPLETE.
+>>> Entry/regime 30-second models have been exported; legacy exit models were skipped.
+>>> Output directory: /Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+>>> Drop the .onnx files directly into your new Java branch.
+==================================================

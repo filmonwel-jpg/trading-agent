@@ -14,6 +14,13 @@ Verified local/external state on this computer:
 - External mount flags: `apfs, local, nodev, nosuid, read-only, journaled, noowners`
 - External free space shown by `df`: about `2.9TiB`, but not writable from this computer
 
+June 22 update for this computer:
+
+- `/Volumes/DatabentoVault` was reconnected and usable as a read-only source during lifecycle/micro row regeneration.
+- The old repository symlinks under `training_data/databento_*` still pointed at missing external paths, so the run used explicit source paths instead of relying on those symlinks.
+- Large writes were kept local under `runtime/research_runs/` in this repository; no writes were made to the external vault.
+- External APFS volume behavior remained read-only from this computer. The volume briefly disappeared during a large read attempt and was remounted with `diskutil mount disk5s1` before using lightweight source reads and streaming copies.
+
 ## Downloaded data visible on the read-only external vault
 
 Raw Databento sources visible at the vault root:
@@ -1567,6 +1574,294 @@ Action done on 2026-06-18 — local no-news CatBoost/meta plus Databento silver 
   - meta `all` fold 1: threshold `0.6000 -> 0.3856`, `20` predictions, floor precision `0.000000`.
   - meta `equs` fold 1: threshold `0.6200 -> 0.5023`, `20` predictions, floor precision `0.000000`.
 - Interpretation: combining CatBoost, meta producer features, no-news mode, and the new silver/liquidity/all/equs blocks did **not** improve the actual blocker. The best long-side readout was `catboost_nonews_meta/equs`, but every combined CatBoost/meta silver candidate materially degraded short-entry precision versus its matching no-silver CatBoost/meta baseline and retained a zero/thin short fold. This matrix is **NO-GO** for promotion and should not be used as the next production candidate. The earlier RandomForest silver `liquidity` readout remains the more useful silver-source signal, but still requires solving short-fold stability and precision before any paper/live step.
+
+### Step 21 — June 22 CatBoost setup OOF lifecycle/micro recovery bundle
+
+Action plan:
+
+- Avoid MBP-1/`equs_liquidity` dependency for this lifecycle/micro recovery pass.
+- Generate or reuse CatBoost/no-news 30s setup OOF probabilities for the five-symbol broad local cache.
+- Inject those real OOF setup probabilities into existing lifecycle/micro staged rows as a recovery path if raw 5s bar sources are unavailable.
+- Validate that the resulting staged rows are no longer bootstrap `1.0` proxy rows and that the exported ONNX bundle matches the Java feature-count contract.
+- Keep the output explicitly research-only until true 5s rows are regenerated and runtime/promotion gates pass.
+
+Action done:
+
+- Research root: `runtime/research_runs/lifecycle_micro_catboost_only_20260622`.
+- Setup OOF source: `runtime/research_runs/lifecycle_micro_catboost_only_20260622/setup_predictions/oof_setup_predictions.csv`.
+- Recovery trainer: `scripts/train_lifecycle_micro_from_staged_rows.py`.
+- Existing staged-row source: `runtime/lifecycle_micro_20260523_staging`.
+- Restaged rows with real OOF setup probabilities:
+  - `restaged_rows_with_oof_setup/long_lifecycle_rows.csv`
+  - `restaged_rows_with_oof_setup/short_lifecycle_rows.csv`
+  - `restaged_rows_with_oof_setup/long_micro_entry_rows.csv`
+  - `restaged_rows_with_oof_setup/short_micro_entry_rows.csv`
+  - `restaged_rows_with_oof_setup/long_micro_exit_rows.csv`
+  - `restaged_rows_with_oof_setup/short_micro_exit_rows.csv`
+- Exported research bundle: `runtime/research_runs/lifecycle_micro_catboost_only_20260622/model_exports`.
+- Validation command passed:
+
+```text
+LIFECYCLE_MICRO_BUNDLE_VALIDATION=PASS
+validation=runtime/research_runs/lifecycle_micro_catboost_only_20260622/bundle_validation.json
+```
+
+- Important limitation: this was a staged-row recovery path. It did **not** rebuild labels/features from raw 5s bars, and it should not be used as a production candidate.
+- Stop/go decision: **GO as recovery/integration evidence**, **NO-GO for promotion**. Next step was true 30s/5s bar regeneration once the external 5s source became readable.
+
+### Step 22 — June 22 true 30s/5s bar regeneration for lifecycle/micro models
+
+Action plan:
+
+- Use the local copied 30s full-window cache and the external-disk 5s full-window cache as explicit sources.
+- Split the combined 30s and 5s CSVs into per-symbol training files so `train_lifecycle_micro_models.py` can use its streaming per-symbol path instead of loading both large combined CSVs into memory.
+- Train lifecycle/micro from true bar-derived rows using the CatBoost/no-news setup OOF predictions from Step 21.
+- Validate split manifests, staged rows, model feature counts, scorecards, non-bootstrap setup/entry probability columns, and Java route compatibility.
+- Run a Java historical backtest dry-run load smoke using the new model directory.
+
+Action done:
+
+- Local 30s source:
+
+```text
+runtime/research_runs/input_cache/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv
+```
+
+- External 5s source:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413/input_slice/combined_5s.csv
+```
+
+- New streaming splitter added: `scripts/split_combined_bars_by_symbol.py`.
+- Bar-regeneration root: `runtime/research_runs/lifecycle_micro_bar_regen_20260622`.
+- Split manifests:
+  - `bars_30s_by_symbol_manifest.json`: `830700` rows, `166140` rows each for `NVDA`, `QQQ`, `SPY`, `TQQQ`, `TSLA`.
+  - `bars_5s_by_symbol_manifest.json`: `4984200` rows, `996840` rows each for the same five symbols.
+- Staged true bar-derived lifecycle/micro rows:
+  - `long_lifecycle_rows.csv`: `50000`
+  - `short_lifecycle_rows.csv`: `50000`
+  - `long_micro_entry_rows.csv`: `17242`
+  - `short_micro_entry_rows.csv`: `17361`
+  - `long_micro_exit_rows.csv`: `15504`
+  - `short_micro_exit_rows.csv`: `15120`
+
+Implementation correction discovered and fixed:
+
+- The first true bar-based train emitted feature counts `31/41/44`, which did not match `PingPongStrategy.java`'s runtime feature lists.
+- `train_lifecycle_micro_models.py` was patched to emit the Java-required probability/threshold/margin aliases in full bar-derived rows:
+  - `f_entry_prob`, `f_entry_threshold`, `f_entry_threshold_margin`
+  - `f_setup_prob`, `f_setup_threshold`, `f_setup_threshold_margin`
+- After retraining, route-manifest/ONNX feature counts matched the runtime contract: lifecycle `34`, micro-entry `44`, micro-exit guard `50`.
+
+Final scorecard from `runtime/research_runs/lifecycle_micro_bar_regen_20260622/model_exports/lifecycle_micro_scorecard.csv`:
+
+| Model | Rows | Positives | Threshold | Precision | Recall | Feature count |
+|---|---:|---:|---:|---:|---:|---:|
+| `longExitLifecycleAi` | `50000` | `15712` | `0.50` | `99.58%` | `68.01%` | `34` |
+| `shortExitLifecycleAi` | `50000` | `15471` | `0.58` | `99.95%` | `63.50%` | `34` |
+| `longMicroEntryAi` | `17242` | `2683` | `0.62` | `81.87%` | `26.97%` | `44` |
+| `shortMicroEntryAi` | `17361` | `2633` | `0.52` | `87.76%` | `24.57%` | `44` |
+| `longMicroExitGuardAi` | `15504` | `3940` | `0.60` | `100.00%` | `45.26%` | `50` |
+| `shortMicroExitGuardAi` | `15120` | `3933` | `0.60` | `100.00%` | `51.46%` | `50` |
+
+Validation artifacts and commands:
+
+- New validator: `runtime/research_runs/lifecycle_micro_bar_regen_20260622/validate_lifecycle_micro_bar_bundle.py`.
+- Validation result:
+
+```text
+LIFECYCLE_MICRO_BAR_BUNDLE_VALIDATION=PASS
+validation=runtime/research_runs/lifecycle_micro_bar_regen_20260622/bar_bundle_validation.json
+```
+
+- Existing recovery-bundle validator still passed:
+
+```text
+LIFECYCLE_MICRO_BUNDLE_VALIDATION=PASS
+validation=runtime/research_runs/lifecycle_micro_catboost_only_20260622/bundle_validation.json
+```
+
+- Python validation passed:
+  - `python3 -m py_compile train_lifecycle_micro_models.py scripts/train_lifecycle_micro_from_staged_rows.py scripts/split_combined_bars_by_symbol.py runtime/research_runs/lifecycle_micro_catboost_only_20260622/validate_lifecycle_micro_bundle.py runtime/research_runs/lifecycle_micro_bar_regen_20260622/validate_lifecycle_micro_bar_bundle.py generate_walk_forward_setup_predictions.py`
+  - `python3 -m unittest discover -s tests -p 'test_lifecycle_micro_models.py'` → `14` tests OK.
+- Java build passed: `./mvnw -q -DskipTests package`.
+- Java dry-run load smoke passed using `TRADING_LIFECYCLE_MODEL_DIR=$PWD/runtime/research_runs/lifecycle_micro_bar_regen_20260622/model_exports`:
+  - All six upgraded route models logged `FEATURE_COUNT_SUPPORTED=PASS` with expected counts `34`, `44`, and `50`.
+  - `PingPongStrategy` validated `lifecycle_micro_route_manifest.json`.
+  - Wrapper result: `[BACKTEST] completed=1 failed=0 requested=1`.
+  - Dry-run intentionally processed `0` equity/option bars, so no trades were expected.
+
+Documentation added:
+
+- `docs/lifecycle_micro_catboost_only_runbook.md` for the staged-row recovery path.
+- `docs/lifecycle_micro_bar_regen_20260622_runbook.md` for the true bar-regeneration path and re-run commands.
+
+Stop/go decision:
+
+- **GO** for treating `runtime/research_runs/lifecycle_micro_bar_regen_20260622/model_exports` as the current local research reference for the Java-compatible lifecycle/micro route.
+- **NO-GO** for production or paper/live promotion. Remaining blockers are runtime post-hoc calibration application, recorded-event replay parity, full decision/PnL/day-dominance backtests, paper/shadow drift checks, and cost-aware label-economics review.
+
+Current stage after Step 22:
+
+1. **Completed:** CatBoost/no-news setup OOF, true 30s/5s bar splitting, non-bootstrap lifecycle/micro row regeneration, Java-compatible ONNX export, local bundle validation, Java load smoke.
+2. **Next research validation:** run non-dry historical backtests or replay-driven backtests against the June 22 bundle and inspect trades/PnL/day dominance.
+3. **Next promotion engineering:** implement/runtime-apply selected calibration metadata, then run recorded-event replay parity.
+4. **Promotion status:** still **NO-GO** until every promotion gate in the dynamic upgrade plan passes.
+
+### Step 23 — June 24 CatBoost cost-aware setup ONNX export and external lifecycle/micro handoff
+
+Discussion outcome:
+
+- The clean rollback point is the CatBoost cost-aware, no-news, no-silver setup path, before the later silver/meta enrichment experiments.
+- Selected setup lineage from the prior docs remains:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/setup_cost_aware_30s_catboost_nonews_20260616_163956
+```
+
+- The downstream full-window chain that consumed that OOF source remains:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413
+```
+
+- That downstream chain had `RUN_SETUP_STAGE=0`; it used the CatBoost OOF predictions from `setup_cost_aware_30s_catboost_nonews_20260616_163956/oof_setup_predictions.csv` and provided aligned full-window `input_slice` data.
+- The later silver/meta branch is explicitly not the current model source. The combined CatBoost/meta/silver candidates materially degraded the short side and retained thin/zero short-fold blockers, so they remain **NO-GO** for promotion.
+
+Action completed — CatBoost setup ONNX export:
+
+```text
+/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+```
+
+Training/export settings used for lineage:
+
+```text
+MODEL_FAMILY=catboost
+REGIME_MODEL_FAMILY=catboost
+REQUIRE_MODEL_FAMILY=1
+TRAIN_LEGACY_30S_EXIT_MODELS=0
+USE_NEWS_BAR_FEATURES=0
+USE_META_PRODUCER_FEATURES=0
+USE_DATABENTO_SILVER_FEATURES=0
+USE_REGIME_PROB_FEATURES=1
+UPDATE_CANONICAL_MODEL_ALIASES=0
+COST_AWARE_LABELS=1
+ENTRY_FILL_MODE=next_open_with_slippage
+```
+
+Setup artifacts validated:
+
+- `long_entry.onnx`
+- `short_entry.onnx`
+- `regime_classifier.onnx`
+- `choppy_long_entry.onnx`
+- `choppy_short_entry.onnx`
+- `trend_long_entry.onnx`
+- `trend_short_entry.onnx`
+- `volatile_long_entry.onnx`
+- `volatile_short_entry.onnx`
+- `open30_long_entry.onnx`
+- `open30_short_entry.onnx`
+- `setup_manifest.json`
+- `setup_scorecard.csv`
+- `threshold_grid.csv`
+- `oof_setup_predictions.csv`
+- `calibration_manifest.json`
+- `calibration_reliability.csv`
+- `cost_aware_label_manifest.json`
+- `cost_aware_setup_labels.csv`
+
+Setup validation notes:
+
+- Manifest validation: `errors=[]`.
+- Entry/setup model feature count: `34`.
+- Regime classifier feature count: `24`.
+- Setup schema tail: `f_regime_prob_choppy`, `f_regime_prob_trend`, `f_regime_prob_volatile`, `f_regime_prob_entropy`.
+- OOF rows: `total_rows=766485`, `paired_oof_rows=630000`.
+- ONNX shape check: setup/entry models `34`, regime classifier `24`.
+
+Runtime schema fix completed:
+
+- Root issue: CatBoost setup `34` means `base 30 + 4 regime probability features`, while older count-based Java routing also had a `34` path meaning `base 30 + 4 extended/microstructure features`.
+- `PingPongStrategy.java` now reads `setup_manifest.json` and uses exact manifest feature columns for setup entry models and exact manifest regime columns for the regime classifier.
+- `AiPredictor.java` now marks `24`-feature regime classifiers as supported.
+- Tests added in `PingPongStrategyFeatureSchemaTest.java` for ambiguous `34`-feature setup and `24`-feature regime schema handling.
+- Validation passed:
+  - `./mvnw -Dtest=PingPongStrategyFeatureSchemaTest test` → `Tests run: 9, Failures: 0, Errors: 0`.
+  - `./mvnw test` → `Tests run: 77, Failures: 0, Errors: 0`.
+  - Java setup load smoke loaded `long_entry.onnx` (`34`), `short_entry.onnx` (`34`), and `regime_classifier.onnx` (`24`) with `setup_manifest.json` applied.
+
+Action completed — external per-symbol lifecycle/micro retrain from the June 24 setup OOF:
+
+```text
+/Users/FXG06FA/trading-agent-main/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
+```
+
+Inputs:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413/input_slice/data_30s
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_full_window_cost_aware_catboost_setup_20260616_200413/input_slice/data_5s
+/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/oof_setup_predictions.csv
+```
+
+Exported lifecycle/micro artifacts:
+
+- `long_exit_lifecycle.onnx`
+- `short_exit_lifecycle.onnx`
+- `long_micro_entry_5s.onnx`
+- `short_micro_entry_5s.onnx`
+- `long_micro_exit_guard_5s.onnx`
+- `short_micro_exit_guard_5s.onnx`
+- `lifecycle_micro_route_manifest.json`
+- `feature_schema.json`
+- `lifecycle_micro_scorecard.csv`
+- `calibration_manifest.json`
+- `calibration_reliability.csv`
+
+Lifecycle/micro scorecard:
+
+| Model | Rows | Positives | Threshold | Precision | Recall | Features |
+|---|---:|---:|---:|---:|---:|---:|
+| `longExitLifecycleAi` | `500000` | `160688` | `0.52` | `99.60%` | `64.99%` | `34` |
+| `shortExitLifecycleAi` | `500000` | `158243` | `0.50` | `99.54%` | `59.96%` | `34` |
+| `longMicroEntryAi` | `249557` | `38653` | `0.64` | `86.14%` | `16.74%` | `44` |
+| `shortMicroEntryAi` | `249216` | `36686` | `0.62` | `88.42%` | `12.29%` | `44` |
+| `longMicroExitGuardAi` | `225120` | `54541` | `0.60` | `100.00%` | `41.36%` | `50` |
+| `shortMicroExitGuardAi` | `213120` | `51502` | `0.60` | `100.00%` | `38.93%` | `50` |
+
+Lifecycle/micro validation notes:
+
+- Six ONNX files present.
+- `lifecycle_micro_scorecard.csv` has six rows.
+- `lifecycle_micro_route_manifest.json` has six route entries and all route model paths exist.
+- ONNX input shapes match the Java route contract: lifecycle `34`, micro entry `44`, micro exit guard `50`.
+- Java dry-run load smoke passed with setup directory `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854` and lifecycle/micro directory `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`; all setup/lifecycle/micro ONNX loads reported `FEATURE_COUNT_SUPPORTED=PASS`; backtest dry-run completed with `failed=0`.
+- Transient external-volume issue during staging was handled by resuming only the missing TSLA micro rows. Resume helper: `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/resume_lifecycle_micro_external_20260624.py`; resume manifest: `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/resume_lifecycle_micro_external_20260624_manifest.json`.
+
+Backtest/live handoff wiring:
+
+- `run_symbol.sh` now defaults to:
+  - setup model dir: `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`
+  - lifecycle/micro dir: `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`
+- `scripts/run_databento_historical_streaming_backtest_20260523.sh` now uses the same defaults.
+- Overrides still win:
+  - `MODEL_DIR`
+  - `TRADING_MODEL_DIR`
+  - `TRADING_SETUP_MODEL_DIR`
+  - `TRADING_LIFECYCLE_MODEL_DIR`
+  - explicit `trading.model.dir` extra args/properties.
+
+Next computer tasks:
+
+1. Pull the branch and verify both committed model directories are present.
+2. Run historical backtests across `NVDA`, `QQQ`, `SPY`, `TQQQ`, and `TSLA` with the default June 24 model directories.
+3. Produce full decision/PnL reports, not only model scorecards: trades, gross/net R, slippage/commission sensitivity, long/short split, per-symbol split, max day dominance, and worst-day loss.
+4. Run recorded-event replay parity to verify live feature construction matches `setup_manifest.json` and `lifecycle_micro_route_manifest.json`.
+5. Review probability calibration and threshold stability at the selected scorecard thresholds.
+6. Keep the bundle **research-only / NO-GO for paper-live promotion** until replay, backtest, calibration/hash, label-economics, and paper/shadow drift gates pass.
 
 ### Phase C — Training and promotion gates on the 48GB machine
 

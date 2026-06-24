@@ -68,6 +68,9 @@ THRESHOLD_RANGES = {
 
 NON_FEATURE_COLUMNS = {
     "Symbol", "Timestamp", "Date", "MarketRegime", "RegimeLabel", "Side", "EntryTime",
+    "SetupTime", "arm_id", "trade_path_id", "entry_decision_id", "label_version",
+    "fill_model_version", "feature_schema_version", "setup_route", "setup_cohort",
+    "setup_probability", "setup_threshold", "setup_threshold_margin",
     "Label_Long_Entry", "Label_Short_Entry", "Label_Long_Exit", "Label_Short_Exit",
     "Label_Long_MicroEntry", "Label_Short_MicroEntry", "Label_Long_MicroExitGuard", "Label_Short_MicroExitGuard",
     "Label_Long_ExitLifecycle", "Label_Short_ExitLifecycle",
@@ -276,6 +279,45 @@ def extract_setup_probability(row: pd.Series, side: str) -> float | None:
         if pd.notna(value) and np.isfinite(float(value)):
             return float(value)
     return None
+
+
+def extract_numeric_context_value(row: pd.Series, candidates: Iterable[str]) -> float | None:
+    for column in candidates:
+        if column not in row.index:
+            continue
+        value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+        if pd.notna(value) and np.isfinite(float(value)):
+            return float(value)
+    return None
+
+
+def extract_setup_context(row: pd.Series, side: str) -> tuple[float, float, float]:
+    """Return runtime-aligned setup probability, threshold, and margin features.
+
+    The Java upgraded lifecycle/micro route schema expects both legacy score-proxy
+    names and explicit probability/threshold/margin columns. The probability must
+    be a real OOF setup score unless the research-only bootstrap override is set.
+    """
+    prob = setup_score_proxy(extract_setup_probability(row, side))
+    threshold = extract_numeric_context_value(row, [
+        f"f_{side}_setup_threshold",
+        f"f_{side}_entry_threshold",
+        "f_setup_threshold",
+        "f_entry_threshold",
+        "setup_threshold",
+    ])
+    if threshold is None:
+        threshold = 0.5
+    margin = extract_numeric_context_value(row, [
+        f"f_{side}_setup_threshold_margin",
+        f"f_{side}_entry_threshold_margin",
+        "f_setup_threshold_margin",
+        "f_entry_threshold_margin",
+        "setup_threshold_margin",
+    ])
+    if margin is None:
+        margin = prob - threshold
+    return float(prob), float(threshold), float(margin)
 
 
 def load_setup_predictions(path: str) -> pd.DataFrame:
@@ -637,13 +679,16 @@ def build_lifecycle_rows(df30: pd.DataFrame, max_entry_events: int = 0, max_entr
                 if max_entry_events and entry_events > max_entry_events:
                     break
                 entry_price = side_aware_entry_fill(side, closes, bids, asks, entry_i)
-                setup_prob = extract_setup_probability(group.loc[entry_i], side)
+                setup_prob, setup_threshold, setup_margin = extract_setup_context(group.loc[entry_i], side)
                 mfe = 0.0
                 mae = 0.0
                 end_i = min(entry_i + LIFECYCLE_HORIZON_30S, len(group) - 1)
                 entry_features = {
                     # Legacy Java schema name; with --setup-predictions-csv this is the real OOF setup probability.
-                    "f_entry_score_proxy": setup_score_proxy(setup_prob),
+                    "f_entry_score_proxy": setup_prob,
+                    "f_entry_prob": setup_prob,
+                    "f_entry_threshold": setup_threshold,
+                    "f_entry_threshold_margin": setup_margin,
                     "f_entry_side_long": 1.0 if side == "long" else 0.0,
                     "f_entry_side_short": 1.0 if side == "short" else 0.0,
                 }
@@ -719,7 +764,16 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
             for ctx_i in entry_indices:
                 ctx = ctx_group.loc[ctx_i]
                 ctx_features = {col: float(ctx[col]) for col in ctx_cols}
-                setup_prob = extract_setup_probability(ctx, side)
+                setup_prob, setup_threshold, setup_margin = extract_setup_context(ctx, side)
+                entry_context_features = {
+                    # Legacy Java schema name; with --setup-predictions-csv this is the real OOF setup probability.
+                    "f_entry_score_proxy": setup_prob,
+                    "f_entry_prob": setup_prob,
+                    "f_entry_threshold": setup_threshold,
+                    "f_entry_threshold_margin": setup_margin,
+                    "f_entry_side_long": 1.0 if side == "long" else 0.0,
+                    "f_entry_side_short": 1.0 if side == "short" else 0.0,
+                }
                 entry_events += 1
                 if max_entry_events and entry_events > max_entry_events:
                     break
@@ -744,7 +798,10 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
                         "Timestamp": micro.at[mi, "Timestamp"],
                         "Date": micro.at[mi, "Date"],
                         # Legacy Java schema name; with --setup-predictions-csv this is the real OOF setup probability.
-                        "f_setup_score_proxy": setup_score_proxy(setup_prob),
+                        "f_setup_score_proxy": setup_prob,
+                        "f_setup_prob": setup_prob,
+                        "f_setup_threshold": setup_threshold,
+                        "f_setup_threshold_margin": setup_margin,
                         "f_seconds_since_arm": (micro.at[mi, "_ts"] - arm_start).total_seconds(),
                     })
                     label = int(outcome >= 1.0)
@@ -772,6 +829,7 @@ def build_micro_rows(df30: pd.DataFrame, df5: pd.DataFrame, max_entry_events: in
                         hold_r = path_outcome_r(side, entry_price, micro_high[mi + 1:look_end + 1], micro_low[mi + 1:look_end + 1], micro_close[mi + 1:look_end + 1]) if look_end > mi else cur_r
                         row = {col: float(micro.at[mi, col]) for col in micro_cols}
                         row.update(ctx_features)
+                        row.update(entry_context_features)
                         row.update({
                             "Symbol": symbol,
                             "Timestamp": micro.at[mi, "Timestamp"],
@@ -1510,6 +1568,7 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
         schema_hash = feature_schema_hash(r.feature_columns)
         posthoc = r.posthoc_calibration or {}
         selected_posthoc_metrics = posthoc.get("selected_metrics", {}) if posthoc else {}
+        runtime_threshold = float(selected_posthoc_metrics.get("threshold", r.threshold)) if selected_posthoc_metrics else float(r.threshold)
         rows.append({
             "model": r.name,
             "filename": r.filename,
@@ -1535,7 +1594,8 @@ def write_scorecards(output_dir: Path, results: list[TrainedModelResult]) -> Non
         route.append({
             "model": r.name,
             "model_path": r.exported_to,
-            "threshold": r.threshold,
+            "threshold": runtime_threshold,
+            "raw_threshold": r.threshold,
             "calibration": {
                 "method": "raw_random_forest_probability_no_posthoc_calibrator",
                 "brier_score": r.brier_score,

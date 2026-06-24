@@ -1,0 +1,39 @@
+{
+  "schema_version": "setup_30s_v1",
+  "calibration_schema_version": "setup_30s_calibration_v1",
+  "method": "raw_random_forest_probability_no_posthoc_calibrator",
+  "split_convention": "chronological_walk_forward_folds_train_tail_threshold_tune",
+  "generated_at_utc": "2026-06-24T16:36:18.313219+00:00",
+  "artifacts": {
+    "scorecard": "setup_scorecard.csv",
+    "threshold_grid": "threshold_grid.csv",
+    "oof_predictions": "oof_setup_predictions.csv",
+    "reliability": "calibration_reliability.csv",
+    "cost_aware_labels": "cost_aware_setup_labels.csv",
+    "cost_aware_label_manifest": "cost_aware_label_manifest.json"
+  },
+  "models": [
+    {
+      "model": "long_entry.onnx",
+      "side": "long",
+      "brier_score": 0.24709530642951594,
+      "ece": 0.18454007066956377,
+      "calibration_rows": 630000,
+      "folds_used": 5,
+      "calibration_reliability_artifact": "calibration_reliability.csv"
+    },
+    {
+      "model": "short_entry.onnx",
+      "side": "short",
+      "brier_score": 0.24764660178785686,
+      "ece": 0.1894397578886151,
+      "calibration_rows": 630000,
+      "folds_used": 5,
+      "calibration_reliability_artifact": "calibration_reliability.csv"
+    }
+  ],
+  "errors": [],
+  "warnings": [
+    "Metrics describe raw RandomForest predict_proba outputs averaged across walk-forward folds; no isotonic/Platt post-hoc calibrator is fitted yet. Treat bundles as research-only until post-hoc calibration, frozen-holdout threshold stability, and paper/shadow drift checks pass."
+  ]
+}

@@ -2743,6 +2743,9 @@ def main():
         'feature_columns': feature_cols,
         'feature_count': len(feature_cols),
         'feature_schema_sha256': fschema_hash,
+        'regime_feature_columns': regime_feature_cols,
+        'regime_feature_count': len(regime_feature_cols),
+        'regime_feature_schema_sha256': feature_schema_hash(regime_feature_cols),
         'feature_blocks': {
             'base_feature_count': base_feature_count,
             'extended_features_enabled': bool(USE_EXTENDED_FEATURES),

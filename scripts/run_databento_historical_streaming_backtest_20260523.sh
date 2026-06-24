@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+DEFAULT_CATBOOST_SETUP_MODEL_DIR="$ROOT/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854"
+DEFAULT_LIFECYCLE_MICRO_MODEL_DIR="$ROOT/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports"
 SYMBOL="$(printf '%s' "${1:-${BACKTEST_SYMBOL:-TSLA}}" | tr '[:lower:]' '[:upper:]')"
 START_DATE="${START_DATE:-2026-05-21}"
 END_DATE="${END_DATE:-2026-05-21}"
@@ -11,15 +13,19 @@ DRY_RUN="${DRY_RUN:-false}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 BACKTEST_MAX_TRADES="${BACKTEST_MAX_TRADES:-2000}"
 LIFECYCLE_MICRO_ENABLED="${TRADING_LIFECYCLE_MICRO_ENABLED:-true}"
-LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-$ROOT/model_exports/lifecycle_micro_20260523}"
+LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-$DEFAULT_LIFECYCLE_MICRO_MODEL_DIR}"
 LIFECYCLE_SCORECARD="$LIFECYCLE_MODEL_DIR/lifecycle_micro_scorecard.csv"
 PROPERTIES_FILE="$ROOT/runtime/databento/bots/trading-$(printf '%s' "$SYMBOL" | tr '[:upper:]' '[:lower:]').properties"
 ROUTING_CSV="${TRADING_DATABENTO_MODEL_ROUTING_CSV:-$ROOT/runtime/databento/model-routing.csv}"
-CLASSPATH_FILE="$ROOT/runtime/backtests/databento_backtest_cp.txt"
+BACKTEST_WORK_DIR="${TRADING_BACKTEST_WORK_DIR:-$ROOT/runtime/backtests}"
+if [[ -z "${TRADING_BACKTEST_WORK_DIR:-}" && -L "$BACKTEST_WORK_DIR" && ! -e "$BACKTEST_WORK_DIR" ]]; then
+  BACKTEST_WORK_DIR="$ROOT/runtime/local-backtests"
+fi
+CLASSPATH_FILE="$BACKTEST_WORK_DIR/databento_backtest_cp.txt"
 DEFAULT_DATABENTO_ENV_FILE="$ROOT/runtime/databento.env"
 DATABENTO_API_KEY_SOURCE="environment"
 
-mkdir -p runtime/backtests
+mkdir -p "$BACKTEST_WORK_DIR"
 
 truthy_env() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -160,7 +166,22 @@ csv_threshold() {
   local default_value="$2"
   if [[ -f "$LIFECYCLE_SCORECARD" ]]; then
     awk -F, -v model="$model_name" -v fallback="$default_value" '
-      NR > 1 && $1 == model {printf "%.4f", $6 + 0; found=1; exit}
+      function trim(s) { gsub(/^[[:space:]\r\n]+|[[:space:]\r\n]+$/, "", s); return s }
+      function field(name) { return idx[name] ? trim($(idx[name])) : "" }
+      NR == 1 {
+        for (i = 1; i <= NF; i++) idx[trim($i)] = i
+        next
+      }
+      field("model") == model {
+        value = fallback
+        raw_threshold = field("threshold")
+        posthoc_threshold = field("posthoc_threshold")
+        if (raw_threshold != "") value = raw_threshold
+        if (posthoc_threshold != "") value = posthoc_threshold
+        printf "%.4f", value + 0
+        found=1
+        exit
+      }
       END {if (!found) printf "%.4f", fallback + 0}
     ' "$LIFECYCLE_SCORECARD"
   else
@@ -178,8 +199,18 @@ else
   CONFIG_DATABENTO_ENV_FILE=""
 fi
 
-MODEL_DIR="${MODEL_DIR:-${CONFIG_MODEL_DIR:-$(route_model_dir "$SYMBOL" "$ROUTING_CSV")}}"
+MODEL_DIR="${MODEL_DIR:-${TRADING_MODEL_DIR:-${TRADING_SETUP_MODEL_DIR:-}}}"
+if [[ -z "$MODEL_DIR" ]]; then
+  if [[ -d "$DEFAULT_CATBOOST_SETUP_MODEL_DIR" ]]; then
+    MODEL_DIR="$DEFAULT_CATBOOST_SETUP_MODEL_DIR"
+  else
+    MODEL_DIR="${CONFIG_MODEL_DIR:-$(route_model_dir "$SYMBOL" "$ROUTING_CSV")}"
+  fi
+fi
 PYTHON_BIN="$(resolve_python_bin "${PYTHON_BIN:-$CONFIG_PYTHON_BIN}" || true)"
+if [[ -z "$PYTHON_BIN" ]] && truthy_env "$DRY_RUN"; then
+  PYTHON_BIN="$(command -v python3 || command -v python || true)"
+fi
 DATABENTO_ENV_FILE="${BACKTEST_DATABENTO_ENV_FILE:-${TRADING_DATABENTO_ENV_FILE:-${CONFIG_DATABENTO_ENV_FILE:-$DEFAULT_DATABENTO_ENV_FILE}}}"
 if [[ "$DATABENTO_ENV_FILE" != /* ]]; then
   DATABENTO_ENV_FILE="$ROOT/$DATABENTO_ENV_FILE"
@@ -239,10 +270,17 @@ fi
 "$ROOT/mvnw" -q -DskipTests package
 "$ROOT/mvnw" -q dependency:build-classpath -Dmdep.outputFile="$CLASSPATH_FILE"
 
+BACKTEST_RUN_TIMESTAMP="${BACKTEST_RUN_TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}"
+BACKTEST_FILE_PREFIX="$BACKTEST_WORK_DIR/databento-stream-$(printf '%s' "$SYMBOL" | tr '[:upper:]' '[:lower:]')-$BACKTEST_RUN_TIMESTAMP"
+
 JAVA_PROPS=(
   "-Dtrading.model.dir=$MODEL_DIR"
   "-Dbacktest.symbol=$SYMBOL"
   "-Dbacktest.ibkrSimulation=true"
+  "-Dbacktest.tradeLogFile=$BACKTEST_FILE_PREFIX.csv"
+  "-Dbacktest.orderHistoryFile=$BACKTEST_FILE_PREFIX-orders.csv"
+  "-Dbacktest.tradeLifecycleSummaryFile=$BACKTEST_FILE_PREFIX-trade-lifecycle-summary.csv"
+  "-Dbacktest.streamSanityReportFile=$BACKTEST_FILE_PREFIX-sanity.json"
   "-Dbacktest.databento.python=$PYTHON_BIN"
   "-Dbacktest.databento.streamer=scripts/databento_historical_streamer.py"
   "-Dbacktest.databento.start=$START_DATE"

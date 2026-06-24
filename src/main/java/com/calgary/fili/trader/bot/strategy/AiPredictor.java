@@ -66,7 +66,8 @@ public class AiPredictor {
         this.expectedFeatureCount = detectedFeatures > 0 ? detectedFeatures : DEFAULT_EXPECTED_FEATURES;
         flowInfo("AI.INIT", "Successfully loaded model=" + modelFileName + " source=" + modelSource);
         flowData("AI.INIT", "model=" + modelFileName + " input=" + inputName + " expectedFeatures=" + expectedFeatureCount + " source=" + modelSource);
-        if (expectedFeatureCount == 25
+        if (expectedFeatureCount == 24
+            || expectedFeatureCount == 25
             || expectedFeatureCount == 30
             || expectedFeatureCount == 31
             || expectedFeatureCount == 34
