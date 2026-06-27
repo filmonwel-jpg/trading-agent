@@ -699,6 +699,89 @@ Current stop/go decision:
 - **GO** for historical backtest/replay evaluation on another computer after pulling this branch and the committed model artifacts.
 - **NO-GO** for paper/live promotion. These are research candidate bundles until decision/PnL backtests, recorded-event replay parity, calibration/hash checks, day-dominance review, paper/shadow drift checks, and cost-aware label-economics review all pass.
 
+June 26 local recorded-replay check on the Databento worktree:
+
+- A true one-week core-five recorded NDJSON replay was built for `2026-05-18 09:30 America/New_York` through `2026-05-22 16:00 America/New_York` because `scripts/databento_historical_streamer.py --source ndjson` symbol-filters the recorded file but does not date-filter it. The replay slice is `runtime/local-backtests/databento-core5-week-20260518-20260522-recent/databento-20260518-20260522-core5-week-fast.ndjson.gz`.
+- The slice emitted `previous_close` records before market bars using verified 2026-05-15 closes: `NVDA=225.285`, `QQQ=708.91`, `SPY=739.095`, `TQQQ=75.34`, `TSLA=422.17`.
+- The run completed all five symbols with `BACKTEST_RC=0` and `[BACKTEST] completed=5 failed=0 requested=5` under `runtime/local-backtests/databento-core5-week-20260518-20260522-recent/run`.
+- The wrapper used the June 24 setup bundle `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`, auto-loaded its `setup_runtime_thresholds.properties`, and used the June 24 lifecycle/micro bundle `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`.
+- Log validation confirmed Java-side `setup_manifest.json` loading, setup/regime feature counts `34` / `24`, lifecycle/micro feature counts `34` / `44` / `50`, and `FEATURE_COUNT_SUPPORTED=PASS` for every loaded setup, regime, lifecycle, micro-entry, and micro-exit-guard ONNX model.
+- Runtime thresholds observed in the logs matched this section: base setup `0.612` / `0.612`; open30 `0.620` / `0.624`; regime choppy `0.656` / `0.644`, trend `0.636` / `0.648`, volatile `0.604` / `0.608`; lifecycle exits `0.5200` / `0.5000`; micro entries `0.6400` / `0.6200`; micro exit guards `0.6000` / `0.6000`.
+- Stream sanity reports had `errors=[]` for all symbols. Processed bar counts and low-quality rates were: `NVDA` `75925` equity / `222045` option bars, `0.022391%`; `QQQ` `36017` / `231882`, `0.072188%`; `SPY` `49722` / `233671`, `0.090503%`; `TQQQ` `32021` / `86111`, `2.679492%`; `TSLA` `45714` / `226921`, `0.000000%`.
+- Decision/PnL result: setup arms were common but micro-entry confirmations were sparse. `TQQQ` had `901` arms, `1` micro-entry confirmation, four order rows, one trade-log row, and `+130.000000` simulated PnL. `NVDA`, `QQQ`, `SPY`, and `TSLA` had zero confirmations/orders/trades and zero PnL.
+- Caveat found during this check: the console summary printed `Total trades: 0` for `TQQQ` even though the trade CSV, order CSV, lifecycle summary, and total PnL showed one completed round trip. This was traced to `PingPongStrategy.getTradeCount()` being a resettable current-session counter; `DatabentoHistoricalStreamingBacktester` now prints cumulative closed trades from lifecycle stats and a separate `Current session trade counter`.
+- Interpretation: this one-week run is strong wiring/schema/threshold evidence for the June 24 route, but it is not promotion evidence. One profitable `TQQQ` trade over one week is insufficient for day-dominance, calibration, label-economics, replay-parity, or paper/shadow drift gates.
+
+June 26 four-week local recorded-replay follow-up:
+
+- Four-week range: `2026-04-27 09:30 America/New_York` through `2026-05-22 16:00 America/New_York` (`20` trading sessions) for the core five symbols.
+- Replay slice: `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz`.
+- Slice validation: `gzip -t` passed; manifest reports `4,936,385` output events: `932,320` equity bars, `4,003,923` option bars, `100` `previous_close` events, and `42` status events; `missing_previous_close={}` and `malformed=0`.
+- Previous-close handling was verified more strictly than the one-week slice: the builder emitted one `previous_close` event per symbol per session, each derived from the last observed prior-session equity close. Java logs showed `PREVIOUS_CLOSE_AVAILABLE=PASS` exactly `100` times (`20` per symbol) before session bars. No stale start-of-range close was carried across days.
+- Run output: `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run`; wrapper ended with `[BACKTEST] completed=5 failed=0 requested=5` and `BACKTEST_RC=0`.
+- Summaries retained at:
+  - `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/four_week_results_summary.md`
+  - `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/four_week_results_summary.json`
+  - `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/promotion_gate_report/lifecycle_micro_promotion_gate_report.md`
+- Log validation over the full run showed `ERROR_LINES=0`, `FEATURE_COUNT_SUPPORTED=FAIL` / `FEATURE_COUNT_MATCH=FAIL` count `0`, `FEATURE_COUNT_SUPPORTED=PASS` count `85`, `Loaded setup_manifest.json` count `5`, `Validated lifecycle/micro route manifest` count `5`, and one wrapper completion marker.
+- The patched console summary now agrees with CSV/lifecycle artifacts: four symbols reported `Total trades: 0`, while `TQQQ` reported `Total trades: 1`, `Current session trade counter: 0`, and `Total PnL: 130.00000000000256`.
+
+Four-week stream and decision summary:
+
+| Symbol | Equity bars | Option bars | Low-quality equity bars | Low-quality rate | Setup arms | Micro confirmations | Closed trades | Sim PnL |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TSLA` | `193383` | `909298` | `3` | `0.0016%` | `5070` | `0` | `0` | `0.00` |
+| `TQQQ` | `110238` | `355736` | `2456` | `2.2279%` | `2885` | `1` | `1` | `130.00` |
+| `NVDA` | `287496` | `878425` | `90` | `0.0313%` | `7860` | `0` | `0` | `0.00` |
+| `SPY` | `198883` | `934437` | `154` | `0.0774%` | `3127` | `0` | `0` | `0.00` |
+| `QQQ` | `142294` | `925973` | `107` | `0.0752%` | `3259` | `0` | `0` | `0.00` |
+
+Only one closed trade occurred during the four-week replay:
+
+- `TQQQ` long, entry `2026-05-18T10:35:40-04:00`, exit `2026-05-18T10:37:25-04:00`, quantity `500`, entry `73.490000`, exit `73.750000`, `+130.000000` PnL, `+1.415159R`, `guard` exit, entry probability `0.646029` versus threshold `0.640000`.
+
+Four-week interpretation and caveats:
+
+- **Previous-close accuracy:** PASS for this replay slice. Daily values were injected before each session; Java accepted them; no code patch was needed for previous-close state beyond the replay-slice construction.
+- **Data sanity:** overall PASS for structural quality: no skipped events, no schema mismatches, `errors=[]` in every stream-sanity report, and no malformed slice records. The `TQQQ` stream had the main quality caveat (`2.2279%` low-quality/entry-rejected equity bars, all from `locked_crossed` flags), which should be monitored but did not break the replay.
+- **Model/log wiring:** PASS for latest-path and threshold wiring. The run used the June 24 setup bundle, auto-loaded `setup_runtime_thresholds.properties`, used the June 24 lifecycle/micro bundle, and loaded all setup/regime/lifecycle/micro ONNX routes with supported feature counts.
+- **Decision behavior:** setup arms were frequent (`22,201` total arms across the five symbols), but only one micro-entry confirmation fired. This is coherent with the conservative micro thresholds but leaves too little trade evidence for promotion.
+- **Backtest promotion gate:** **NO-GO**. Formal promotion-gate report flags raw/no-posthoc lifecycle calibration, missing live/replay decision-pair parity evidence, only `1` closed trade versus the minimum `20`, only `1` traded symbol versus the minimum `5`, max day/trade dominance `1.0`, and no paper/shadow drift evidence.
+- **Promotion status remains NO-GO for paper/live.** This four-week replay is useful wiring/schema/data-quality evidence, not enough statistical or risk evidence to promote capital.
+
+June 27 replay decision root-cause analysis:
+
+- **Low trade count is real, not a counter/log artifact.** The Java summary patch fixed the misleading resettable current-session trade counter; the corrected console summary now agrees with the CSV/lifecycle artifacts. The four-week replay truly had `1` completed round trip, all from `TQQQ`.
+- **The setup layer was not too selective.** It produced `22,201` setup arms across the five symbols. Java log parsing showed `Armed long micro-entry` `14,982` times and `Armed short micro-entry` `7,219` times.
+- **The micro-entry layer was the immediate trade-count choke point.** The same log had `MICRO_ENTRY_CONFIRMS=PASS` only `1` time and `MICRO_ENTRY_CONFIRMS=FAIL` `214,274` times. The fail count is much larger than arm count because each 30-second setup arm can evaluate multiple 5-second micro bars during the `30` second TTL.
+- **Observed setup probabilities were binary, which is not acceptable for calibrated threshold routing.** Setup `AI_PREDICTS_ENTRY` logs carried only `prob=1.0000` for passes (`22,201` observations) and `prob=0.0000` for fails (`22,857` observations), and every arm line carried `setupProb=1.0000`. This strongly suggests the runtime setup route is using label-derived probability fallback (`label -> 0/1`) rather than extracting the CatBoost ONNX probability output. The CatBoost setup ONNX files include probability outputs, so this is a Java extraction / ONNX-output compatibility item to fix or fail closed.
+- **Thresholds therefore did not act like calibrated setup filters.** The June 24 setup thresholds (`0.612`, `0.620`, `0.624`, `0.656`, etc.) cannot rank setup quality if the runtime probability entering the decision and micro-feature context is only `0` or `1`.
+- **The setup route did not truly choose the best side.** In `PingPongStrategy.java`, the flat-entry path evaluates long setup first and returns immediately after arming long; short is evaluated only if long does not pass. With binary setup probabilities, this becomes first-passing-side selection rather than calibrated long-vs-short arbitration by margin, expected R, or side-specific edge.
+- **The micro-entry models mostly denied because their probabilities stayed below the high scorecard thresholds.** The active thresholds were approximately `0.6400` long and `0.6200` short. Maximum observed micro-entry probabilities in the log were:
+
+  | Symbol | Long max / threshold | Short max / threshold |
+  |---|---:|---:|
+  | `NVDA` | `0.5503 / 0.6400` | `0.5117 / 0.6200` |
+  | `QQQ` | `0.3037 / 0.6400` | `0.2865 / 0.6200` |
+  | `SPY` | `0.3056 / 0.6400` | `0.2855 / 0.6200` |
+  | `TSLA` | `0.5261 / 0.6400` | `0.5068 / 0.6200` |
+  | `TQQQ` | `0.6460 / 0.6400` | `0.6023 / 0.6200` |
+
+  Only `TQQQ` long crossed its micro-entry threshold, matching the single completed trade.
+- **This is consistent with the lifecycle/micro scorecard shape.** The June 24 micro-entry models were intentionally high-precision / low-recall: `longMicroEntryAi` precision `86.14%`, recall `16.74%`, predicted-positive rate about `2.79%`; `shortMicroEntryAi` precision `88.42%`, recall `12.29%`, predicted-positive rate about `1.82%`. That conservative setting explains sparse confirmations, but it does not create enough trade evidence for promotion.
+- **Data and wiring were ruled out as primary causes.** `PREVIOUS_CLOSE_AVAILABLE=PASS` appeared `100` times and `FAIL` `0` times; `FEATURE_COUNT_SUPPORTED=FAIL`, `FEATURE_COUNT_MATCH=FAIL`, and error-line counts were `0`; setup/lifecycle manifests loaded for all five symbols; stream-sanity reports had `errors=[]`.
+- **Entry gating was not the main blocker.** `ENTRY_GATE_OPEN=PASS` appeared `30,020` times versus `1,749` `FAIL` lines, and the parsed failures were `allowNewEntries=false` with `positionSynced=true` and hard-stop cooldown clear. The dominant blocker was micro-entry score below threshold after noisy setup arming.
+- **Promotion interpretation:** this run demonstrates that the latest-path replay pipeline is functional, but the decision stack is not production-ready. The current failure is a combined setup-probability extraction, side-arbitration, and micro-threshold/trade-count problem, not a Databento data-read or previous-close problem.
+
+Required fixes before the next promotion-style replay:
+
+1. **Fix or hard-fail setup probability extraction.** `AiPredictor.java` should decode CatBoost setup probability outputs correctly and should warn/fail closed if a calibrated setup route only emits `{0.0, 1.0}` over a replay sample.
+2. **Add explicit setup side arbitration.** Evaluate long and short setup probabilities before arming either side; choose by calibrated probability margin, expected R, or side-specific EV; no-trade when both sides conflict without a clear edge.
+3. **Thread real setup probability into micro features.** `f_setup_prob`, `f_setup_threshold`, and margin features should reflect real setup probability, not constant `1.0`, so runtime matches the intended lifecycle/micro training contract.
+4. **Produce a counterfactual decision report.** For each setup arm, persist side, setup probability/threshold/margin, micro probability/threshold, arm expiry/confirmation, and future MFE/MAE so rejected profitable setups and wrong-side arms can be attributed directly.
+5. **Retune micro-entry thresholds with minimum trade-count constraints.** Threshold selection should preserve precision but require enough confirmations per symbol/week or per 20-session validation window to avoid a one-trade promotion artifact.
+6. **Keep promotion status NO-GO.** Do not advance to paper/live until the probability extraction, side selection, trade-count, day-dominance, calibration, replay-parity, and paper/shadow drift gates pass together.
+
 Recommended next steps:
 
 1. Pull the branch on the backtest computer and confirm the two model directories exist.

@@ -537,6 +537,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
 
     private void printSummary() {
         BacktestLifecycleStats.Summary lifecycleSummary = lifecycleStats.summary();
+        int closedTradeCount = lifecycleStats.closedTradesSnapshot().size();
         writeTradeLifecycleSummary(lifecycleSummary);
         writeStreamSanityReport();
         System.out.println(">>> [FLOW][INFO][BACKTEST] ==============================================");
@@ -547,7 +548,8 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         System.out.println(">>> [FLOW][INFO][BACKTEST] Skipped events: " + skippedEvents);
         System.out.println(">>> [FLOW][INFO][BACKTEST] Final position: " + (strategy == null ? 0 : strategy.getCurrentPosition()));
         System.out.println(">>> [FLOW][INFO][BACKTEST] Simulated broker position: " + simulatedBrokerPosition);
-        System.out.println(">>> [FLOW][INFO][BACKTEST] Total trades: " + (strategy == null ? 0 : strategy.getTradeCount()));
+        System.out.println(">>> [FLOW][INFO][BACKTEST] Total trades: " + closedTradeCount);
+        System.out.println(">>> [FLOW][INFO][BACKTEST] Current session trade counter: " + (strategy == null ? 0 : strategy.getTradeCount()));
         System.out.println(">>> [FLOW][INFO][BACKTEST] Total PnL: " + (strategy == null ? 0.0 : strategy.getTotalNetPnL()));
         System.out.println(">>> [FLOW][INFO][BACKTEST] arms_total: " + lifecycleSummary.armsTotal());
         System.out.println(">>> [FLOW][INFO][BACKTEST] arms_long: " + lifecycleSummary.armsLong());

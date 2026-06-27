@@ -10,7 +10,9 @@ EXCLUDE_SYMBOLS_CSV="${BACKTEST_EXCLUDE_SYMBOLS:-}"
 START_DATE="${START_DATE:-}"
 END_DATE="${END_DATE:-}"
 OUTPUT_DIR="${BACKTEST_OUTPUT_DIR:-runtime/backtests}"
-MODEL_DIR="${MODEL_DIR:-}"
+DEFAULT_SETUP_MODEL_DIR="runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854"
+DEFAULT_LIFECYCLE_MODEL_DIR="runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports"
+MODEL_DIR="${MODEL_DIR:-${TRADING_MODEL_DIR:-${TRADING_SETUP_MODEL_DIR:-$DEFAULT_SETUP_MODEL_DIR}}}"
 PYTHON_BIN="${PYTHON_BIN:-${DATABENTO_PYTHON_BIN:-}}"
 DEFAULT_DATABENTO_ENV_FILE="runtime/databento.env"
 DATABENTO_ENV_FILE="${BACKTEST_DATABENTO_ENV_FILE:-${TRADING_DATABENTO_ENV_FILE:-}}"
@@ -26,7 +28,10 @@ SKIP_BUILD="${SKIP_BUILD:-false}"
 ROUTING_CSV="${TRADING_DATABENTO_MODEL_ROUTING_CSV:-runtime/databento/model-routing.csv}"
 CLASSPATH_FILE="${BACKTEST_CLASSPATH_FILE:-runtime/backtests/databento_ibkr_sim_backtest_cp.txt}"
 LIFECYCLE_MICRO_ENABLED="${TRADING_LIFECYCLE_MICRO_ENABLED:-true}"
-LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-model_exports/lifecycle_micro_20260523}"
+LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-$DEFAULT_LIFECYCLE_MODEL_DIR}"
+SETUP_THRESHOLDS_FILE="${TRADING_SETUP_THRESHOLDS_FILE:-}"
+SETUP_THRESHOLDS_FILE_EXPLICIT="false"
+[[ -n "$SETUP_THRESHOLDS_FILE" ]] && SETUP_THRESHOLDS_FILE_EXPLICIT="true"
 BACKTEST_PREVIOUS_CLOSE="${BACKTEST_PREVIOUS_CLOSE:-}"
 MICRO_LONG_ENTRY_THRESHOLD="${MICRO_LONG_ENTRY_THRESHOLD:-${STRATEGY_MICRO_LONG_ENTRY_THRESHOLD:-}}"
 MICRO_SHORT_ENTRY_THRESHOLD="${MICRO_SHORT_ENTRY_THRESHOLD:-${STRATEGY_MICRO_SHORT_ENTRY_THRESHOLD:-}}"
@@ -49,7 +54,8 @@ Options:
   --start YYYY-MM-DD       First replay day. Date-only values replay 09:30 America/New_York onward.
   --end YYYY-MM-DD         Last replay day. Date-only values replay through 16:00 America/New_York.
   --output-dir DIR         Directory for trade/order CSV outputs. Default: runtime/backtests
-  --model-dir DIR          30s ONNX model bundle directory. If omitted, runtime/databento/model-routing.csv is used when possible.
+  --model-dir DIR          30s ONNX setup bundle directory. Default: runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+  --setup-thresholds-file F Setup threshold properties. Default: <model-dir>/setup_runtime_thresholds.properties when present.
   --python-bin PATH        Python with databento installed. If omitted, common python3 locations are searched.
   --databento-env-file F   Env file containing DATABENTO_API_KEY. Default: runtime/databento.env
   --source api|ndjson     Stream source for the Java backtester. Default: api
@@ -58,7 +64,7 @@ Options:
   --timeout-seconds N      Kill the Databento stream if it has not completed after N seconds. Default: 0 (no timeout)
   --max-trades N           Strategy max trades during replay. Default: 2000
   --max-share-cap N        Simulated broker max shares per order. Default: 500
-  --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: model_exports/lifecycle_micro_20260523
+  --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
   --micro-long-entry-threshold P   Override 5s long micro-entry threshold from lifecycle scorecard.
   --micro-short-entry-threshold P  Override 5s short micro-entry threshold from lifecycle scorecard.
   --lifecycle-exit-threshold P     Override both long/short lifecycle-exit thresholds.
@@ -359,6 +365,16 @@ csv_threshold() {
   fi
 }
 
+append_setup_threshold_props() {
+  local threshold_file="$1" raw_key raw_value key value
+  while IFS='=' read -r raw_key raw_value || [[ -n "${raw_key:-}" ]]; do
+    key="$(trim "${raw_key:-}")"
+    value="$(trim "${raw_value:-}")"
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    JAVA_PROPS+=("-D$key=$value")
+  done < "$threshold_file"
+}
+
 symbols=()
 exclude_symbols=()
 LIST_SYMBOLS_ONLY="false"
@@ -378,6 +394,8 @@ while [[ $# -gt 0 ]]; do
     --end|--end-date) END_DATE="$2"; shift 2 ;;
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --model-dir) MODEL_DIR="$2"; shift 2 ;;
+    --setup-thresholds-file) SETUP_THRESHOLDS_FILE="$2"; SETUP_THRESHOLDS_FILE_EXPLICIT="true"; shift 2 ;;
+    --setup-thresholds-file=*) SETUP_THRESHOLDS_FILE="${1#--setup-thresholds-file=}"; SETUP_THRESHOLDS_FILE_EXPLICIT="true"; shift ;;
     --python-bin) PYTHON_BIN="$2"; shift 2 ;;
     --databento-env-file) DATABENTO_ENV_FILE="$2"; shift 2 ;;
     --source) BACKTEST_DATABENTO_SOURCE="$2"; shift 2 ;;
@@ -631,6 +649,23 @@ for SYMBOL in "${symbols[@]}"; do
     "-Dbacktest.streamSanityReportFile=$STREAM_SANITY_REPORT"
   )
   [[ -n "$MODEL_DIR" ]] && JAVA_PROPS+=("-Dtrading.model.dir=$MODEL_DIR")
+  SETUP_THRESHOLDS_FILE_RESOLVED="$SETUP_THRESHOLDS_FILE"
+  if [[ -z "$SETUP_THRESHOLDS_FILE_RESOLVED" && -n "$MODEL_DIR" && -f "$MODEL_DIR/setup_runtime_thresholds.properties" ]]; then
+    SETUP_THRESHOLDS_FILE_RESOLVED="$MODEL_DIR/setup_runtime_thresholds.properties"
+  fi
+  if [[ -n "$SETUP_THRESHOLDS_FILE_RESOLVED" ]]; then
+    [[ "$SETUP_THRESHOLDS_FILE_RESOLVED" != /* ]] && SETUP_THRESHOLDS_FILE_RESOLVED="$ROOT/$SETUP_THRESHOLDS_FILE_RESOLVED"
+    if [[ ! -f "$SETUP_THRESHOLDS_FILE_RESOLVED" ]]; then
+      if truthy "$SETUP_THRESHOLDS_FILE_EXPLICIT"; then
+        echo "[BACKTEST][ERROR] Setup thresholds file not found: $SETUP_THRESHOLDS_FILE_RESOLVED" >&2
+        failures=$((failures + 1))
+        continue
+      fi
+      SETUP_THRESHOLDS_FILE_RESOLVED=""
+    else
+      append_setup_threshold_props "$SETUP_THRESHOLDS_FILE_RESOLVED"
+    fi
+  fi
   [[ -n "$BACKTEST_PREVIOUS_CLOSE" ]] && JAVA_PROPS+=("-Dbacktest.previousClose=$BACKTEST_PREVIOUS_CLOSE")
   [[ -n "$BACKTEST_RECORDED_EVENTS_FILE" ]] && JAVA_PROPS+=("-Dbacktest.databento.inputFile=$BACKTEST_RECORDED_EVENTS_FILE")
   MICRO_LONG_ENTRY_THRESHOLD_RESOLVED=""
@@ -675,6 +710,7 @@ for SYMBOL in "${symbols[@]}"; do
 [BACKTEST] symbol=$SYMBOL start=${START_DATE:-<recorded>} end=${END_DATE:-<recorded>} dry_run=$DRY_RUN ibkr_simulation=true source=$BACKTEST_DATABENTO_SOURCE
 [BACKTEST] python_bin=$PYTHON_BIN
 [BACKTEST] model_dir=${MODEL_DIR:-<none>}
+[BACKTEST] setup_thresholds_file=${SETUP_THRESHOLDS_FILE_RESOLVED:-<none>}
 [BACKTEST] lifecycle_micro_enabled=$LIFECYCLE_MICRO_ENABLED lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
 [BACKTEST] micro_entry_thresholds long=${MICRO_LONG_ENTRY_THRESHOLD_RESOLVED:-<disabled>} short=${MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED:-<disabled>}
 [BACKTEST] lifecycle_exit_thresholds long=${LIFECYCLE_LONG_EXIT_THRESHOLD_RESOLVED:-<disabled>} short=${LIFECYCLE_SHORT_EXIT_THRESHOLD_RESOLVED:-<disabled>}
