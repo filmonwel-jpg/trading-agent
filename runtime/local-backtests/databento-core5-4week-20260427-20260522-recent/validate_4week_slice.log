@@ -1,0 +1,51 @@
+MANIFEST_COUNTS {'equity_bar': 932320, 'option_bar': 4003923, 'previous_close': 100, 'status': 42}
+DAY_COUNT 20 PREVCLOSE_DAYS 20
+EXPECTED_PREVCLOSE 100 ACTUAL 100
+MISSING_PREVCLOSE {}
+MALFORMED 0
+FIRST_PREVCLOSE_DAYS
+2026-04-27 {'NVDA': {'previousClose': 208.18, 'sourceBarEpochSec': 1777060799, 'sourceSessionDate': '2026-04-24', 'sourceTime': '2026-04-24T15:59:59-04:00'}, 'QQQ': {'previousClose': 663.92, 'sourceBarEpochSec': 1777060799, 'sourceSessionDate': '2026-04-24', 'sourceTime': '2026-04-24T15:59:59-04:00'}, 'SPY': {'previousClose': 713.97, 'sourceBarEpochSec': 1777060799, 'sourceSessionDate': '2026-04-24', 'sourceTime': '2026-04-24T15:59:59-04:00'}, 'TQQQ': {'previousClose': 62.57, 'sourceBarEpochSec': 1777060799, 'sourceSessionDate': '2026-04-24', 'sourceTime': '2026-04-24T15:59:59-04:00'}, 'TSLA': {'previousClose': 376.22, 'sourceBarEpochSec': 1777060799, 'sourceSessionDate': '2026-04-24', 'sourceTime': '2026-04-24T15:59:59-04:00'}}
+2026-04-28 {'NVDA': {'previousClose': 216.68, 'sourceBarEpochSec': 1777319999, 'sourceSessionDate': '2026-04-27', 'sourceTime': '2026-04-27T15:59:59-04:00'}, 'QQQ': {'previousClose': 664.28, 'sourceBarEpochSec': 1777319999, 'sourceSessionDate': '2026-04-27', 'sourceTime': '2026-04-27T15:59:59-04:00'}, 'SPY': {'previousClose': 715.165, 'sourceBarEpochSec': 1777319999, 'sourceSessionDate': '2026-04-27', 'sourceTime': '2026-04-27T15:59:59-04:00'}, 'TQQQ': {'previousClose': 62.615, 'sourceBarEpochSec': 1777319999, 'sourceSessionDate': '2026-04-27', 'sourceTime': '2026-04-27T15:59:59-04:00'}, 'TSLA': {'previousClose': 378.64, 'sourceBarEpochSec': 1777319999, 'sourceSessionDate': '2026-04-27', 'sourceTime': '2026-04-27T15:59:59-04:00'}}
+2026-04-29 {'NVDA': {'previousClose': 213.15, 'sourceBarEpochSec': 1777406399, 'sourceSessionDate': '2026-04-28', 'sourceTime': '2026-04-28T15:59:59-04:00'}, 'QQQ': {'previousClose': 657.59, 'sourceBarEpochSec': 1777406399, 'sourceSessionDate': '2026-04-28', 'sourceTime': '2026-04-28T15:59:59-04:00'}, 'SPY': {'previousClose': 711.68, 'sourceBarEpochSec': 1777406399, 'sourceSessionDate': '2026-04-28', 'sourceTime': '2026-04-28T15:59:59-04:00'}, 'TQQQ': {'previousClose': 60.74, 'sourceBarEpochSec': 1777406399, 'sourceSessionDate': '2026-04-28', 'sourceTime': '2026-04-28T15:59:59-04:00'}, 'TSLA': {'previousClose': 375.945, 'sourceBarEpochSec': 1777406399, 'sourceSessionDate': '2026-04-28', 'sourceTime': '2026-04-28T15:59:59-04:00'}}
+LAST_PREVCLOSE_DAYS
+2026-05-20 {'NVDA': {'previousClose': 220.645, 'sourceBarEpochSec': 1779220797, 'sourceSessionDate': '2026-05-19', 'sourceTime': '2026-05-19T15:59:57-04:00'}, 'QQQ': {'previousClose': 701.49, 'sourceBarEpochSec': 1779220799, 'sourceSessionDate': '2026-05-19', 'sourceTime': '2026-05-19T15:59:59-04:00'}, 'SPY': {'previousClose': 733.8, 'sourceBarEpochSec': 1779220799, 'sourceSessionDate': '2026-05-19', 'sourceTime': '2026-05-19T15:59:59-04:00'}, 'TQQQ': {'previousClose': 72.93, 'sourceBarEpochSec': 1779220799, 'sourceSessionDate': '2026-05-19', 'sourceTime': '2026-05-19T15:59:59-04:00'}, 'TSLA': {'previousClose': 404.17, 'sourceBarEpochSec': 1779220798, 'sourceSessionDate': '2026-05-19', 'sourceTime': '2026-05-19T15:59:58-04:00'}}
+2026-05-21 {'NVDA': {'previousClose': 223.48, 'sourceBarEpochSec': 1779307199, 'sourceSessionDate': '2026-05-20', 'sourceTime': '2026-05-20T15:59:59-04:00'}, 'QQQ': {'previousClose': 713.07, 'sourceBarEpochSec': 1779307199, 'sourceSessionDate': '2026-05-20', 'sourceTime': '2026-05-20T15:59:59-04:00'}, 'SPY': {'previousClose': 741.31, 'sourceBarEpochSec': 1779307199, 'sourceSessionDate': '2026-05-20', 'sourceTime': '2026-05-20T15:59:59-04:00'}, 'TQQQ': {'previousClose': 76.51, 'sourceBarEpochSec': 1779307199, 'sourceSessionDate': '2026-05-20', 'sourceTime': '2026-05-20T15:59:59-04:00'}, 'TSLA': {'previousClose': 417.185, 'sourceBarEpochSec': 1779307199, 'sourceSessionDate': '2026-05-20', 'sourceTime': '2026-05-20T15:59:59-04:00'}}
+2026-05-22 {'NVDA': {'previousClose': 219.54, 'sourceBarEpochSec': 1779393599, 'sourceSessionDate': '2026-05-21', 'sourceTime': '2026-05-21T15:59:59-04:00'}, 'QQQ': {'previousClose': 714.47, 'sourceBarEpochSec': 1779393599, 'sourceSessionDate': '2026-05-21', 'sourceTime': '2026-05-21T15:59:59-04:00'}, 'SPY': {'previousClose': 742.71, 'sourceBarEpochSec': 1779393599, 'sourceSessionDate': '2026-05-21', 'sourceTime': '2026-05-21T15:59:59-04:00'}, 'TQQQ': {'previousClose': 76.9, 'sourceBarEpochSec': 1779393599, 'sourceSessionDate': '2026-05-21', 'sourceTime': '2026-05-21T15:59:59-04:00'}, 'TSLA': {'previousClose': 417.81, 'sourceBarEpochSec': 1779393599, 'sourceSessionDate': '2026-05-21', 'sourceTime': '2026-05-21T15:59:59-04:00'}}
+FIRST_EVENTS
+0 status recorded-ndjson-4week-slice-start None None None None
+1 status historical-day-begin day=20260427 None None None None
+2 previous_close None NVDA 2026-04-27 208.18 None
+3 previous_close None QQQ 2026-04-27 663.92 None
+4 previous_close None SPY 2026-04-27 713.97 None
+5 previous_close None TQQQ 2026-04-27 62.57 None
+6 previous_close None TSLA 2026-04-27 376.22 None
+7 option_bar None NVDA None None 1777296600
+8 option_bar None NVDA None None 1777296600
+9 option_bar None QQQ None None 1777296600
+10 option_bar None QQQ None None 1777296600
+11 option_bar None SPY None None 1777296600
+12 option_bar None SPY None None 1777296600
+13 option_bar None TQQQ None None 1777296600
+14 option_bar None TQQQ None None 1777296600
+15 option_bar None TSLA None None 1777296600
+16 option_bar None TSLA None None 1777296600
+17 equity_bar None NVDA None None 1777296600
+18 equity_bar None QQQ None None 1777296600
+19 equity_bar None SPY None None 1777296600
+20 equity_bar None TQQQ None None 1777296600
+21 equity_bar None TSLA None None 1777296600
+22 option_bar None NVDA None None 1777296601
+23 option_bar None NVDA None None 1777296601
+24 option_bar None QQQ None None 1777296601
+25 option_bar None QQQ None None 1777296601
+26 option_bar None SPY None None 1777296601
+27 option_bar None SPY None None 1777296601
+28 option_bar None TQQQ None None 1777296601
+29 option_bar None TQQQ None None 1777296601
+30 option_bar None TSLA None None 1777296601
+31 option_bar None TSLA None None 1777296601
+32 equity_bar None NVDA None None 1777296601
+33 equity_bar None QQQ None None 1777296601
+34 equity_bar None SPY None None 1777296601
+PREVCLOSE_SYMBOL_VIOLATIONS []
+FIRST_MARKET_LINE 8

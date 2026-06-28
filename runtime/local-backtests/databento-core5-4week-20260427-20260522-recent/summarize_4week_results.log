@@ -1,0 +1,47 @@
+SUMMARY_JSON=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/four_week_results_summary.json
+SUMMARY_MD=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/four_week_results_summary.md
+{
+  "log_counters": {
+    "backtest_rc_0": 1,
+    "feature_count_supported_pass": 85,
+    "lifecycle_route_manifest_validated": 5,
+    "setup_manifest_loaded": 5,
+    "setup_thresholds_file_logged": 5,
+    "strategy_threshold_config_logged": 5,
+    "wrapper_completed_5_failed_0": 1
+  },
+  "symbols": {
+    "NVDA": {
+      "arms": "1709",
+      "closed_trades": 0,
+      "confirmations": "0",
+      "pnl": 0
+    },
+    "QQQ": {
+      "arms": "554",
+      "closed_trades": 0,
+      "confirmations": "0",
+      "pnl": 0
+    },
+    "SPY": {
+      "arms": "227",
+      "closed_trades": 0,
+      "confirmations": "0",
+      "pnl": 0
+    },
+    "TQQQ": {
+      "arms": "972",
+      "closed_trades": 0,
+      "confirmations": "0",
+      "pnl": 0
+    },
+    "TSLA": {
+      "arms": "1008",
+      "closed_trades": 0,
+      "confirmations": "0",
+      "pnl": 0
+    }
+  },
+  "total_closed_trades": 0,
+  "total_pnl": 0
+}

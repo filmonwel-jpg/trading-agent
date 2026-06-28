@@ -1,0 +1,760 @@
+{
+  "counts": {
+    "equity_bar": 932320,
+    "option_bar": 4003923,
+    "previous_close": 100,
+    "status": 42
+  },
+  "day_count": 40,
+  "day_status_seen": [
+    "2026-04-27",
+    "2026-04-27",
+    "2026-04-28",
+    "2026-04-28",
+    "2026-04-29",
+    "2026-04-29",
+    "2026-04-30",
+    "2026-04-30",
+    "2026-05-01",
+    "2026-05-01",
+    "2026-05-04",
+    "2026-05-04",
+    "2026-05-05",
+    "2026-05-05",
+    "2026-05-06",
+    "2026-05-06",
+    "2026-05-07",
+    "2026-05-07",
+    "2026-05-08",
+    "2026-05-08",
+    "2026-05-11",
+    "2026-05-11",
+    "2026-05-12",
+    "2026-05-12",
+    "2026-05-13",
+    "2026-05-13",
+    "2026-05-14",
+    "2026-05-14",
+    "2026-05-15",
+    "2026-05-15",
+    "2026-05-18",
+    "2026-05-18",
+    "2026-05-19",
+    "2026-05-19",
+    "2026-05-20",
+    "2026-05-20",
+    "2026-05-21",
+    "2026-05-21",
+    "2026-05-22",
+    "2026-05-22"
+  ],
+  "first_event_epoch_sec": 1777296600,
+  "input_lines": 51434650,
+  "last_close_by_symbol_after_slice": {
+    "NVDA": {
+      "close": 215.26,
+      "epoch": 1779479999
+    },
+    "QQQ": {
+      "close": 717.38,
+      "epoch": 1779479999
+    },
+    "SPY": {
+      "close": 745.59,
+      "epoch": 1779479999
+    },
+    "TQQQ": {
+      "close": 77.85,
+      "epoch": 1779479998
+    },
+    "TSLA": {
+      "close": 425.93,
+      "epoch": 1779479997
+    }
+  },
+  "last_event_epoch_sec": 1779479999,
+  "malformed": 0,
+  "missing_previous_close": {},
+  "output_events": 4936385,
+  "output_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz",
+  "previous_close_by_day": {
+    "2026-04-27": {
+      "NVDA": {
+        "previousClose": 208.18,
+        "sourceBarEpochSec": 1777060799,
+        "sourceSessionDate": "2026-04-24",
+        "sourceTime": "2026-04-24T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 663.92,
+        "sourceBarEpochSec": 1777060799,
+        "sourceSessionDate": "2026-04-24",
+        "sourceTime": "2026-04-24T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 713.97,
+        "sourceBarEpochSec": 1777060799,
+        "sourceSessionDate": "2026-04-24",
+        "sourceTime": "2026-04-24T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 62.57,
+        "sourceBarEpochSec": 1777060799,
+        "sourceSessionDate": "2026-04-24",
+        "sourceTime": "2026-04-24T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 376.22,
+        "sourceBarEpochSec": 1777060799,
+        "sourceSessionDate": "2026-04-24",
+        "sourceTime": "2026-04-24T15:59:59-04:00"
+      }
+    },
+    "2026-04-28": {
+      "NVDA": {
+        "previousClose": 216.68,
+        "sourceBarEpochSec": 1777319999,
+        "sourceSessionDate": "2026-04-27",
+        "sourceTime": "2026-04-27T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 664.28,
+        "sourceBarEpochSec": 1777319999,
+        "sourceSessionDate": "2026-04-27",
+        "sourceTime": "2026-04-27T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 715.165,
+        "sourceBarEpochSec": 1777319999,
+        "sourceSessionDate": "2026-04-27",
+        "sourceTime": "2026-04-27T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 62.615,
+        "sourceBarEpochSec": 1777319999,
+        "sourceSessionDate": "2026-04-27",
+        "sourceTime": "2026-04-27T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 378.64,
+        "sourceBarEpochSec": 1777319999,
+        "sourceSessionDate": "2026-04-27",
+        "sourceTime": "2026-04-27T15:59:59-04:00"
+      }
+    },
+    "2026-04-29": {
+      "NVDA": {
+        "previousClose": 213.15,
+        "sourceBarEpochSec": 1777406399,
+        "sourceSessionDate": "2026-04-28",
+        "sourceTime": "2026-04-28T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 657.59,
+        "sourceBarEpochSec": 1777406399,
+        "sourceSessionDate": "2026-04-28",
+        "sourceTime": "2026-04-28T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 711.68,
+        "sourceBarEpochSec": 1777406399,
+        "sourceSessionDate": "2026-04-28",
+        "sourceTime": "2026-04-28T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 60.74,
+        "sourceBarEpochSec": 1777406399,
+        "sourceSessionDate": "2026-04-28",
+        "sourceTime": "2026-04-28T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 375.945,
+        "sourceBarEpochSec": 1777406399,
+        "sourceSessionDate": "2026-04-28",
+        "sourceTime": "2026-04-28T15:59:59-04:00"
+      }
+    },
+    "2026-04-30": {
+      "NVDA": {
+        "previousClose": 209.35,
+        "sourceBarEpochSec": 1777492799,
+        "sourceSessionDate": "2026-04-29",
+        "sourceTime": "2026-04-29T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 661.59,
+        "sourceBarEpochSec": 1777492799,
+        "sourceSessionDate": "2026-04-29",
+        "sourceTime": "2026-04-29T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 711.59,
+        "sourceBarEpochSec": 1777492799,
+        "sourceSessionDate": "2026-04-29",
+        "sourceTime": "2026-04-29T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 61.83,
+        "sourceBarEpochSec": 1777492799,
+        "sourceSessionDate": "2026-04-29",
+        "sourceTime": "2026-04-29T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 372.785,
+        "sourceBarEpochSec": 1777492799,
+        "sourceSessionDate": "2026-04-29",
+        "sourceTime": "2026-04-29T15:59:59-04:00"
+      }
+    },
+    "2026-05-01": {
+      "NVDA": {
+        "previousClose": 199.53,
+        "sourceBarEpochSec": 1777579199,
+        "sourceSessionDate": "2026-04-30",
+        "sourceTime": "2026-04-30T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 667.54,
+        "sourceBarEpochSec": 1777579199,
+        "sourceSessionDate": "2026-04-30",
+        "sourceTime": "2026-04-30T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 718.41,
+        "sourceBarEpochSec": 1777579199,
+        "sourceSessionDate": "2026-04-30",
+        "sourceTime": "2026-04-30T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 63.49,
+        "sourceBarEpochSec": 1777579199,
+        "sourceSessionDate": "2026-04-30",
+        "sourceTime": "2026-04-30T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 381.57,
+        "sourceBarEpochSec": 1777579199,
+        "sourceSessionDate": "2026-04-30",
+        "sourceTime": "2026-04-30T15:59:59-04:00"
+      }
+    },
+    "2026-05-04": {
+      "NVDA": {
+        "previousClose": 198.41,
+        "sourceBarEpochSec": 1777665599,
+        "sourceSessionDate": "2026-05-01",
+        "sourceTime": "2026-05-01T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 674.1,
+        "sourceBarEpochSec": 1777665599,
+        "sourceSessionDate": "2026-05-01",
+        "sourceTime": "2026-05-01T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 720.58,
+        "sourceBarEpochSec": 1777665599,
+        "sourceSessionDate": "2026-05-01",
+        "sourceTime": "2026-05-01T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 65.29,
+        "sourceBarEpochSec": 1777665599,
+        "sourceSessionDate": "2026-05-01",
+        "sourceTime": "2026-05-01T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 390.71,
+        "sourceBarEpochSec": 1777665599,
+        "sourceSessionDate": "2026-05-01",
+        "sourceTime": "2026-05-01T15:59:59-04:00"
+      }
+    },
+    "2026-05-05": {
+      "NVDA": {
+        "previousClose": 198.56,
+        "sourceBarEpochSec": 1777924799,
+        "sourceSessionDate": "2026-05-04",
+        "sourceTime": "2026-05-04T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 672.87,
+        "sourceBarEpochSec": 1777924799,
+        "sourceSessionDate": "2026-05-04",
+        "sourceTime": "2026-05-04T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 718.09,
+        "sourceBarEpochSec": 1777924799,
+        "sourceSessionDate": "2026-05-04",
+        "sourceTime": "2026-05-04T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 64.92,
+        "sourceBarEpochSec": 1777924799,
+        "sourceSessionDate": "2026-05-04",
+        "sourceTime": "2026-05-04T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 392.58,
+        "sourceBarEpochSec": 1777924799,
+        "sourceSessionDate": "2026-05-04",
+        "sourceTime": "2026-05-04T15:59:59-04:00"
+      }
+    },
+    "2026-05-06": {
+      "NVDA": {
+        "previousClose": 196.5,
+        "sourceBarEpochSec": 1778011199,
+        "sourceSessionDate": "2026-05-05",
+        "sourceTime": "2026-05-05T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 681.53,
+        "sourceBarEpochSec": 1778011199,
+        "sourceSessionDate": "2026-05-05",
+        "sourceTime": "2026-05-05T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 723.71,
+        "sourceBarEpochSec": 1778011199,
+        "sourceSessionDate": "2026-05-05",
+        "sourceTime": "2026-05-05T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 67.39,
+        "sourceBarEpochSec": 1778011199,
+        "sourceSessionDate": "2026-05-05",
+        "sourceTime": "2026-05-05T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 389.29,
+        "sourceBarEpochSec": 1778011199,
+        "sourceSessionDate": "2026-05-05",
+        "sourceTime": "2026-05-05T15:59:59-04:00"
+      }
+    },
+    "2026-05-07": {
+      "NVDA": {
+        "previousClose": 207.67,
+        "sourceBarEpochSec": 1778097599,
+        "sourceSessionDate": "2026-05-06",
+        "sourceTime": "2026-05-06T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 695.61,
+        "sourceBarEpochSec": 1778097599,
+        "sourceSessionDate": "2026-05-06",
+        "sourceTime": "2026-05-06T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 733.77,
+        "sourceBarEpochSec": 1778097599,
+        "sourceSessionDate": "2026-05-06",
+        "sourceTime": "2026-05-06T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 71.57,
+        "sourceBarEpochSec": 1778097598,
+        "sourceSessionDate": "2026-05-06",
+        "sourceTime": "2026-05-06T15:59:58-04:00"
+      },
+      "TSLA": {
+        "previousClose": 398.66,
+        "sourceBarEpochSec": 1778097599,
+        "sourceSessionDate": "2026-05-06",
+        "sourceTime": "2026-05-06T15:59:59-04:00"
+      }
+    },
+    "2026-05-08": {
+      "NVDA": {
+        "previousClose": 211.6,
+        "sourceBarEpochSec": 1778183999,
+        "sourceSessionDate": "2026-05-07",
+        "sourceTime": "2026-05-07T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 694.93,
+        "sourceBarEpochSec": 1778183999,
+        "sourceSessionDate": "2026-05-07",
+        "sourceTime": "2026-05-07T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 731.53,
+        "sourceBarEpochSec": 1778183999,
+        "sourceSessionDate": "2026-05-07",
+        "sourceTime": "2026-05-07T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 71.33,
+        "sourceBarEpochSec": 1778183999,
+        "sourceSessionDate": "2026-05-07",
+        "sourceTime": "2026-05-07T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 411.825,
+        "sourceBarEpochSec": 1778183999,
+        "sourceSessionDate": "2026-05-07",
+        "sourceTime": "2026-05-07T15:59:59-04:00"
+      }
+    },
+    "2026-05-11": {
+      "NVDA": {
+        "previousClose": 215.2,
+        "sourceBarEpochSec": 1778270399,
+        "sourceSessionDate": "2026-05-08",
+        "sourceTime": "2026-05-08T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 711.12,
+        "sourceBarEpochSec": 1778270399,
+        "sourceSessionDate": "2026-05-08",
+        "sourceTime": "2026-05-08T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 737.54,
+        "sourceBarEpochSec": 1778270399,
+        "sourceSessionDate": "2026-05-08",
+        "sourceTime": "2026-05-08T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 76.29,
+        "sourceBarEpochSec": 1778270399,
+        "sourceSessionDate": "2026-05-08",
+        "sourceTime": "2026-05-08T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 428.31,
+        "sourceBarEpochSec": 1778270399,
+        "sourceSessionDate": "2026-05-08",
+        "sourceTime": "2026-05-08T15:59:59-04:00"
+      }
+    },
+    "2026-05-12": {
+      "NVDA": {
+        "previousClose": 219.45,
+        "sourceBarEpochSec": 1778529599,
+        "sourceSessionDate": "2026-05-11",
+        "sourceTime": "2026-05-11T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 713.37,
+        "sourceBarEpochSec": 1778529599,
+        "sourceSessionDate": "2026-05-11",
+        "sourceTime": "2026-05-11T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 739.2,
+        "sourceBarEpochSec": 1778529599,
+        "sourceSessionDate": "2026-05-11",
+        "sourceTime": "2026-05-11T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 76.97,
+        "sourceBarEpochSec": 1778529599,
+        "sourceSessionDate": "2026-05-11",
+        "sourceTime": "2026-05-11T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 445.04,
+        "sourceBarEpochSec": 1778529599,
+        "sourceSessionDate": "2026-05-11",
+        "sourceTime": "2026-05-11T15:59:59-04:00"
+      }
+    },
+    "2026-05-13": {
+      "NVDA": {
+        "previousClose": 220.88,
+        "sourceBarEpochSec": 1778615999,
+        "sourceSessionDate": "2026-05-12",
+        "sourceTime": "2026-05-12T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 707.18,
+        "sourceBarEpochSec": 1778615999,
+        "sourceSessionDate": "2026-05-12",
+        "sourceTime": "2026-05-12T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 738.19,
+        "sourceBarEpochSec": 1778615999,
+        "sourceSessionDate": "2026-05-12",
+        "sourceTime": "2026-05-12T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 74.935,
+        "sourceBarEpochSec": 1778615998,
+        "sourceSessionDate": "2026-05-12",
+        "sourceTime": "2026-05-12T15:59:58-04:00"
+      },
+      "TSLA": {
+        "previousClose": 433.455,
+        "sourceBarEpochSec": 1778615999,
+        "sourceSessionDate": "2026-05-12",
+        "sourceTime": "2026-05-12T15:59:59-04:00"
+      }
+    },
+    "2026-05-14": {
+      "NVDA": {
+        "previousClose": 225.86,
+        "sourceBarEpochSec": 1778702399,
+        "sourceSessionDate": "2026-05-13",
+        "sourceTime": "2026-05-13T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 714.56,
+        "sourceBarEpochSec": 1778702399,
+        "sourceSessionDate": "2026-05-13",
+        "sourceTime": "2026-05-13T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 742.3,
+        "sourceBarEpochSec": 1778702399,
+        "sourceSessionDate": "2026-05-13",
+        "sourceTime": "2026-05-13T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 77.27,
+        "sourceBarEpochSec": 1778702399,
+        "sourceSessionDate": "2026-05-13",
+        "sourceTime": "2026-05-13T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 445.21,
+        "sourceBarEpochSec": 1778702398,
+        "sourceSessionDate": "2026-05-13",
+        "sourceTime": "2026-05-13T15:59:58-04:00"
+      }
+    },
+    "2026-05-15": {
+      "NVDA": {
+        "previousClose": 235.78,
+        "sourceBarEpochSec": 1778788799,
+        "sourceSessionDate": "2026-05-14",
+        "sourceTime": "2026-05-14T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 719.75,
+        "sourceBarEpochSec": 1778788799,
+        "sourceSessionDate": "2026-05-14",
+        "sourceTime": "2026-05-14T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 748.1,
+        "sourceBarEpochSec": 1778788799,
+        "sourceSessionDate": "2026-05-14",
+        "sourceTime": "2026-05-14T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 78.93,
+        "sourceBarEpochSec": 1778788798,
+        "sourceSessionDate": "2026-05-14",
+        "sourceTime": "2026-05-14T15:59:58-04:00"
+      },
+      "TSLA": {
+        "previousClose": 443.215,
+        "sourceBarEpochSec": 1778788796,
+        "sourceSessionDate": "2026-05-14",
+        "sourceTime": "2026-05-14T15:59:56-04:00"
+      }
+    },
+    "2026-05-18": {
+      "NVDA": {
+        "previousClose": 225.285,
+        "sourceBarEpochSec": 1778875199,
+        "sourceSessionDate": "2026-05-15",
+        "sourceTime": "2026-05-15T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 708.91,
+        "sourceBarEpochSec": 1778875199,
+        "sourceSessionDate": "2026-05-15",
+        "sourceTime": "2026-05-15T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 739.095,
+        "sourceBarEpochSec": 1778875199,
+        "sourceSessionDate": "2026-05-15",
+        "sourceTime": "2026-05-15T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 75.34,
+        "sourceBarEpochSec": 1778875199,
+        "sourceSessionDate": "2026-05-15",
+        "sourceTime": "2026-05-15T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 422.17,
+        "sourceBarEpochSec": 1778875199,
+        "sourceSessionDate": "2026-05-15",
+        "sourceTime": "2026-05-15T15:59:59-04:00"
+      }
+    },
+    "2026-05-19": {
+      "NVDA": {
+        "previousClose": 222.3,
+        "sourceBarEpochSec": 1779134399,
+        "sourceSessionDate": "2026-05-18",
+        "sourceTime": "2026-05-18T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 705.69,
+        "sourceBarEpochSec": 1779134399,
+        "sourceSessionDate": "2026-05-18",
+        "sourceTime": "2026-05-18T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 738.37,
+        "sourceBarEpochSec": 1779134399,
+        "sourceSessionDate": "2026-05-18",
+        "sourceTime": "2026-05-18T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 74.28,
+        "sourceBarEpochSec": 1779134399,
+        "sourceSessionDate": "2026-05-18",
+        "sourceTime": "2026-05-18T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 410.02,
+        "sourceBarEpochSec": 1779134399,
+        "sourceSessionDate": "2026-05-18",
+        "sourceTime": "2026-05-18T15:59:59-04:00"
+      }
+    },
+    "2026-05-20": {
+      "NVDA": {
+        "previousClose": 220.645,
+        "sourceBarEpochSec": 1779220797,
+        "sourceSessionDate": "2026-05-19",
+        "sourceTime": "2026-05-19T15:59:57-04:00"
+      },
+      "QQQ": {
+        "previousClose": 701.49,
+        "sourceBarEpochSec": 1779220799,
+        "sourceSessionDate": "2026-05-19",
+        "sourceTime": "2026-05-19T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 733.8,
+        "sourceBarEpochSec": 1779220799,
+        "sourceSessionDate": "2026-05-19",
+        "sourceTime": "2026-05-19T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 72.93,
+        "sourceBarEpochSec": 1779220799,
+        "sourceSessionDate": "2026-05-19",
+        "sourceTime": "2026-05-19T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 404.17,
+        "sourceBarEpochSec": 1779220798,
+        "sourceSessionDate": "2026-05-19",
+        "sourceTime": "2026-05-19T15:59:58-04:00"
+      }
+    },
+    "2026-05-21": {
+      "NVDA": {
+        "previousClose": 223.48,
+        "sourceBarEpochSec": 1779307199,
+        "sourceSessionDate": "2026-05-20",
+        "sourceTime": "2026-05-20T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 713.07,
+        "sourceBarEpochSec": 1779307199,
+        "sourceSessionDate": "2026-05-20",
+        "sourceTime": "2026-05-20T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 741.31,
+        "sourceBarEpochSec": 1779307199,
+        "sourceSessionDate": "2026-05-20",
+        "sourceTime": "2026-05-20T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 76.51,
+        "sourceBarEpochSec": 1779307199,
+        "sourceSessionDate": "2026-05-20",
+        "sourceTime": "2026-05-20T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 417.185,
+        "sourceBarEpochSec": 1779307199,
+        "sourceSessionDate": "2026-05-20",
+        "sourceTime": "2026-05-20T15:59:59-04:00"
+      }
+    },
+    "2026-05-22": {
+      "NVDA": {
+        "previousClose": 219.54,
+        "sourceBarEpochSec": 1779393599,
+        "sourceSessionDate": "2026-05-21",
+        "sourceTime": "2026-05-21T15:59:59-04:00"
+      },
+      "QQQ": {
+        "previousClose": 714.47,
+        "sourceBarEpochSec": 1779393599,
+        "sourceSessionDate": "2026-05-21",
+        "sourceTime": "2026-05-21T15:59:59-04:00"
+      },
+      "SPY": {
+        "previousClose": 742.71,
+        "sourceBarEpochSec": 1779393599,
+        "sourceSessionDate": "2026-05-21",
+        "sourceTime": "2026-05-21T15:59:59-04:00"
+      },
+      "TQQQ": {
+        "previousClose": 76.9,
+        "sourceBarEpochSec": 1779393599,
+        "sourceSessionDate": "2026-05-21",
+        "sourceTime": "2026-05-21T15:59:59-04:00"
+      },
+      "TSLA": {
+        "previousClose": 417.81,
+        "sourceBarEpochSec": 1779393599,
+        "sourceSessionDate": "2026-05-21",
+        "sourceTime": "2026-05-21T15:59:59-04:00"
+      }
+    }
+  },
+  "previous_close_days": [
+    "2026-04-27",
+    "2026-04-28",
+    "2026-04-29",
+    "2026-04-30",
+    "2026-05-01",
+    "2026-05-04",
+    "2026-05-05",
+    "2026-05-06",
+    "2026-05-07",
+    "2026-05-08",
+    "2026-05-11",
+    "2026-05-12",
+    "2026-05-13",
+    "2026-05-14",
+    "2026-05-15",
+    "2026-05-18",
+    "2026-05-19",
+    "2026-05-20",
+    "2026-05-21",
+    "2026-05-22"
+  ],
+  "previous_close_emitted_before_session_bars": true,
+  "previous_close_event_count_expected": 100,
+  "skipped_symbol": 0,
+  "skipped_time": 46497979,
+  "source_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/replay/databento-20260523-core5.ndjson.gz",
+  "symbols": [
+    "NVDA",
+    "QQQ",
+    "SPY",
+    "TQQQ",
+    "TSLA"
+  ],
+  "target_end_epoch_sec": 1779480000,
+  "target_end_utc": "2026-05-22T20:00:00+00:00",
+  "target_start_epoch_sec": 1777296600,
+  "target_start_utc": "2026-04-27T13:30:00+00:00"
+}

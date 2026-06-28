@@ -1,0 +1,1375 @@
+{
+  "artifacts": {
+    "NVDA": {
+      "closed_trade_rows": [],
+      "closed_trades": 0,
+      "filled_order_rows": 0,
+      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_metrics": {
+        "ArmConfirmations": "0",
+        "ArmConversionRate": "0.000000",
+        "ArmExpirations": "1065",
+        "ArmsLong": "843",
+        "ArmsShort": "866",
+        "ArmsTotal": "1709",
+        "AvgMaeR": "0.000000",
+        "AvgMfeR": "0.000000",
+        "AvgSetupToFillSeconds": "0.000000",
+        "EodExits": "0",
+        "ExitReasonDistribution": "lifecycle=0|guard=0|hard_stop=0|hard_risk=0|target=0|eod=0|other=0",
+        "GuardEvaluations": "0",
+        "GuardFires": "0",
+        "HardRiskExits": "0",
+        "LifecycleExits": "0"
+      },
+      "lifecycle_rows": 1,
+      "order_rows": 0,
+      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "stream_sanity": {
+        "entryRejectedEquityBars": 90,
+        "equityBarsMissingContract": 0,
+        "equityBarsObservedBySanity": 287501,
+        "equityBarsWithContract": 287501,
+        "errors": [],
+        "expectedEventSchemaVersion": "databento_ndjson_v2",
+        "lowQualityEquityBars": 90,
+        "maxQualityScore": 1.0,
+        "meanQualityScore": 0.9998121745663497,
+        "minAllowedQualityScore": 0.5,
+        "minQualityScore": 0.4,
+        "optionBarsObservedBySanity": 878435,
+        "processedEquityBars": 287501,
+        "processedOptionBars": 878435,
+        "qualityFlagCounts": {
+          "locked_crossed": 90,
+          "none": 287411
+        },
+        "schemaMismatchEquityBars": 0,
+        "skippedEvents": 0,
+        "statusEvents": 45,
+        "symbol": "NVDA",
+        "warnings": [
+          "low_quality_equity_bars=90",
+          "entry_rejected_equity_bars=90"
+        ]
+      },
+      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "trade_log_pnl_sum": 0,
+      "trade_log_rows": 0,
+      "trade_pnl_sum": 0
+    },
+    "QQQ": {
+      "closed_trade_rows": [],
+      "closed_trades": 0,
+      "filled_order_rows": 0,
+      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_metrics": {
+        "ArmConfirmations": "0",
+        "ArmConversionRate": "0.000000",
+        "ArmExpirations": "418",
+        "ArmsLong": "448",
+        "ArmsShort": "106",
+        "ArmsTotal": "554",
+        "AvgMaeR": "0.000000",
+        "AvgMfeR": "0.000000",
+        "AvgSetupToFillSeconds": "0.000000",
+        "EodExits": "0",
+        "ExitReasonDistribution": "lifecycle=0|guard=0|hard_stop=0|hard_risk=0|target=0|eod=0|other=0",
+        "GuardEvaluations": "0",
+        "GuardFires": "0",
+        "HardRiskExits": "0",
+        "LifecycleExits": "0"
+      },
+      "lifecycle_rows": 1,
+      "order_rows": 0,
+      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "stream_sanity": {
+        "entryRejectedEquityBars": 107,
+        "equityBarsMissingContract": 0,
+        "equityBarsObservedBySanity": 142298,
+        "equityBarsWithContract": 142298,
+        "errors": [],
+        "expectedEventSchemaVersion": "databento_ndjson_v2",
+        "lowQualityEquityBars": 107,
+        "maxQualityScore": 1.0,
+        "meanQualityScore": 0.9995488341368095,
+        "minAllowedQualityScore": 0.5,
+        "minQualityScore": 0.4,
+        "optionBarsObservedBySanity": 925981,
+        "processedEquityBars": 142298,
+        "processedOptionBars": 925981,
+        "qualityFlagCounts": {
+          "locked_crossed": 107,
+          "none": 142191
+        },
+        "schemaMismatchEquityBars": 0,
+        "skippedEvents": 0,
+        "statusEvents": 45,
+        "symbol": "QQQ",
+        "warnings": [
+          "low_quality_equity_bars=107",
+          "entry_rejected_equity_bars=107"
+        ]
+      },
+      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "trade_log_pnl_sum": 0,
+      "trade_log_rows": 0,
+      "trade_pnl_sum": 0
+    },
+    "SPY": {
+      "closed_trade_rows": [],
+      "closed_trades": 0,
+      "filled_order_rows": 0,
+      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_metrics": {
+        "ArmConfirmations": "0",
+        "ArmConversionRate": "0.000000",
+        "ArmExpirations": "164",
+        "ArmsLong": "130",
+        "ArmsShort": "97",
+        "ArmsTotal": "227",
+        "AvgMaeR": "0.000000",
+        "AvgMfeR": "0.000000",
+        "AvgSetupToFillSeconds": "0.000000",
+        "EodExits": "0",
+        "ExitReasonDistribution": "lifecycle=0|guard=0|hard_stop=0|hard_risk=0|target=0|eod=0|other=0",
+        "GuardEvaluations": "0",
+        "GuardFires": "0",
+        "HardRiskExits": "0",
+        "LifecycleExits": "0"
+      },
+      "lifecycle_rows": 1,
+      "order_rows": 0,
+      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "stream_sanity": {
+        "entryRejectedEquityBars": 154,
+        "equityBarsMissingContract": 0,
+        "equityBarsObservedBySanity": 198893,
+        "equityBarsWithContract": 198893,
+        "errors": [],
+        "expectedEventSchemaVersion": "databento_ndjson_v2",
+        "lowQualityEquityBars": 154,
+        "maxQualityScore": 1.0,
+        "meanQualityScore": 0.9995354285972836,
+        "minAllowedQualityScore": 0.5,
+        "minQualityScore": 0.4,
+        "optionBarsObservedBySanity": 934457,
+        "processedEquityBars": 198893,
+        "processedOptionBars": 934457,
+        "qualityFlagCounts": {
+          "locked_crossed": 154,
+          "none": 198739
+        },
+        "schemaMismatchEquityBars": 0,
+        "skippedEvents": 0,
+        "statusEvents": 45,
+        "symbol": "SPY",
+        "warnings": [
+          "low_quality_equity_bars=154",
+          "entry_rejected_equity_bars=154"
+        ]
+      },
+      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "trade_log_pnl_sum": 0,
+      "trade_log_rows": 0,
+      "trade_pnl_sum": 0
+    },
+    "TQQQ": {
+      "closed_trade_rows": [],
+      "closed_trades": 0,
+      "filled_order_rows": 0,
+      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_metrics": {
+        "ArmConfirmations": "0",
+        "ArmConversionRate": "0.000000",
+        "ArmExpirations": "753",
+        "ArmsLong": "771",
+        "ArmsShort": "201",
+        "ArmsTotal": "972",
+        "AvgMaeR": "0.000000",
+        "AvgMfeR": "0.000000",
+        "AvgSetupToFillSeconds": "0.000000",
+        "EodExits": "0",
+        "ExitReasonDistribution": "lifecycle=0|guard=0|hard_stop=0|hard_risk=0|target=0|eod=0|other=0",
+        "GuardEvaluations": "0",
+        "GuardFires": "0",
+        "HardRiskExits": "0",
+        "LifecycleExits": "0"
+      },
+      "lifecycle_rows": 1,
+      "order_rows": 0,
+      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "stream_sanity": {
+        "entryRejectedEquityBars": 2456,
+        "equityBarsMissingContract": 0,
+        "equityBarsObservedBySanity": 110244,
+        "equityBarsWithContract": 110244,
+        "errors": [],
+        "expectedEventSchemaVersion": "databento_ndjson_v2",
+        "lowQualityEquityBars": 2456,
+        "maxQualityScore": 1.0,
+        "meanQualityScore": 0.9866332861651885,
+        "minAllowedQualityScore": 0.5,
+        "minQualityScore": 0.4,
+        "optionBarsObservedBySanity": 355747,
+        "processedEquityBars": 110244,
+        "processedOptionBars": 355747,
+        "qualityFlagCounts": {
+          "locked_crossed": 2456,
+          "none": 107788
+        },
+        "schemaMismatchEquityBars": 0,
+        "skippedEvents": 0,
+        "statusEvents": 45,
+        "symbol": "TQQQ",
+        "warnings": [
+          "low_quality_equity_bars=2456",
+          "entry_rejected_equity_bars=2456"
+        ]
+      },
+      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "trade_log_pnl_sum": 130.0,
+      "trade_log_rows": 1,
+      "trade_pnl_sum": 0,
+      "trades_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260626_195622-trades.csv"
+    },
+    "TSLA": {
+      "closed_trade_rows": [],
+      "closed_trades": 0,
+      "filled_order_rows": 0,
+      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_metrics": {
+        "ArmConfirmations": "0",
+        "ArmConversionRate": "0.000000",
+        "ArmExpirations": "694",
+        "ArmsLong": "666",
+        "ArmsShort": "342",
+        "ArmsTotal": "1008",
+        "AvgMaeR": "0.000000",
+        "AvgMfeR": "0.000000",
+        "AvgSetupToFillSeconds": "0.000000",
+        "EodExits": "0",
+        "ExitReasonDistribution": "lifecycle=0|guard=0|hard_stop=0|hard_risk=0|target=0|eod=0|other=0",
+        "GuardEvaluations": "0",
+        "GuardFires": "0",
+        "HardRiskExits": "0",
+        "LifecycleExits": "0"
+      },
+      "lifecycle_rows": 1,
+      "order_rows": 0,
+      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "stream_sanity": {
+        "entryRejectedEquityBars": 3,
+        "equityBarsMissingContract": 0,
+        "equityBarsObservedBySanity": 193384,
+        "equityBarsWithContract": 193384,
+        "errors": [],
+        "expectedEventSchemaVersion": "databento_ndjson_v2",
+        "lowQualityEquityBars": 3,
+        "maxQualityScore": 1.0,
+        "meanQualityScore": 0.9999906920944857,
+        "minAllowedQualityScore": 0.5,
+        "minQualityScore": 0.4,
+        "optionBarsObservedBySanity": 909303,
+        "processedEquityBars": 193384,
+        "processedOptionBars": 909303,
+        "qualityFlagCounts": {
+          "locked_crossed": 3,
+          "none": 193381
+        },
+        "schemaMismatchEquityBars": 0,
+        "skippedEvents": 0,
+        "statusEvents": 45,
+        "symbol": "TSLA",
+        "warnings": [
+          "low_quality_equity_bars=3",
+          "entry_rejected_equity_bars=3"
+        ]
+      },
+      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "trade_log_pnl_sum": 0,
+      "trade_log_rows": 0,
+      "trade_pnl_sum": 0
+    }
+  },
+  "day_dominance": {
+    "max_abs_day_pnl_fraction": 0.0,
+    "max_trade_day_fraction": 0.0,
+    "pnl_by_day": {},
+    "pnl_by_symbol": {},
+    "total_closed_trades": 0,
+    "total_pnl": 0,
+    "trades_by_day": {}
+  },
+  "env": {
+    "END_DATE": "2026-05-22",
+    "JAVA_TOOL_OPTIONS": "-Dbacktest.strategy.tradeAmount=60000 -Dtrading.trade-amount=60000 -Dtrading.risk.max-order-notional=70000 -Dbacktest.strategy.maxOrderNotional=70000",
+    "LIFECYCLE_DIR": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports",
+    "RECORDED_EVENTS": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz",
+    "RUN_DIR": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run",
+    "RUN_LOG": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_200624.log",
+    "RUN_TS": "20260627_200624",
+    "SETUP_DIR": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854",
+    "SETUP_THRESHOLDS_FILE": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_runtime_thresholds.properties",
+    "START_DATE": "2026-04-27",
+    "SYMBOLS_FILE": "/Users/filmonghezehey/trading-agent/worktrees/databento/config/databento_core_5_symbols.txt"
+  },
+  "log_validation": {
+    "counters": {
+      "backtest_rc_0": 1,
+      "feature_count_supported_pass": 85,
+      "lifecycle_route_manifest_validated": 5,
+      "setup_manifest_loaded": 5,
+      "setup_thresholds_file_logged": 5,
+      "strategy_threshold_config_logged": 5,
+      "wrapper_completed_5_failed_0": 1
+    },
+    "first_markers": {
+      "lifecycle_route_manifest_validated": "20:06:30.322 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.ROUTE] Validated lifecycle/micro route manifest schema symbol=TSLA manifest=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/lifecycle_micro_route_manifest.json",
+      "setup_manifest_loaded": "20:06:30.205 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.SCHEMA] Loaded setup_manifest.json feature schemas symbol=TSLA featureCount=34 regimeFeatureCount=24 path=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_manifest.json",
+      "setup_thresholds_file": "[BACKTEST] setup_thresholds_file=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_runtime_thresholds.properties",
+      "threshold_config": "20:06:30.328 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][DATA][AI.CONFIG] symbol=TSLA thresholds base{le=0.6120 se=0.6120 lx=0.5800 sx=0.6000 regime=0.5000} open30{le=0.6200 se=0.6240 lx=0.5800 sx=0.6000} choppy{le=0.6560 se=0.6440 lx=0.5800 sx=0.6000} trend{le=0.6360 se=0.6480 lx=0.5800 sx=0.6000} volatile{le=0.6040 se=0.6080 lx=0.5800 sx=0.6000}"
+    },
+    "previous_close_counts": {
+      "NVDA": 20,
+      "QQQ": 20,
+      "SPY": 20,
+      "TQQQ": 20,
+      "TSLA": 20
+    },
+    "previous_close_values": {
+      "NVDA": {
+        "2026-04-27": 208.18,
+        "2026-04-28": 216.68,
+        "2026-04-29": 213.15,
+        "2026-04-30": 209.35,
+        "2026-05-01": 199.53,
+        "2026-05-04": 198.41,
+        "2026-05-05": 198.56,
+        "2026-05-06": 196.5,
+        "2026-05-07": 207.67,
+        "2026-05-08": 211.6,
+        "2026-05-11": 215.2,
+        "2026-05-12": 219.45,
+        "2026-05-13": 220.88,
+        "2026-05-14": 225.86,
+        "2026-05-15": 235.78,
+        "2026-05-18": 225.285,
+        "2026-05-19": 222.3,
+        "2026-05-20": 220.645,
+        "2026-05-21": 223.48,
+        "2026-05-22": 219.54
+      },
+      "QQQ": {
+        "2026-04-27": 663.92,
+        "2026-04-28": 664.28,
+        "2026-04-29": 657.59,
+        "2026-04-30": 661.59,
+        "2026-05-01": 667.54,
+        "2026-05-04": 674.1,
+        "2026-05-05": 672.87,
+        "2026-05-06": 681.53,
+        "2026-05-07": 695.61,
+        "2026-05-08": 694.93,
+        "2026-05-11": 711.12,
+        "2026-05-12": 713.37,
+        "2026-05-13": 707.18,
+        "2026-05-14": 714.56,
+        "2026-05-15": 719.75,
+        "2026-05-18": 708.91,
+        "2026-05-19": 705.69,
+        "2026-05-20": 701.49,
+        "2026-05-21": 713.07,
+        "2026-05-22": 714.47
+      },
+      "SPY": {
+        "2026-04-27": 713.97,
+        "2026-04-28": 715.165,
+        "2026-04-29": 711.68,
+        "2026-04-30": 711.59,
+        "2026-05-01": 718.41,
+        "2026-05-04": 720.58,
+        "2026-05-05": 718.09,
+        "2026-05-06": 723.71,
+        "2026-05-07": 733.77,
+        "2026-05-08": 731.53,
+        "2026-05-11": 737.54,
+        "2026-05-12": 739.2,
+        "2026-05-13": 738.19,
+        "2026-05-14": 742.3,
+        "2026-05-15": 748.1,
+        "2026-05-18": 739.095,
+        "2026-05-19": 738.37,
+        "2026-05-20": 733.8,
+        "2026-05-21": 741.31,
+        "2026-05-22": 742.71
+      },
+      "TQQQ": {
+        "2026-04-27": 62.57,
+        "2026-04-28": 62.615,
+        "2026-04-29": 60.74,
+        "2026-04-30": 61.83,
+        "2026-05-01": 63.49,
+        "2026-05-04": 65.29,
+        "2026-05-05": 64.92,
+        "2026-05-06": 67.39,
+        "2026-05-07": 71.57,
+        "2026-05-08": 71.33,
+        "2026-05-11": 76.29,
+        "2026-05-12": 76.97,
+        "2026-05-13": 74.935,
+        "2026-05-14": 77.27,
+        "2026-05-15": 78.93,
+        "2026-05-18": 75.34,
+        "2026-05-19": 74.28,
+        "2026-05-20": 72.93,
+        "2026-05-21": 76.51,
+        "2026-05-22": 76.9
+      },
+      "TSLA": {
+        "2026-04-27": 376.22,
+        "2026-04-28": 378.64,
+        "2026-04-29": 375.945,
+        "2026-04-30": 372.785,
+        "2026-05-01": 381.57,
+        "2026-05-04": 390.71,
+        "2026-05-05": 392.58,
+        "2026-05-06": 389.29,
+        "2026-05-07": 398.66,
+        "2026-05-08": 411.825,
+        "2026-05-11": 428.31,
+        "2026-05-12": 445.04,
+        "2026-05-13": 433.455,
+        "2026-05-14": 445.21,
+        "2026-05-15": 443.215,
+        "2026-05-18": 422.17,
+        "2026-05-19": 410.02,
+        "2026-05-20": 404.17,
+        "2026-05-21": 417.185,
+        "2026-05-22": 417.81
+      }
+    },
+    "symbol_console_summary": {
+      "NVDA": {
+        "arm_confirmations": 0,
+        "arm_expirations": 1065,
+        "arms_long": 843,
+        "arms_short": 866,
+        "arms_total": 1709,
+        "broker_position": 0,
+        "current_session_trade_counter": 0,
+        "eod_exits": 0,
+        "equity_bars": 287501,
+        "final_position": 0,
+        "guard_evaluations": 0,
+        "guard_fires": 0,
+        "hard_risk_exits": 0,
+        "lifecycle_exits": 0,
+        "no_trade_diag": [
+          "ai_evaluations=9981 flat_entry_evaluations=9820 entry_gate_open=9445 entry_gate_closed=375 missing_market_time=0 pre_market_blocked=0 missing_previous_close=0 variance_blocked=161 position_open_skipped=0",
+          "entry_gate_blockers allow_new_entries=375 max_trades=0 position_sync=0 hard_stop_cooldown=0 hard_stop_budget=0 buy_qty=0 sell_qty=0",
+          "long_entry model_evals=9445 passes=860 near_misses=1708 rsi_blocked=0 model_unavailable=0 max_prob=0.828058 max_threshold=0.620000 max_margin=0.208058 max_epoch=1777383600 max_time=2026-04-28T09:39:30",
+          "short_entry model_evals=9445 passes=876 near_misses=1773 rsi_blocked=0 model_unavailable=0 max_prob=0.802140 max_threshold=0.644000 max_margin=0.158140 max_epoch=1777578390 max_time=2026-04-30T15:46",
+          "closest_setup rank=1 side=long epoch=1777383600 time=2026-04-28T09:39:30 prob=0.828058 threshold=0.620000 margin=0.208058 rsi=33.014307 referencePrice=211.430000 qty=283 regime=CHOPPY",
+          "closest_setup rank=2 side=long epoch=1777383570 time=2026-04-28T09:39 prob=0.823909 threshold=0.620000 margin=0.203909 rsi=33.060828 referencePrice=211.390000 qty=283 regime=CHOPPY",
+          "closest_setup rank=3 side=long epoch=1777383540 time=2026-04-28T09:38:30 prob=0.823701 threshold=0.620000 margin=0.203701 rsi=31.292763 referencePrice=211.100000 qty=284 regime=CHOPPY",
+          "closest_setup rank=4 side=long epoch=1777383660 time=2026-04-28T09:40:30 prob=0.803940 threshold=0.620000 margin=0.183940 rsi=32.697469 referencePrice=211.220000 qty=284 regime=CHOPPY",
+          "closest_setup rank=5 side=short epoch=1777578390 time=2026-04-30T15:46 prob=0.802140 threshold=0.644000 margin=0.158140 rsi=46.848342 referencePrice=200.760000 qty=298 regime=CHOPPY"
+        ],
+        "option_bars": 878435,
+        "skipped_events": 0,
+        "start_line": "[BACKTEST] symbol=NVDA start=2026-04-27 end=2026-05-22 dry_run=false ibkr_simulation=true source=ndjson",
+        "total_pnl": 0.0,
+        "total_trades": 0
+      },
+      "QQQ": {
+        "arm_confirmations": 0,
+        "arm_expirations": 418,
+        "arms_long": 448,
+        "arms_short": 106,
+        "arms_total": 554,
+        "broker_position": 0,
+        "current_session_trade_counter": 0,
+        "eod_exits": 0,
+        "equity_bars": 142298,
+        "final_position": 0,
+        "guard_evaluations": 0,
+        "guard_fires": 0,
+        "hard_risk_exits": 0,
+        "lifecycle_exits": 0,
+        "no_trade_diag": [
+          "ai_evaluations=4790 flat_entry_evaluations=4790 entry_gate_open=4456 entry_gate_closed=334 missing_market_time=0 pre_market_blocked=0 missing_previous_close=0 variance_blocked=0 position_open_skipped=0",
+          "entry_gate_blockers allow_new_entries=334 max_trades=0 position_sync=0 hard_stop_cooldown=0 hard_stop_budget=0 buy_qty=0 sell_qty=0",
+          "long_entry model_evals=4456 passes=452 near_misses=775 rsi_blocked=0 model_unavailable=0 max_prob=0.859832 max_threshold=0.620000 max_margin=0.239832 max_epoch=1777383840 max_time=2026-04-28T09:43:30",
+          "short_entry model_evals=4456 passes=109 near_misses=533 rsi_blocked=0 model_unavailable=0 max_prob=0.767679 max_threshold=0.624000 max_margin=0.143679 max_epoch=1779370680 max_time=2026-05-21T09:37:30",
+          "closest_setup rank=1 side=long epoch=1777383840 time=2026-04-28T09:43:30 prob=0.859832 threshold=0.620000 margin=0.239832 rsi=34.710678 referencePrice=658.920000 qty=91 regime=CHOPPY",
+          "closest_setup rank=2 side=long epoch=1778855250 time=2026-05-15T10:27 prob=0.809461 threshold=0.656000 margin=0.153461 rsi=47.698364 referencePrice=710.820000 qty=84 regime=CHOPPY",
+          "closest_setup rank=3 side=long epoch=1778859660 time=2026-05-15T11:40:30 prob=0.807657 threshold=0.656000 margin=0.151657 rsi=52.118017 referencePrice=711.600000 qty=84 regime=CHOPPY",
+          "closest_setup rank=4 side=long epoch=1778859570 time=2026-05-15T11:39 prob=0.804295 threshold=0.656000 margin=0.148295 rsi=52.794140 referencePrice=711.670000 qty=84 regime=CHOPPY",
+          "closest_setup rank=5 side=long epoch=1778858760 time=2026-05-15T11:25:30 prob=0.802675 threshold=0.656000 margin=0.146675 rsi=49.472944 referencePrice=710.770000 qty=84 regime=CHOPPY"
+        ],
+        "option_bars": 925981,
+        "skipped_events": 0,
+        "start_line": "[BACKTEST] symbol=QQQ start=2026-04-27 end=2026-05-22 dry_run=false ibkr_simulation=true source=ndjson",
+        "total_pnl": 0.0,
+        "total_trades": 0
+      },
+      "SPY": {
+        "arm_confirmations": 0,
+        "arm_expirations": 164,
+        "arms_long": 130,
+        "arms_short": 97,
+        "arms_total": 227,
+        "broker_position": 0,
+        "current_session_trade_counter": 0,
+        "eod_exits": 0,
+        "equity_bars": 198893,
+        "final_position": 0,
+        "guard_evaluations": 0,
+        "guard_fires": 0,
+        "hard_risk_exits": 0,
+        "lifecycle_exits": 0,
+        "no_trade_diag": [
+          "ai_evaluations=6963 flat_entry_evaluations=6963 entry_gate_open=6587 entry_gate_closed=376 missing_market_time=0 pre_market_blocked=0 missing_previous_close=0 variance_blocked=0 position_open_skipped=0",
+          "entry_gate_blockers allow_new_entries=376 max_trades=0 position_sync=0 hard_stop_cooldown=0 hard_stop_budget=0 buy_qty=0 sell_qty=0",
+          "long_entry model_evals=6587 passes=134 near_misses=513 rsi_blocked=0 model_unavailable=0 max_prob=0.755012 max_threshold=0.636000 max_margin=0.119012 max_epoch=1779389700 max_time=2026-05-21T14:54:30",
+          "short_entry model_evals=6587 passes=99 near_misses=318 rsi_blocked=0 model_unavailable=0 max_prob=0.797820 max_threshold=0.624000 max_margin=0.173820 max_epoch=1777383990 max_time=2026-04-28T09:46",
+          "closest_setup rank=1 side=short epoch=1777383990 time=2026-04-28T09:46 prob=0.797820 threshold=0.624000 margin=0.173820 rsi=30.877671 referencePrice=712.310000 qty=84 regime=CHOPPY",
+          "closest_setup rank=2 side=short epoch=1777384200 time=2026-04-28T09:49:30 prob=0.749627 threshold=0.624000 margin=0.125627 rsi=34.139292 referencePrice=712.250000 qty=84 regime=CHOPPY",
+          "closest_setup rank=3 side=long epoch=1779389700 time=2026-05-21T14:54:30 prob=0.755012 threshold=0.636000 margin=0.119012 rsi=22.331876 referencePrice=740.360000 qty=81 regime=TREND",
+          "closest_setup rank=4 side=long epoch=1779389730 time=2026-05-21T14:55 prob=0.746483 threshold=0.636000 margin=0.110483 rsi=22.331876 referencePrice=740.420000 qty=81 regime=TREND",
+          "closest_setup rank=5 side=short epoch=1777558620 time=2026-04-30T10:16:30 prob=0.754606 threshold=0.648000 margin=0.106606 rsi=36.943346 referencePrice=710.570000 qty=84 regime=TREND"
+        ],
+        "option_bars": 934457,
+        "skipped_events": 0,
+        "start_line": "[BACKTEST] symbol=SPY start=2026-04-27 end=2026-05-22 dry_run=false ibkr_simulation=true source=ndjson",
+        "total_pnl": 0.0,
+        "total_trades": 0
+      },
+      "TQQQ": {
+        "arm_confirmations": 0,
+        "arm_expirations": 753,
+        "arms_long": 771,
+        "arms_short": 201,
+        "arms_total": 972,
+        "broker_position": 0,
+        "current_session_trade_counter": 0,
+        "eod_exits": 0,
+        "equity_bars": 110244,
+        "final_position": 0,
+        "guard_evaluations": 0,
+        "guard_fires": 0,
+        "hard_risk_exits": 0,
+        "lifecycle_exits": 0,
+        "no_trade_diag": [
+          "ai_evaluations=3814 flat_entry_evaluations=3522 entry_gate_open=3212 entry_gate_closed=310 missing_market_time=0 pre_market_blocked=0 missing_previous_close=0 variance_blocked=292 position_open_skipped=0",
+          "entry_gate_blockers allow_new_entries=310 max_trades=0 position_sync=0 hard_stop_cooldown=0 hard_stop_budget=0 buy_qty=0 sell_qty=0",
+          "long_entry model_evals=3212 passes=772 near_misses=761 rsi_blocked=0 model_unavailable=0 max_prob=0.965478 max_threshold=0.620000 max_margin=0.345478 max_epoch=1777383510 max_time=2026-04-28T09:38",
+          "short_entry model_evals=3212 passes=204 near_misses=468 rsi_blocked=0 model_unavailable=0 max_prob=0.769204 max_threshold=0.624000 max_margin=0.145204 max_epoch=1778248170 max_time=2026-05-08T09:49",
+          "closest_setup rank=1 side=long epoch=1777383510 time=2026-04-28T09:38 prob=0.965478 threshold=0.620000 margin=0.345478 rsi=28.418187 referencePrice=60.860000 qty=500 regime=CHOPPY",
+          "closest_setup rank=2 side=long epoch=1777383540 time=2026-04-28T09:38:30 prob=0.947140 threshold=0.620000 margin=0.327140 rsi=27.934272 referencePrice=60.810000 qty=500 regime=CHOPPY",
+          "closest_setup rank=3 side=long epoch=1777383630 time=2026-04-28T09:40 prob=0.905817 threshold=0.620000 margin=0.285817 rsi=27.206421 referencePrice=60.680000 qty=500 regime=CHOPPY",
+          "closest_setup rank=4 side=long epoch=1778593500 time=2026-05-12T09:44:30 prob=0.896987 threshold=0.620000 margin=0.276987 rsi=39.455101 referencePrice=75.830000 qty=500 regime=CHOPPY",
+          "closest_setup rank=5 side=long epoch=1778593560 time=2026-05-12T09:45:30 prob=0.893884 threshold=0.620000 margin=0.273884 rsi=38.849171 referencePrice=75.790000 qty=500 regime=CHOPPY"
+        ],
+        "option_bars": 355747,
+        "skipped_events": 0,
+        "start_line": "[BACKTEST] symbol=TQQQ start=2026-04-27 end=2026-05-22 dry_run=false ibkr_simulation=true source=ndjson",
+        "total_pnl": 0.0,
+        "total_trades": 0
+      },
+      "TSLA": {
+        "arm_confirmations": 0,
+        "arm_expirations": 694,
+        "arms_long": 666,
+        "arms_short": 342,
+        "arms_total": 1008,
+        "broker_position": 0,
+        "current_session_trade_counter": 0,
+        "eod_exits": 0,
+        "equity_bars": 193384,
+        "final_position": 0,
+        "guard_evaluations": 0,
+        "guard_fires": 0,
+        "hard_risk_exits": 0,
+        "lifecycle_exits": 0,
+        "no_trade_diag": [
+          "ai_evaluations=6680 flat_entry_evaluations=6678 entry_gate_open=6321 entry_gate_closed=357 missing_market_time=0 pre_market_blocked=0 missing_previous_close=0 variance_blocked=2 position_open_skipped=0",
+          "entry_gate_blockers allow_new_entries=357 max_trades=0 position_sync=0 hard_stop_cooldown=0 hard_stop_budget=0 buy_qty=0 sell_qty=0",
+          "long_entry model_evals=6321 passes=667 near_misses=1137 rsi_blocked=0 model_unavailable=0 max_prob=0.808903 max_threshold=0.656000 max_margin=0.152903 max_epoch=1777492170 max_time=2026-04-29T15:49",
+          "short_entry model_evals=6321 passes=342 near_misses=895 rsi_blocked=0 model_unavailable=0 max_prob=0.778216 max_threshold=0.644000 max_margin=0.134216 max_epoch=1777659420 max_time=2026-05-01T14:16:30",
+          "closest_setup rank=1 side=long epoch=1779130740 time=2026-05-18T14:58:30 prob=0.795527 threshold=0.604000 margin=0.191527 rsi=43.999986 referencePrice=406.750000 qty=147 regime=VOLATILE",
+          "closest_setup rank=2 side=long epoch=1779130260 time=2026-05-18T14:50:30 prob=0.793029 threshold=0.604000 margin=0.189029 rsi=37.916746 referencePrice=405.970000 qty=147 regime=VOLATILE",
+          "closest_setup rank=3 side=long epoch=1778180430 time=2026-05-07T15:00 prob=0.784516 threshold=0.604000 margin=0.180516 rsi=55.962334 referencePrice=404.810000 qty=148 regime=VOLATILE",
+          "closest_setup rank=4 side=long epoch=1778180850 time=2026-05-07T15:07 prob=0.769549 threshold=0.604000 margin=0.165549 rsi=53.004720 referencePrice=404.780000 qty=148 regime=VOLATILE",
+          "closest_setup rank=5 side=short epoch=1778527260 time=2026-05-11T15:20:30 prob=0.765709 threshold=0.608000 margin=0.157709 rsi=55.008611 referencePrice=447.720000 qty=134 regime=VOLATILE"
+        ],
+        "option_bars": 909303,
+        "skipped_events": 0,
+        "start_line": "[BACKTEST] symbol=TSLA start=2026-04-27 end=2026-05-22 dry_run=false ibkr_simulation=true source=ndjson",
+        "total_pnl": 0.0,
+        "total_trades": 0
+      }
+    }
+  },
+  "slice_manifest": {
+    "counts": {
+      "equity_bar": 932320,
+      "option_bar": 4003923,
+      "previous_close": 100,
+      "status": 42
+    },
+    "day_count": 20,
+    "day_status_seen": [
+      "2026-04-27",
+      "2026-04-27",
+      "2026-04-28",
+      "2026-04-28",
+      "2026-04-29",
+      "2026-04-29",
+      "2026-04-30",
+      "2026-04-30",
+      "2026-05-01",
+      "2026-05-01",
+      "2026-05-04",
+      "2026-05-04",
+      "2026-05-05",
+      "2026-05-05",
+      "2026-05-06",
+      "2026-05-06",
+      "2026-05-07",
+      "2026-05-07",
+      "2026-05-08",
+      "2026-05-08",
+      "2026-05-11",
+      "2026-05-11",
+      "2026-05-12",
+      "2026-05-12",
+      "2026-05-13",
+      "2026-05-13",
+      "2026-05-14",
+      "2026-05-14",
+      "2026-05-15",
+      "2026-05-15",
+      "2026-05-18",
+      "2026-05-18",
+      "2026-05-19",
+      "2026-05-19",
+      "2026-05-20",
+      "2026-05-20",
+      "2026-05-21",
+      "2026-05-21",
+      "2026-05-22",
+      "2026-05-22"
+    ],
+    "first_event_epoch_sec": 1777296600,
+    "input_lines": 51434650,
+    "last_close_by_symbol_after_slice": {
+      "NVDA": {
+        "close": 215.26,
+        "epoch": 1779479999
+      },
+      "QQQ": {
+        "close": 717.38,
+        "epoch": 1779479999
+      },
+      "SPY": {
+        "close": 745.59,
+        "epoch": 1779479999
+      },
+      "TQQQ": {
+        "close": 77.85,
+        "epoch": 1779479998
+      },
+      "TSLA": {
+        "close": 425.93,
+        "epoch": 1779479997
+      }
+    },
+    "last_event_epoch_sec": 1779479999,
+    "malformed": 0,
+    "missing_previous_close": {},
+    "output_events": 4936385,
+    "output_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz",
+    "previous_close_by_day": {
+      "2026-04-27": {
+        "NVDA": {
+          "previousClose": 208.18,
+          "sourceBarEpochSec": 1777060799,
+          "sourceSessionDate": "2026-04-24",
+          "sourceTime": "2026-04-24T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 663.92,
+          "sourceBarEpochSec": 1777060799,
+          "sourceSessionDate": "2026-04-24",
+          "sourceTime": "2026-04-24T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 713.97,
+          "sourceBarEpochSec": 1777060799,
+          "sourceSessionDate": "2026-04-24",
+          "sourceTime": "2026-04-24T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 62.57,
+          "sourceBarEpochSec": 1777060799,
+          "sourceSessionDate": "2026-04-24",
+          "sourceTime": "2026-04-24T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 376.22,
+          "sourceBarEpochSec": 1777060799,
+          "sourceSessionDate": "2026-04-24",
+          "sourceTime": "2026-04-24T15:59:59-04:00"
+        }
+      },
+      "2026-04-28": {
+        "NVDA": {
+          "previousClose": 216.68,
+          "sourceBarEpochSec": 1777319999,
+          "sourceSessionDate": "2026-04-27",
+          "sourceTime": "2026-04-27T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 664.28,
+          "sourceBarEpochSec": 1777319999,
+          "sourceSessionDate": "2026-04-27",
+          "sourceTime": "2026-04-27T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 715.165,
+          "sourceBarEpochSec": 1777319999,
+          "sourceSessionDate": "2026-04-27",
+          "sourceTime": "2026-04-27T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 62.615,
+          "sourceBarEpochSec": 1777319999,
+          "sourceSessionDate": "2026-04-27",
+          "sourceTime": "2026-04-27T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 378.64,
+          "sourceBarEpochSec": 1777319999,
+          "sourceSessionDate": "2026-04-27",
+          "sourceTime": "2026-04-27T15:59:59-04:00"
+        }
+      },
+      "2026-04-29": {
+        "NVDA": {
+          "previousClose": 213.15,
+          "sourceBarEpochSec": 1777406399,
+          "sourceSessionDate": "2026-04-28",
+          "sourceTime": "2026-04-28T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 657.59,
+          "sourceBarEpochSec": 1777406399,
+          "sourceSessionDate": "2026-04-28",
+          "sourceTime": "2026-04-28T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 711.68,
+          "sourceBarEpochSec": 1777406399,
+          "sourceSessionDate": "2026-04-28",
+          "sourceTime": "2026-04-28T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 60.74,
+          "sourceBarEpochSec": 1777406399,
+          "sourceSessionDate": "2026-04-28",
+          "sourceTime": "2026-04-28T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 375.945,
+          "sourceBarEpochSec": 1777406399,
+          "sourceSessionDate": "2026-04-28",
+          "sourceTime": "2026-04-28T15:59:59-04:00"
+        }
+      },
+      "2026-04-30": {
+        "NVDA": {
+          "previousClose": 209.35,
+          "sourceBarEpochSec": 1777492799,
+          "sourceSessionDate": "2026-04-29",
+          "sourceTime": "2026-04-29T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 661.59,
+          "sourceBarEpochSec": 1777492799,
+          "sourceSessionDate": "2026-04-29",
+          "sourceTime": "2026-04-29T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 711.59,
+          "sourceBarEpochSec": 1777492799,
+          "sourceSessionDate": "2026-04-29",
+          "sourceTime": "2026-04-29T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 61.83,
+          "sourceBarEpochSec": 1777492799,
+          "sourceSessionDate": "2026-04-29",
+          "sourceTime": "2026-04-29T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 372.785,
+          "sourceBarEpochSec": 1777492799,
+          "sourceSessionDate": "2026-04-29",
+          "sourceTime": "2026-04-29T15:59:59-04:00"
+        }
+      },
+      "2026-05-01": {
+        "NVDA": {
+          "previousClose": 199.53,
+          "sourceBarEpochSec": 1777579199,
+          "sourceSessionDate": "2026-04-30",
+          "sourceTime": "2026-04-30T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 667.54,
+          "sourceBarEpochSec": 1777579199,
+          "sourceSessionDate": "2026-04-30",
+          "sourceTime": "2026-04-30T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 718.41,
+          "sourceBarEpochSec": 1777579199,
+          "sourceSessionDate": "2026-04-30",
+          "sourceTime": "2026-04-30T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 63.49,
+          "sourceBarEpochSec": 1777579199,
+          "sourceSessionDate": "2026-04-30",
+          "sourceTime": "2026-04-30T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 381.57,
+          "sourceBarEpochSec": 1777579199,
+          "sourceSessionDate": "2026-04-30",
+          "sourceTime": "2026-04-30T15:59:59-04:00"
+        }
+      },
+      "2026-05-04": {
+        "NVDA": {
+          "previousClose": 198.41,
+          "sourceBarEpochSec": 1777665599,
+          "sourceSessionDate": "2026-05-01",
+          "sourceTime": "2026-05-01T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 674.1,
+          "sourceBarEpochSec": 1777665599,
+          "sourceSessionDate": "2026-05-01",
+          "sourceTime": "2026-05-01T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 720.58,
+          "sourceBarEpochSec": 1777665599,
+          "sourceSessionDate": "2026-05-01",
+          "sourceTime": "2026-05-01T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 65.29,
+          "sourceBarEpochSec": 1777665599,
+          "sourceSessionDate": "2026-05-01",
+          "sourceTime": "2026-05-01T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 390.71,
+          "sourceBarEpochSec": 1777665599,
+          "sourceSessionDate": "2026-05-01",
+          "sourceTime": "2026-05-01T15:59:59-04:00"
+        }
+      },
+      "2026-05-05": {
+        "NVDA": {
+          "previousClose": 198.56,
+          "sourceBarEpochSec": 1777924799,
+          "sourceSessionDate": "2026-05-04",
+          "sourceTime": "2026-05-04T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 672.87,
+          "sourceBarEpochSec": 1777924799,
+          "sourceSessionDate": "2026-05-04",
+          "sourceTime": "2026-05-04T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 718.09,
+          "sourceBarEpochSec": 1777924799,
+          "sourceSessionDate": "2026-05-04",
+          "sourceTime": "2026-05-04T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 64.92,
+          "sourceBarEpochSec": 1777924799,
+          "sourceSessionDate": "2026-05-04",
+          "sourceTime": "2026-05-04T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 392.58,
+          "sourceBarEpochSec": 1777924799,
+          "sourceSessionDate": "2026-05-04",
+          "sourceTime": "2026-05-04T15:59:59-04:00"
+        }
+      },
+      "2026-05-06": {
+        "NVDA": {
+          "previousClose": 196.5,
+          "sourceBarEpochSec": 1778011199,
+          "sourceSessionDate": "2026-05-05",
+          "sourceTime": "2026-05-05T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 681.53,
+          "sourceBarEpochSec": 1778011199,
+          "sourceSessionDate": "2026-05-05",
+          "sourceTime": "2026-05-05T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 723.71,
+          "sourceBarEpochSec": 1778011199,
+          "sourceSessionDate": "2026-05-05",
+          "sourceTime": "2026-05-05T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 67.39,
+          "sourceBarEpochSec": 1778011199,
+          "sourceSessionDate": "2026-05-05",
+          "sourceTime": "2026-05-05T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 389.29,
+          "sourceBarEpochSec": 1778011199,
+          "sourceSessionDate": "2026-05-05",
+          "sourceTime": "2026-05-05T15:59:59-04:00"
+        }
+      },
+      "2026-05-07": {
+        "NVDA": {
+          "previousClose": 207.67,
+          "sourceBarEpochSec": 1778097599,
+          "sourceSessionDate": "2026-05-06",
+          "sourceTime": "2026-05-06T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 695.61,
+          "sourceBarEpochSec": 1778097599,
+          "sourceSessionDate": "2026-05-06",
+          "sourceTime": "2026-05-06T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 733.77,
+          "sourceBarEpochSec": 1778097599,
+          "sourceSessionDate": "2026-05-06",
+          "sourceTime": "2026-05-06T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 71.57,
+          "sourceBarEpochSec": 1778097598,
+          "sourceSessionDate": "2026-05-06",
+          "sourceTime": "2026-05-06T15:59:58-04:00"
+        },
+        "TSLA": {
+          "previousClose": 398.66,
+          "sourceBarEpochSec": 1778097599,
+          "sourceSessionDate": "2026-05-06",
+          "sourceTime": "2026-05-06T15:59:59-04:00"
+        }
+      },
+      "2026-05-08": {
+        "NVDA": {
+          "previousClose": 211.6,
+          "sourceBarEpochSec": 1778183999,
+          "sourceSessionDate": "2026-05-07",
+          "sourceTime": "2026-05-07T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 694.93,
+          "sourceBarEpochSec": 1778183999,
+          "sourceSessionDate": "2026-05-07",
+          "sourceTime": "2026-05-07T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 731.53,
+          "sourceBarEpochSec": 1778183999,
+          "sourceSessionDate": "2026-05-07",
+          "sourceTime": "2026-05-07T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 71.33,
+          "sourceBarEpochSec": 1778183999,
+          "sourceSessionDate": "2026-05-07",
+          "sourceTime": "2026-05-07T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 411.825,
+          "sourceBarEpochSec": 1778183999,
+          "sourceSessionDate": "2026-05-07",
+          "sourceTime": "2026-05-07T15:59:59-04:00"
+        }
+      },
+      "2026-05-11": {
+        "NVDA": {
+          "previousClose": 215.2,
+          "sourceBarEpochSec": 1778270399,
+          "sourceSessionDate": "2026-05-08",
+          "sourceTime": "2026-05-08T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 711.12,
+          "sourceBarEpochSec": 1778270399,
+          "sourceSessionDate": "2026-05-08",
+          "sourceTime": "2026-05-08T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 737.54,
+          "sourceBarEpochSec": 1778270399,
+          "sourceSessionDate": "2026-05-08",
+          "sourceTime": "2026-05-08T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 76.29,
+          "sourceBarEpochSec": 1778270399,
+          "sourceSessionDate": "2026-05-08",
+          "sourceTime": "2026-05-08T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 428.31,
+          "sourceBarEpochSec": 1778270399,
+          "sourceSessionDate": "2026-05-08",
+          "sourceTime": "2026-05-08T15:59:59-04:00"
+        }
+      },
+      "2026-05-12": {
+        "NVDA": {
+          "previousClose": 219.45,
+          "sourceBarEpochSec": 1778529599,
+          "sourceSessionDate": "2026-05-11",
+          "sourceTime": "2026-05-11T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 713.37,
+          "sourceBarEpochSec": 1778529599,
+          "sourceSessionDate": "2026-05-11",
+          "sourceTime": "2026-05-11T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 739.2,
+          "sourceBarEpochSec": 1778529599,
+          "sourceSessionDate": "2026-05-11",
+          "sourceTime": "2026-05-11T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 76.97,
+          "sourceBarEpochSec": 1778529599,
+          "sourceSessionDate": "2026-05-11",
+          "sourceTime": "2026-05-11T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 445.04,
+          "sourceBarEpochSec": 1778529599,
+          "sourceSessionDate": "2026-05-11",
+          "sourceTime": "2026-05-11T15:59:59-04:00"
+        }
+      },
+      "2026-05-13": {
+        "NVDA": {
+          "previousClose": 220.88,
+          "sourceBarEpochSec": 1778615999,
+          "sourceSessionDate": "2026-05-12",
+          "sourceTime": "2026-05-12T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 707.18,
+          "sourceBarEpochSec": 1778615999,
+          "sourceSessionDate": "2026-05-12",
+          "sourceTime": "2026-05-12T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 738.19,
+          "sourceBarEpochSec": 1778615999,
+          "sourceSessionDate": "2026-05-12",
+          "sourceTime": "2026-05-12T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 74.935,
+          "sourceBarEpochSec": 1778615998,
+          "sourceSessionDate": "2026-05-12",
+          "sourceTime": "2026-05-12T15:59:58-04:00"
+        },
+        "TSLA": {
+          "previousClose": 433.455,
+          "sourceBarEpochSec": 1778615999,
+          "sourceSessionDate": "2026-05-12",
+          "sourceTime": "2026-05-12T15:59:59-04:00"
+        }
+      },
+      "2026-05-14": {
+        "NVDA": {
+          "previousClose": 225.86,
+          "sourceBarEpochSec": 1778702399,
+          "sourceSessionDate": "2026-05-13",
+          "sourceTime": "2026-05-13T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 714.56,
+          "sourceBarEpochSec": 1778702399,
+          "sourceSessionDate": "2026-05-13",
+          "sourceTime": "2026-05-13T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 742.3,
+          "sourceBarEpochSec": 1778702399,
+          "sourceSessionDate": "2026-05-13",
+          "sourceTime": "2026-05-13T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 77.27,
+          "sourceBarEpochSec": 1778702399,
+          "sourceSessionDate": "2026-05-13",
+          "sourceTime": "2026-05-13T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 445.21,
+          "sourceBarEpochSec": 1778702398,
+          "sourceSessionDate": "2026-05-13",
+          "sourceTime": "2026-05-13T15:59:58-04:00"
+        }
+      },
+      "2026-05-15": {
+        "NVDA": {
+          "previousClose": 235.78,
+          "sourceBarEpochSec": 1778788799,
+          "sourceSessionDate": "2026-05-14",
+          "sourceTime": "2026-05-14T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 719.75,
+          "sourceBarEpochSec": 1778788799,
+          "sourceSessionDate": "2026-05-14",
+          "sourceTime": "2026-05-14T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 748.1,
+          "sourceBarEpochSec": 1778788799,
+          "sourceSessionDate": "2026-05-14",
+          "sourceTime": "2026-05-14T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 78.93,
+          "sourceBarEpochSec": 1778788798,
+          "sourceSessionDate": "2026-05-14",
+          "sourceTime": "2026-05-14T15:59:58-04:00"
+        },
+        "TSLA": {
+          "previousClose": 443.215,
+          "sourceBarEpochSec": 1778788796,
+          "sourceSessionDate": "2026-05-14",
+          "sourceTime": "2026-05-14T15:59:56-04:00"
+        }
+      },
+      "2026-05-18": {
+        "NVDA": {
+          "previousClose": 225.285,
+          "sourceBarEpochSec": 1778875199,
+          "sourceSessionDate": "2026-05-15",
+          "sourceTime": "2026-05-15T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 708.91,
+          "sourceBarEpochSec": 1778875199,
+          "sourceSessionDate": "2026-05-15",
+          "sourceTime": "2026-05-15T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 739.095,
+          "sourceBarEpochSec": 1778875199,
+          "sourceSessionDate": "2026-05-15",
+          "sourceTime": "2026-05-15T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 75.34,
+          "sourceBarEpochSec": 1778875199,
+          "sourceSessionDate": "2026-05-15",
+          "sourceTime": "2026-05-15T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 422.17,
+          "sourceBarEpochSec": 1778875199,
+          "sourceSessionDate": "2026-05-15",
+          "sourceTime": "2026-05-15T15:59:59-04:00"
+        }
+      },
+      "2026-05-19": {
+        "NVDA": {
+          "previousClose": 222.3,
+          "sourceBarEpochSec": 1779134399,
+          "sourceSessionDate": "2026-05-18",
+          "sourceTime": "2026-05-18T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 705.69,
+          "sourceBarEpochSec": 1779134399,
+          "sourceSessionDate": "2026-05-18",
+          "sourceTime": "2026-05-18T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 738.37,
+          "sourceBarEpochSec": 1779134399,
+          "sourceSessionDate": "2026-05-18",
+          "sourceTime": "2026-05-18T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 74.28,
+          "sourceBarEpochSec": 1779134399,
+          "sourceSessionDate": "2026-05-18",
+          "sourceTime": "2026-05-18T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 410.02,
+          "sourceBarEpochSec": 1779134399,
+          "sourceSessionDate": "2026-05-18",
+          "sourceTime": "2026-05-18T15:59:59-04:00"
+        }
+      },
+      "2026-05-20": {
+        "NVDA": {
+          "previousClose": 220.645,
+          "sourceBarEpochSec": 1779220797,
+          "sourceSessionDate": "2026-05-19",
+          "sourceTime": "2026-05-19T15:59:57-04:00"
+        },
+        "QQQ": {
+          "previousClose": 701.49,
+          "sourceBarEpochSec": 1779220799,
+          "sourceSessionDate": "2026-05-19",
+          "sourceTime": "2026-05-19T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 733.8,
+          "sourceBarEpochSec": 1779220799,
+          "sourceSessionDate": "2026-05-19",
+          "sourceTime": "2026-05-19T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 72.93,
+          "sourceBarEpochSec": 1779220799,
+          "sourceSessionDate": "2026-05-19",
+          "sourceTime": "2026-05-19T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 404.17,
+          "sourceBarEpochSec": 1779220798,
+          "sourceSessionDate": "2026-05-19",
+          "sourceTime": "2026-05-19T15:59:58-04:00"
+        }
+      },
+      "2026-05-21": {
+        "NVDA": {
+          "previousClose": 223.48,
+          "sourceBarEpochSec": 1779307199,
+          "sourceSessionDate": "2026-05-20",
+          "sourceTime": "2026-05-20T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 713.07,
+          "sourceBarEpochSec": 1779307199,
+          "sourceSessionDate": "2026-05-20",
+          "sourceTime": "2026-05-20T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 741.31,
+          "sourceBarEpochSec": 1779307199,
+          "sourceSessionDate": "2026-05-20",
+          "sourceTime": "2026-05-20T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 76.51,
+          "sourceBarEpochSec": 1779307199,
+          "sourceSessionDate": "2026-05-20",
+          "sourceTime": "2026-05-20T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 417.185,
+          "sourceBarEpochSec": 1779307199,
+          "sourceSessionDate": "2026-05-20",
+          "sourceTime": "2026-05-20T15:59:59-04:00"
+        }
+      },
+      "2026-05-22": {
+        "NVDA": {
+          "previousClose": 219.54,
+          "sourceBarEpochSec": 1779393599,
+          "sourceSessionDate": "2026-05-21",
+          "sourceTime": "2026-05-21T15:59:59-04:00"
+        },
+        "QQQ": {
+          "previousClose": 714.47,
+          "sourceBarEpochSec": 1779393599,
+          "sourceSessionDate": "2026-05-21",
+          "sourceTime": "2026-05-21T15:59:59-04:00"
+        },
+        "SPY": {
+          "previousClose": 742.71,
+          "sourceBarEpochSec": 1779393599,
+          "sourceSessionDate": "2026-05-21",
+          "sourceTime": "2026-05-21T15:59:59-04:00"
+        },
+        "TQQQ": {
+          "previousClose": 76.9,
+          "sourceBarEpochSec": 1779393599,
+          "sourceSessionDate": "2026-05-21",
+          "sourceTime": "2026-05-21T15:59:59-04:00"
+        },
+        "TSLA": {
+          "previousClose": 417.81,
+          "sourceBarEpochSec": 1779393599,
+          "sourceSessionDate": "2026-05-21",
+          "sourceTime": "2026-05-21T15:59:59-04:00"
+        }
+      }
+    },
+    "previous_close_days": [
+      "2026-04-27",
+      "2026-04-28",
+      "2026-04-29",
+      "2026-04-30",
+      "2026-05-01",
+      "2026-05-04",
+      "2026-05-05",
+      "2026-05-06",
+      "2026-05-07",
+      "2026-05-08",
+      "2026-05-11",
+      "2026-05-12",
+      "2026-05-13",
+      "2026-05-14",
+      "2026-05-15",
+      "2026-05-18",
+      "2026-05-19",
+      "2026-05-20",
+      "2026-05-21",
+      "2026-05-22"
+    ],
+    "previous_close_emitted_before_session_bars": true,
+    "previous_close_event_count_expected": 100,
+    "skipped_symbol": 0,
+    "skipped_time": 46497979,
+    "source_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/replay/databento-20260523-core5.ndjson.gz",
+    "symbols": [
+      "NVDA",
+      "QQQ",
+      "SPY",
+      "TQQQ",
+      "TSLA"
+    ],
+    "target_end_epoch_sec": 1779480000,
+    "target_end_utc": "2026-05-22T20:00:00+00:00",
+    "target_start_epoch_sec": 1777296600,
+    "target_start_utc": "2026-04-27T13:30:00+00:00"
+  }
+}

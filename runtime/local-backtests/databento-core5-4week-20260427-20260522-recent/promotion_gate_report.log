@@ -1,0 +1,6 @@
+PROMOTION_GATE status=NO-GO json=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/promotion_gate_report/lifecycle_micro_promotion_gate_report.json markdown=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/promotion_gate_report/lifecycle_micro_promotion_gate_report.md
+GATE runtime_calibration_application status=NO-GO issues=1 warnings=0
+GATE label_economics_review status=WARN issues=0 warnings=6
+GATE recorded_event_replay_parity status=NO-GO issues=1 warnings=0
+GATE full_backtest_pnl_day_dominance status=NO-GO issues=4 warnings=0
+GATE paper_shadow_drift status=NO-GO issues=1 warnings=0
