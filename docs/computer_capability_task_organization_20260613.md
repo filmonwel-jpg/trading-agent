@@ -1958,6 +1958,17 @@ Task updates created by this analysis:
 5. **P1 threshold retuning:** retune micro-entry thresholds with explicit minimum trade-count constraints per symbol/week or validation window, not precision-only thresholds that yield one trade in four weeks.
 6. **Gate status:** keep the June 24 setup + lifecycle/micro route **research-only / NO-GO** until probability extraction, side arbitration, replay decision volume, calibration, day dominance, live/replay parity, and paper/shadow drift all pass together.
 
+June 27 implementation update for the next run on the replay/backtest computer:
+
+- P0 probability extraction is patched in `AiPredictor.java`. CatBoost setup ONNX `probabilities` outputs are decoded by output name and by recursive value handling, including Java ONNX Runtime ZipMap sequences containing `OnnxMap`/`OnnxValue` wrappers. Calibrated setup routes now fail closed when probability extraction is missing instead of falling back to label-derived `0.0` / `1.0` probabilities.
+- A replay/sample binary-probability guard is enabled for calibrated setup routes. If a route continues to emit only `{0.0, 1.0}` probabilities after the configured minimum sample count, runtime logs `SETUP_PROBABILITY_NON_BINARY_SAMPLE=FAIL` and can fail closed by default.
+- P0 side arbitration is patched in `PingPongStrategy.java`. Flat-entry logic now evaluates eligible long and short setup models first, records both candidates, then chooses the side with better threshold margin or no-trades unresolved long/short conflicts.
+- The runtime/training contract for micro-entry setup context is satisfied by passing the selected setup probability/threshold into the micro arm; `f_setup_prob`, `f_setup_threshold`, and `f_setup_threshold_margin` are populated from those real values when the 5-second micro-entry feature vector is built.
+- Tests added/updated: `AiPredictorProbabilityExtractionTest` covers ZipMap-like maps, nested scalar values, ONNX-wrapper values, and label tensors not being interpreted as probabilities; `PingPongStrategyAiEvaluationTest` covers both-side evaluation, higher-margin side selection, and no-trade on equal/conflicting margins.
+- Validation completed on this branch: full `./mvnw test` passed with `84` tests; actual June 24 setup model smoke loaded `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/long_entry.onnx`, detected `34` features, and returned non-binary probability `0.016105473041534424`.
+- Expected four-week replay interpretation: the model bundle is unchanged, but the runtime decision policy is changed. Do not expect exact reproduction of the prior `22,201` arms / `1` trade / `+130` PnL. Setup arms should now be governed by real calibrated probabilities and may drop; micro-entry evaluation counts may drop; trade count/PnL may be zero, unchanged, or different depending on which setup arms survive real thresholds, side arbitration, and changed micro-entry setup features.
+- Evidence to collect from the replay computer: setup probability histogram/non-binary sample, arm `setupProb` values, `AI.ENTRY.ARBITRATION` selection/no-trade counts, micro-entry pass/fail counts, closed trade/PnL/R outputs, per-day/per-symbol/long-short contribution, and any setup probability guard failures. Promotion status remains **NO-GO** until those replay artifacts and the remaining P1/P2 gates pass.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.

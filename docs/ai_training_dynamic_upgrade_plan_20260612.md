@@ -782,6 +782,16 @@ Required fixes before the next promotion-style replay:
 5. **Retune micro-entry thresholds with minimum trade-count constraints.** Threshold selection should preserve precision but require enough confirmations per symbol/week or per 20-session validation window to avoid a one-trade promotion artifact.
 6. **Keep promotion status NO-GO.** Do not advance to paper/live until the probability extraction, side selection, trade-count, day-dominance, calibration, replay-parity, and paper/shadow drift gates pass together.
 
+June 27 P0 runtime implementation status before the next four-week replay:
+
+- `AiPredictor.java` now treats the June 24 setup ONNX routes as calibrated setup routes and decodes CatBoost ZipMap-style `probabilities` outputs, including Java ONNX Runtime sequences containing `OnnxMap`/`OnnxValue` wrappers. Calibrated setup routes now fail closed instead of silently falling back to `label -> 0/1` when probability extraction fails.
+- A setup probability sample guard is enabled by default and can fail closed when a calibrated setup route emits only binary `{0.0, 1.0}` probabilities after the configured sample count (`strategy.ai.setupBinaryProbabilityMinSamples`, default `50`).
+- `PingPongStrategy.java` now evaluates long and short setup candidates before arming or ordering either side. If both sides pass, selection is by threshold margin (`probability - threshold`); unresolved conflicts no-trade instead of defaulting to the first passing long side.
+- The selected setup probability and threshold are now the values stored on the micro arm, so `f_setup_prob`, `f_setup_threshold`, and `f_setup_threshold_margin` in 5-second micro-entry feature vectors reflect real runtime setup values.
+- Regression coverage was added for CatBoost ZipMap probability extraction and flat-entry side arbitration. Validation on this branch: focused tests `AiPredictorProbabilityExtractionTest,PingPongStrategyAiEvaluationTest` passed, full `./mvnw test` passed with `84` tests, and an actual June 24 `long_entry.onnx` smoke returned non-binary probability `0.016105473041534424` with expected feature count `34`.
+- Expected replay impact: model weights are unchanged, but replay decisions are not expected to be identical because the runtime policy changed from label-derived setup gating to real probability-threshold gating plus side arbitration. Setup arms and micro-entry evaluations may fall materially; trade count and PnL may become `0`, remain near the prior single `TQQQ` trade, or change if arbitration/micro features alter the selected side or confirmation. Treat the next four-week replay as a correctness replay, not promotion evidence.
+- Next replay evidence to bring back for analysis: counts/distributions of setup `AI_PREDICTS_ENTRY prob=...`, `Armed ... setupProb=...`, `AI.ENTRY.ARBITRATION` selected/no-trade reasons, micro-entry pass/fail counts, closed trades, PnL/R, per-day/per-symbol contribution, long/short split, and any `SETUP_PROBABILITY_*` guard lines.
+
 Recommended next steps:
 
 1. Pull the branch on the backtest computer and confirm the two model directories exist.

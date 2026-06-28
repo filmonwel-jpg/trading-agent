@@ -175,6 +175,64 @@ class PingPongStrategyAiEvaluationTest {
     }
 
     @Test
+    void askArtificialIntelligenceChoosesHigherMarginSideAfterEvaluatingBothEntryModels() throws Exception {
+        IBKRTrader parent = mock(IBKRTrader.class);
+        PingPongStrategy strategy = newStrategy(parent);
+        try {
+            seedFeatureState(strategy);
+            ReflectionTestUtils.setField(strategy, "allowNewEntries", true);
+            ReflectionTestUtils.setField(strategy, "positionSynced", true);
+            ReflectionTestUtils.setField(strategy, "currentPosition", 0);
+            strategy.setAiThresholds(0.68, 0.63, 0.58, 0.60);
+
+            AiPredictor longEntry = mock(AiPredictor.class);
+            AiPredictor shortEntry = mock(AiPredictor.class);
+            AiPredictor longExit = mock(AiPredictor.class);
+            AiPredictor shortExit = mock(AiPredictor.class);
+            when(longEntry.predictProbability(any(float[].class))).thenReturn(0.70);
+            when(shortEntry.predictProbability(any(float[].class))).thenReturn(0.90);
+            configureBasePredictors(strategy, longEntry, shortEntry, longExit, shortExit);
+
+            ReflectionTestUtils.invokeMethod(strategy, "askArtificialIntelligence");
+
+            verify(longEntry, times(1)).predictProbability(any(float[].class));
+            verify(shortEntry, times(1)).predictProbability(any(float[].class));
+            verify(parent, times(1)).placeTrade("AAPL", "SELL", 99.95, 400, "FAST_LMT");
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
+    void askArtificialIntelligenceDoesNotTradeWhenBothSidesPassWithoutClearMarginEdge() throws Exception {
+        IBKRTrader parent = mock(IBKRTrader.class);
+        PingPongStrategy strategy = newStrategy(parent);
+        try {
+            seedFeatureState(strategy);
+            ReflectionTestUtils.setField(strategy, "allowNewEntries", true);
+            ReflectionTestUtils.setField(strategy, "positionSynced", true);
+            ReflectionTestUtils.setField(strategy, "currentPosition", 0);
+            strategy.setAiThresholds(0.50, 0.50, 0.58, 0.60);
+
+            AiPredictor longEntry = mock(AiPredictor.class);
+            AiPredictor shortEntry = mock(AiPredictor.class);
+            AiPredictor longExit = mock(AiPredictor.class);
+            AiPredictor shortExit = mock(AiPredictor.class);
+            when(longEntry.predictProbability(any(float[].class))).thenReturn(0.80);
+            when(shortEntry.predictProbability(any(float[].class))).thenReturn(0.80);
+            configureBasePredictors(strategy, longEntry, shortEntry, longExit, shortExit);
+
+            ReflectionTestUtils.invokeMethod(strategy, "askArtificialIntelligence");
+
+            verify(longEntry, times(1)).predictProbability(any(float[].class));
+            verify(shortEntry, times(1)).predictProbability(any(float[].class));
+            verify(parent, never()).placeTrade(anyString(), anyString(), anyDouble(), anyInt(), anyString());
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
     void watchdogKeepsInFlightLockWhileReconcilingStaleExitOrder() {
         IBKRTrader parent = mock(IBKRTrader.class);
         PingPongStrategy strategy = newStrategy(parent);

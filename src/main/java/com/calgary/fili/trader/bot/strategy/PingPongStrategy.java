@@ -80,6 +80,17 @@ public class PingPongStrategy implements TradingStrategy {
 
     private record MicroBar(long epoch, double open, double high, double low, double close, long volume, double wap) {}
 
+    private record EntrySignal(String side, String action, double probability, double threshold,
+                               int quantity, double referencePrice) {
+        double margin() {
+            return probability - threshold;
+        }
+
+        boolean isLong() {
+            return "long".equalsIgnoreCase(side);
+        }
+    }
+
     public record SetupCandidateDiagnostic(String side, long epoch, String marketTime, double probability,
                                            double threshold, double margin, double rsi, double referencePrice,
                                            int quantity, String regime) {}
@@ -380,6 +391,8 @@ public class PingPongStrategy implements TradingStrategy {
     private static final int REGULAR_MIN_BARS = Integer.parseInt(System.getProperty("strategy.ai.regularMinBars", "60"));
     private static final int AI_DIAGNOSTIC_TOP_SETUP_EVENTS = Integer.parseInt(System.getProperty("strategy.ai.diagnosticTopSetups", "5"));
     private static final double AI_DIAGNOSTIC_NEAR_MISS_MARGIN = Double.parseDouble(System.getProperty("strategy.ai.nearMissMargin", "0.05"));
+    private static final double AI_SIDE_ARBITRATION_MIN_MARGIN_ADVANTAGE = Math.max(0.0, Double.parseDouble(System.getProperty("strategy.ai.sideArbitrationMinMarginAdvantage", "0.0")));
+    private static final double AI_SIDE_ARBITRATION_EPSILON = 1.0e-12;
     private static final long AI_BUCKET_SECONDS = 30L;
     private static final long MICRO_BUCKET_SECONDS = 5L;
     private static final List<String> LEGACY_FEATURE_COLUMNS = List.of(
@@ -3225,20 +3238,6 @@ public class PingPongStrategy implements TradingStrategy {
                         + " threshold=" + formatProb(activeLongEntryThreshold)
                 );
             }
-            if (shouldEnterLong && buyQty > 0) {
-                if (MICRO_ENTRY_ENABLED) {
-                    armMicroEntry("long", lastTraining30sFeatureValues, currentMicroArmEpoch(), longEntryProb, activeLongEntryThreshold);
-                    return;
-                }
-                flowInfo("AI.LONG.ENTRY", "Dip buyer firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
-                pendingEntryProbability = longEntryProb;
-                pendingEntryThreshold = activeLongEntryThreshold;
-                pendingEntryThresholdMargin = longEntryProb - activeLongEntryThreshold;
-                this.inFlightOrder = true;
-                parent.placeTrade(symbol, "BUY", buyReferencePrice, buyQty, "FAST_LMT");
-                return;
-            }
-
             // --- RIP SELLING (SHORT ENTRY) ---
             double shortThreshold = (currentHour == 9) ? RSI_SHORT_ENTRY_OPEN_THRESHOLD : RSI_SHORT_ENTRY_REGULAR_THRESHOLD;
             boolean shortRsiGate = !USE_RSI_PRE_GATES || currentRsi > shortThreshold;
@@ -3273,19 +3272,114 @@ public class PingPongStrategy implements TradingStrategy {
                         + " threshold=" + formatProb(activeShortEntryThreshold)
                 );
             }
-            if (shouldEnterShort && sellQty > 0) {
+            EntrySignal selectedEntry = chooseEntrySignal(
+                shouldEnterLong,
+                longEntryProb,
+                activeLongEntryThreshold,
+                buyQty,
+                buyReferencePrice,
+                shouldEnterShort,
+                shortEntryProb,
+                activeShortEntryThreshold,
+                sellQty,
+                sellReferencePrice
+            );
+            if (selectedEntry != null) {
                 if (MICRO_ENTRY_ENABLED) {
-                    armMicroEntry("short", lastTraining30sFeatureValues, currentMicroArmEpoch(), shortEntryProb, activeShortEntryThreshold);
+                    armMicroEntry(selectedEntry.side(), lastTraining30sFeatureValues, currentMicroArmEpoch(), selectedEntry.probability(), selectedEntry.threshold());
                     return;
                 }
-                flowInfo("AI.SHORT.ENTRY", "Rip seller firing order symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
-                pendingEntryProbability = shortEntryProb;
-                pendingEntryThreshold = activeShortEntryThreshold;
-                pendingEntryThresholdMargin = shortEntryProb - activeShortEntryThreshold;
+                String flowTag = selectedEntry.isLong() ? "AI.LONG.ENTRY" : "AI.SHORT.ENTRY";
+                String message = selectedEntry.isLong() ? "Dip buyer firing order" : "Rip seller firing order";
+                flowInfo(flowTag, message + " symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi));
+                pendingEntryProbability = selectedEntry.probability();
+                pendingEntryThreshold = selectedEntry.threshold();
+                pendingEntryThresholdMargin = selectedEntry.margin();
                 this.inFlightOrder = true;
-                parent.placeTrade(symbol, "SELL", sellReferencePrice, sellQty, "FAST_LMT");
+                parent.placeTrade(symbol, selectedEntry.action(), selectedEntry.referencePrice(), selectedEntry.quantity(), "FAST_LMT");
             }
         }
+    }
+
+    private EntrySignal chooseEntrySignal(boolean shouldEnterLong, double longProbability, double longThreshold,
+                                          int buyQuantity, double buyReferencePrice,
+                                          boolean shouldEnterShort, double shortProbability, double shortThreshold,
+                                          int sellQuantity, double sellReferencePrice) {
+        EntrySignal longSignal = shouldEnterLong && buyQuantity > 0
+            ? new EntrySignal("long", "BUY", longProbability, longThreshold, buyQuantity, buyReferencePrice)
+            : null;
+        EntrySignal shortSignal = shouldEnterShort && sellQuantity > 0
+            ? new EntrySignal("short", "SELL", shortProbability, shortThreshold, sellQuantity, sellReferencePrice)
+            : null;
+
+        if (longSignal == null && shortSignal == null) {
+            flowCondition(
+                "AI.ENTRY.ARBITRATION",
+                "ENTRY_SIDE_SELECTED",
+                false,
+                "symbol=" + symbol + " reason=no_passing_setup_with_positive_qty"
+            );
+            return null;
+        }
+        if (longSignal == null) {
+            flowCondition(
+                "AI.ENTRY.ARBITRATION",
+                "ENTRY_SIDE_SELECTED",
+                true,
+                "symbol=" + symbol + " selected=short reason=only_short_passed shortMargin=" + formatProb(shortSignal.margin())
+            );
+            return shortSignal;
+        }
+        if (shortSignal == null) {
+            flowCondition(
+                "AI.ENTRY.ARBITRATION",
+                "ENTRY_SIDE_SELECTED",
+                true,
+                "symbol=" + symbol + " selected=long reason=only_long_passed longMargin=" + formatProb(longSignal.margin())
+            );
+            return longSignal;
+        }
+
+        double longMargin = longSignal.margin();
+        double shortMargin = shortSignal.margin();
+        double marginDifference = longMargin - shortMargin;
+        double requiredAdvantage = Math.max(AI_SIDE_ARBITRATION_MIN_MARGIN_ADVANTAGE, AI_SIDE_ARBITRATION_EPSILON);
+        if (Math.abs(marginDifference) <= requiredAdvantage) {
+            flowCondition(
+                "AI.ENTRY.ARBITRATION",
+                "ENTRY_SIDE_SELECTED",
+                false,
+                "symbol=" + symbol
+                    + " reason=conflicting_sides_no_clear_edge"
+                    + " longProb=" + formatProb(longSignal.probability())
+                    + " longThreshold=" + formatProb(longSignal.threshold())
+                    + " longMargin=" + formatProb(longMargin)
+                    + " shortProb=" + formatProb(shortSignal.probability())
+                    + " shortThreshold=" + formatProb(shortSignal.threshold())
+                    + " shortMargin=" + formatProb(shortMargin)
+                    + " minMarginAdvantage=" + formatProb(AI_SIDE_ARBITRATION_MIN_MARGIN_ADVANTAGE)
+            );
+            return null;
+        }
+
+        EntrySignal selected = marginDifference > 0.0 ? longSignal : shortSignal;
+        flowCondition(
+            "AI.ENTRY.ARBITRATION",
+            "ENTRY_SIDE_SELECTED",
+            true,
+            "symbol=" + symbol
+                + " selected=" + selected.side()
+                + " reason=best_threshold_margin"
+                + " longProb=" + formatProb(longSignal.probability())
+                + " longThreshold=" + formatProb(longSignal.threshold())
+                + " longMargin=" + formatProb(longMargin)
+                + " shortProb=" + formatProb(shortSignal.probability())
+                + " shortThreshold=" + formatProb(shortSignal.threshold())
+                + " shortMargin=" + formatProb(shortMargin)
+                + " marginDifference=" + formatProb(marginDifference)
+                + " minMarginAdvantage=" + formatProb(AI_SIDE_ARBITRATION_MIN_MARGIN_ADVANTAGE)
+        );
+        return selected;
     }
 
     private void recordClosedEntryGate(boolean allowEntries, int tradesSoFar, int maxAllowedTrades,
