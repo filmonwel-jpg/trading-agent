@@ -93,3 +93,140 @@ Default outputs:
 
 - `runtime/reports/lifecycle_micro_promotion_gate/lifecycle_micro_promotion_gate_report.json`
 - `runtime/reports/lifecycle_micro_promotion_gate/lifecycle_micro_promotion_gate_report.md`
+
+## 5. One-week and four-week recorded replay runbook
+
+These commands replay the local core-five recorded NDJSON slices used for the June 26/27 lifecycle-micro checks. They assume the latest June 24 setup and lifecycle/micro bundles are present:
+
+- Setup: `runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`
+- Lifecycle/micro: `runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`
+- Source recording: `runtime/replay/databento-20260523-core5.ndjson.gz`
+
+Start from the Databento worktree:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+```
+
+Optional model/threshold preflight:
+
+```zsh
+python3 runtime/local-backtests/databento-core5-week-20260518-20260522-recent/validate_latest_artifacts.py \
+  | tee runtime/local-backtests/databento-core5-week-20260518-20260522-recent/latest_artifact_validation.txt
+```
+
+### One-week replay: 2026-05-18 through 2026-05-22
+
+Build the one-week recorded slice:
+
+```zsh
+python3 runtime/local-backtests/databento-core5-week-20260518-20260522-recent/build_week_slice_fast.py \
+  | tee runtime/local-backtests/databento-core5-week-20260518-20260522-recent/build_week_slice_fast.log
+```
+
+Validate gzip integrity:
+
+```zsh
+gzip -t runtime/local-backtests/databento-core5-week-20260518-20260522-recent/databento-20260518-20260522-core5-week-fast.ndjson.gz
+```
+
+Run the one-week replay backtest:
+
+```zsh
+bash <<'BASH'
+set -euo pipefail
+
+ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+cd "$ROOT"
+
+OUT_BASE="$ROOT/runtime/local-backtests/databento-core5-week-20260518-20260522-recent"
+RUN_DIR="$OUT_BASE/run"
+SLICE="$OUT_BASE/databento-20260518-20260522-core5-week-fast.ndjson.gz"
+SETUP_DIR="$ROOT/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854"
+LIFECYCLE_DIR="$ROOT/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports"
+SYMBOLS_FILE="$ROOT/config/databento_core_5_symbols.txt"
+
+RUN_TS="$(date +%Y%m%d_%H%M%S)"
+RUN_LOG="$RUN_DIR/databento-core5-week-recent-$RUN_TS.log"
+
+mkdir -p "$RUN_DIR"
+
+cat > "$RUN_DIR/latest_run.env" <<ENV
+RUN_LOG=$RUN_LOG
+OUT_DIR=$RUN_DIR
+SETUP_DIR=$SETUP_DIR
+LIFECYCLE_DIR=$LIFECYCLE_DIR
+SLICE=$SLICE
+ENV
+
+scripts/run_databento_historical_ibkr_sim_backtest.sh \
+  --source ndjson \
+  --recorded-events "$SLICE" \
+  --symbols-file "$SYMBOLS_FILE" \
+  --start 2026-05-18 \
+  --end 2026-05-22 \
+  --output-dir "$RUN_DIR" \
+  --model-dir "$SETUP_DIR" \
+  --lifecycle-model-dir "$LIFECYCLE_DIR" \
+  --timeout-seconds 0 \
+  --max-trades 2000 \
+  2>&1 | tee "$RUN_LOG"
+
+exit "${PIPESTATUS[0]}"
+BASH
+```
+
+Summarize one-week results:
+
+```zsh
+python3 runtime/local-backtests/databento-core5-week-20260518-20260522-recent/summarize_week_run.py \
+  | tee runtime/local-backtests/databento-core5-week-20260518-20260522-recent/week_summary.txt
+```
+
+### Four-week replay: 2026-04-27 through 2026-05-22
+
+Build the four-week recorded slice with one `previous_close` event per symbol/session:
+
+```zsh
+python3 runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/build_4week_slice_with_daily_prevclose.py \
+  | tee runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/build_4week_slice_with_daily_prevclose.log
+```
+
+Validate gzip integrity:
+
+```zsh
+gzip -t runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz
+```
+
+Validate daily previous-close coverage and ordering:
+
+```zsh
+python3 runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/validate_4week_slice.py \
+  | tee runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/validate_4week_slice.log
+```
+
+Run the saved four-week latest-model replay wrapper:
+
+```zsh
+bash runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run_4week_latest_models.sh
+```
+
+Summarize four-week results:
+
+```zsh
+python3 runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/summarize_4week_results.py \
+  | tee runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/summarize_4week_results.log
+```
+
+Optional four-week promotion-gate report:
+
+```zsh
+python3 scripts/validate_lifecycle_micro_promotion.py \
+  --model-dir runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports \
+  --recorded-events runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz \
+  --backtest-dir runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run \
+  --output-dir runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/promotion_gate_report \
+  --min-backtest-trades 20 \
+  --min-backtest-symbols 5 \
+  | tee runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/promotion_gate_report.log
+```
