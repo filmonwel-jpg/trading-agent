@@ -1,0 +1,608 @@
+{
+  "generated_at_utc": "2026-06-29T05:19:06.888311Z",
+  "schema_version": "downstream_filter_replay_policy_eval_v1",
+  "inputs": {
+    "training_rows_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv",
+    "decisions_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_micro_counterfactual_decisions.csv",
+    "filter_bundle_dir": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628"
+  },
+  "outputs": {
+    "policy_grid_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_grid.csv",
+    "policy_decisions_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_decisions.csv",
+    "summary_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_summary.json",
+    "summary_md": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_summary.md"
+  },
+  "side_filter_threshold_selected": {
+    "long": 0.75,
+    "short": 0.75
+  },
+  "micro_thresholds": [
+    0.2,
+    0.25,
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.52,
+    0.55,
+    0.57,
+    0.58
+  ],
+  "policy_grid": [
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.2,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 295,
+      "confirm_rate_per_arm": 0.06599552572706935,
+      "positive": 226,
+      "positive_rate_per_confirm": 0.7661016949152543,
+      "expected_net_r_sum": 174.4990882111676,
+      "expected_net_r_mean": 0.5955600280244627,
+      "expected_net_r_p10": -1.1220908891980874,
+      "expected_net_r_p50": 1.195148436962968,
+      "expected_net_r_p90": 1.2465783056775843,
+      "target": 206,
+      "stop": 63,
+      "max_day_dominance_frac": 0.12203389830508475,
+      "max_day_dominance_day": "2026-04-28",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 87,
+          "positive": 66,
+          "expected_net_r_mean": 0.5596777505180559,
+          "expected_net_r_p50": 1.147527884208253
+        },
+        "NVDA.short": {
+          "confirms": 41,
+          "positive": 30,
+          "expected_net_r_mean": 0.4895859385689315,
+          "expected_net_r_p50": 1.1266557490379685
+        },
+        "TQQQ.long": {
+          "confirms": 92,
+          "positive": 71,
+          "expected_net_r_mean": 0.658535416010556,
+          "expected_net_r_p50": 1.240278997819042
+        },
+        "TQQQ.short": {
+          "confirms": 30,
+          "positive": 23,
+          "expected_net_r_mean": 0.687199732666388,
+          "expected_net_r_p50": 1.242635323083798
+        },
+        "TSLA.long": {
+          "confirms": 34,
+          "positive": 26,
+          "expected_net_r_mean": 0.5774356122924821,
+          "expected_net_r_p50": 1.0680763830418962
+        },
+        "TSLA.short": {
+          "confirms": 11,
+          "positive": 10,
+          "expected_net_r_mean": 0.5651918359894972,
+          "expected_net_r_p50": 0.6949565668372853
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.25,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 289,
+      "confirm_rate_per_arm": 0.06465324384787471,
+      "positive": 225,
+      "positive_rate_per_confirm": 0.7785467128027682,
+      "expected_net_r_sum": 178.04469576581943,
+      "expected_net_r_mean": 0.6203647936091269,
+      "expected_net_r_p10": -1.119612382915787,
+      "expected_net_r_p50": 1.206807278880763,
+      "expected_net_r_p90": 1.2466373412492675,
+      "target": 204,
+      "stop": 60,
+      "max_day_dominance_frac": 0.1245674740484429,
+      "max_day_dominance_day": "2026-04-28",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 84,
+          "positive": 64,
+          "expected_net_r_mean": 0.5668434671670214,
+          "expected_net_r_p50": 1.1656301984064772
+        },
+        "NVDA.short": {
+          "confirms": 40,
+          "positive": 29,
+          "expected_net_r_mean": 0.47067515656250664,
+          "expected_net_r_p50": 1.073442586956782
+        },
+        "TQQQ.long": {
+          "confirms": 92,
+          "positive": 73,
+          "expected_net_r_mean": 0.7151777580614391,
+          "expected_net_r_p50": 1.2404400449182778
+        },
+        "TQQQ.short": {
+          "confirms": 29,
+          "positive": 22,
+          "expected_net_r_mean": 0.6678648079513507,
+          "expected_net_r_p50": 1.242604892057293
+        },
+        "TSLA.long": {
+          "confirms": 33,
+          "positive": 27,
+          "expected_net_r_mean": 0.6561106184632182,
+          "expected_net_r_p50": 1.088412373575205
+        },
+        "TSLA.short": {
+          "confirms": 11,
+          "positive": 10,
+          "expected_net_r_mean": 0.5651918359894972,
+          "expected_net_r_p50": 0.6949565668372853
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.3,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 285,
+      "confirm_rate_per_arm": 0.06375838926174497,
+      "positive": 228,
+      "positive_rate_per_confirm": 0.8,
+      "expected_net_r_sum": 187.9120011475561,
+      "expected_net_r_mean": 0.6616619758716764,
+      "expected_net_r_p10": -1.1165183975897077,
+      "expected_net_r_p50": 1.2120526781572747,
+      "expected_net_r_p90": 1.2465745971949238,
+      "target": 206,
+      "stop": 55,
+      "max_day_dominance_frac": 0.12631578947368421,
+      "max_day_dominance_day": "2026-04-28",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 81,
+          "positive": 61,
+          "expected_net_r_mean": 0.5343332130218826,
+          "expected_net_r_p50": 1.147527884208253
+        },
+        "NVDA.short": {
+          "confirms": 40,
+          "positive": 30,
+          "expected_net_r_mean": 0.5399599626932046,
+          "expected_net_r_p50": 1.1747822194186113
+        },
+        "TQQQ.long": {
+          "confirms": 92,
+          "positive": 74,
+          "expected_net_r_mean": 0.7183496926456192,
+          "expected_net_r_p50": 1.240455552199672
+        },
+        "TQQQ.short": {
+          "confirms": 28,
+          "positive": 24,
+          "expected_net_r_mean": 0.9063606196153612,
+          "expected_net_r_p50": 1.242635323083798
+        },
+        "TSLA.long": {
+          "confirms": 33,
+          "positive": 29,
+          "expected_net_r_mean": 0.7704526835541461,
+          "expected_net_r_p50": 1.0871014469921088
+        },
+        "TSLA.short": {
+          "confirms": 11,
+          "positive": 10,
+          "expected_net_r_mean": 0.6236140407079218,
+          "expected_net_r_p50": 0.6949565668372853
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.35,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 176,
+      "confirm_rate_per_arm": 0.039373601789709174,
+      "positive": 133,
+      "positive_rate_per_confirm": 0.7556818181818182,
+      "expected_net_r_sum": 100.82640298763046,
+      "expected_net_r_mean": 0.5761508742150312,
+      "expected_net_r_p10": -1.1471056550069105,
+      "expected_net_r_p50": 1.2183097960049794,
+      "expected_net_r_p90": 1.2466381718060395,
+      "target": 126,
+      "stop": 42,
+      "max_day_dominance_frac": 0.13068181818181818,
+      "max_day_dominance_day": "2026-05-12",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 50,
+          "positive": 34,
+          "expected_net_r_mean": 0.37749830778185034,
+          "expected_net_r_p50": 1.1122290550949043
+        },
+        "NVDA.short": {
+          "confirms": 21,
+          "positive": 12,
+          "expected_net_r_mean": 0.10494086817389879,
+          "expected_net_r_p50": 0.8817966605996419
+        },
+        "TQQQ.long": {
+          "confirms": 67,
+          "positive": 53,
+          "expected_net_r_mean": 0.7324955398976086,
+          "expected_net_r_p50": 1.2412699113384376
+        },
+        "TQQQ.short": {
+          "confirms": 16,
+          "positive": 15,
+          "expected_net_r_mean": 1.0802205836925736,
+          "expected_net_r_p50": 1.2441620415145744
+        },
+        "TSLA.long": {
+          "confirms": 17,
+          "positive": 16,
+          "expected_net_r_mean": 0.8691726131565825,
+          "expected_net_r_p50": 1.088412373575205
+        },
+        "TSLA.short": {
+          "confirms": 5,
+          "positive": 3,
+          "expected_net_r_mean": -0.13128800581983385,
+          "expected_net_r_p50": 0.6325297890988424
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.4,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 89,
+      "confirm_rate_per_arm": 0.019910514541387026,
+      "positive": 60,
+      "positive_rate_per_confirm": 0.6741573033707865,
+      "expected_net_r_sum": 36.85490880376527,
+      "expected_net_r_mean": 0.4141000989187109,
+      "expected_net_r_p10": -1.1484259533065388,
+      "expected_net_r_p50": 1.211299847595487,
+      "expected_net_r_p90": 1.2467966872392728,
+      "target": 57,
+      "stop": 29,
+      "max_day_dominance_frac": 0.16853932584269662,
+      "max_day_dominance_day": "2026-05-12",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 20,
+          "positive": 12,
+          "expected_net_r_mean": 0.2035368081555279,
+          "expected_net_r_p50": 1.0329950572773174
+        },
+        "NVDA.short": {
+          "confirms": 9,
+          "positive": 3,
+          "expected_net_r_mean": -0.482359783615973,
+          "expected_net_r_p50": -1.147765900626987
+        },
+        "TQQQ.long": {
+          "confirms": 44,
+          "positive": 30,
+          "expected_net_r_mean": 0.4655427154711101,
+          "expected_net_r_p50": 1.2301648514168322
+        },
+        "TQQQ.short": {
+          "confirms": 9,
+          "positive": 8,
+          "expected_net_r_mean": 0.9556688604589032,
+          "expected_net_r_p50": 1.2465073395882484
+        },
+        "TSLA.long": {
+          "confirms": 5,
+          "positive": 5,
+          "expected_net_r_mean": 1.1078692507433492,
+          "expected_net_r_p50": 1.1457434867769023
+        },
+        "TSLA.short": {
+          "confirms": 2,
+          "positive": 2,
+          "expected_net_r_mean": 1.250582607311371,
+          "expected_net_r_p50": 1.250582607311371
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.45,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 46,
+      "confirm_rate_per_arm": 0.01029082774049217,
+      "positive": 30,
+      "positive_rate_per_confirm": 0.6521739130434783,
+      "expected_net_r_sum": 17.69263695484426,
+      "expected_net_r_mean": 0.3846225424966144,
+      "expected_net_r_p10": -1.111941778354658,
+      "expected_net_r_p50": 1.2144401207846205,
+      "expected_net_r_p90": 1.2461439142911073,
+      "target": 29,
+      "stop": 16,
+      "max_day_dominance_frac": 0.15217391304347827,
+      "max_day_dominance_day": "2026-04-28",
+      "symbol_side_count": 5,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 7,
+          "positive": 3,
+          "expected_net_r_mean": -0.1703181271928413,
+          "expected_net_r_p50": -1.096554905218312
+        },
+        "NVDA.short": {
+          "confirms": 2,
+          "positive": 1,
+          "expected_net_r_mean": 0.018745502022984306,
+          "expected_net_r_p50": 0.018745502022984306
+        },
+        "TQQQ.long": {
+          "confirms": 29,
+          "positive": 18,
+          "expected_net_r_mean": 0.31619052345020865,
+          "expected_net_r_p50": 1.219152850608281
+        },
+        "TQQQ.short": {
+          "confirms": 5,
+          "positive": 5,
+          "expected_net_r_mean": 1.2459637021722052,
+          "expected_net_r_p50": 1.2467820881971674
+        },
+        "TSLA.long": {
+          "confirms": 3,
+          "positive": 3,
+          "expected_net_r_mean": 1.1493430500770359,
+          "expected_net_r_p50": 1.1457434867769023
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.5,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 15,
+      "confirm_rate_per_arm": 0.003355704697986577,
+      "positive": 8,
+      "positive_rate_per_confirm": 0.5333333333333333,
+      "expected_net_r_sum": 1.7741102157329953,
+      "expected_net_r_mean": 0.11827401438219969,
+      "expected_net_r_p10": -1.127032381550396,
+      "expected_net_r_p50": 1.061258237432365,
+      "expected_net_r_p90": 1.2445420660712005,
+      "target": 8,
+      "stop": 7,
+      "max_day_dominance_frac": 0.26666666666666666,
+      "max_day_dominance_day": "2026-05-04",
+      "symbol_side_count": 3,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 2,
+          "positive": 1,
+          "expected_net_r_mean": -0.1170274459223053,
+          "expected_net_r_p50": -0.1170274459223053
+        },
+        "TQQQ.long": {
+          "confirms": 11,
+          "positive": 5,
+          "expected_net_r_mean": -0.043761309774285474,
+          "expected_net_r_p50": -1.10503265446857
+        },
+        "TQQQ.short": {
+          "confirms": 2,
+          "positive": 2,
+          "expected_net_r_mean": 1.2447697575473735,
+          "expected_net_r_p50": 1.2447697575473735
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.52,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 11,
+      "confirm_rate_per_arm": 0.0024608501118568234,
+      "positive": 6,
+      "positive_rate_per_confirm": 0.5454545454545454,
+      "expected_net_r_sum": 1.871007126243991,
+      "expected_net_r_mean": 0.1700915569312719,
+      "expected_net_r_p10": -1.1068711619613292,
+      "expected_net_r_p50": 1.219152850608281,
+      "expected_net_r_p90": 1.2457804889939663,
+      "target": 6,
+      "stop": 5,
+      "max_day_dominance_frac": 0.2727272727272727,
+      "max_day_dominance_day": "2026-05-04",
+      "symbol_side_count": 2,
+      "by_symbol_side": {
+        "TQQQ.long": {
+          "confirms": 10,
+          "positive": 5,
+          "expected_net_r_mean": 0.06241520428362959,
+          "expected_net_r_p50": 0.05706009806985546
+        },
+        "TQQQ.short": {
+          "confirms": 1,
+          "positive": 1,
+          "expected_net_r_mean": 1.246855083407695,
+          "expected_net_r_p50": 1.246855083407695
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.55,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 5,
+      "confirm_rate_per_arm": 0.0011185682326621924,
+      "positive": 2,
+      "positive_rate_per_confirm": 0.4,
+      "expected_net_r_sum": -0.8653032150284019,
+      "expected_net_r_mean": -0.1730606430056804,
+      "expected_net_r_p10": -1.127032381550396,
+      "expected_net_r_p50": -1.105445191866322,
+      "expected_net_r_p90": 1.2441506311624024,
+      "target": 2,
+      "stop": 3,
+      "max_day_dominance_frac": 0.4,
+      "max_day_dominance_day": "2026-05-04",
+      "symbol_side_count": 1,
+      "by_symbol_side": {
+        "TQQQ.long": {
+          "confirms": 5,
+          "positive": 2,
+          "expected_net_r_mean": -0.1730606430056804,
+          "expected_net_r_p50": -1.105445191866322
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.57,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 2,
+      "confirm_rate_per_arm": 0.00044742729306487697,
+      "positive": 1,
+      "positive_rate_per_confirm": 0.5,
+      "expected_net_r_sum": 0.1012326498052829,
+      "expected_net_r_mean": 0.05061632490264145,
+      "expected_net_r_p10": -0.9022552907072907,
+      "expected_net_r_p50": 0.05061632490264145,
+      "expected_net_r_p90": 1.0034879405125736,
+      "target": 1,
+      "stop": 1,
+      "max_day_dominance_frac": 1.0,
+      "max_day_dominance_day": "2026-05-04",
+      "symbol_side_count": 1,
+      "by_symbol_side": {
+        "TQQQ.long": {
+          "confirms": 2,
+          "positive": 1,
+          "expected_net_r_mean": 0.05061632490264145,
+          "expected_net_r_p50": 0.05061632490264145
+        }
+      },
+      "filter_threshold_label": "selected"
+    },
+    {
+      "filter_threshold": null,
+      "micro_threshold": 0.58,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 1,
+      "confirm_rate_per_arm": 0.00022371364653243848,
+      "positive": 0,
+      "positive_rate_per_confirm": 0.0,
+      "expected_net_r_sum": -1.1404731946097737,
+      "expected_net_r_mean": -1.1404731946097737,
+      "expected_net_r_p10": -1.1404731946097737,
+      "expected_net_r_p50": -1.1404731946097737,
+      "expected_net_r_p90": -1.1404731946097737,
+      "target": 0,
+      "stop": 1,
+      "max_day_dominance_frac": 1.0,
+      "max_day_dominance_day": "2026-05-04",
+      "symbol_side_count": 1,
+      "by_symbol_side": {
+        "TQQQ.long": {
+          "confirms": 1,
+          "positive": 0,
+          "expected_net_r_mean": -1.1404731946097737,
+          "expected_net_r_p50": -1.1404731946097737
+        }
+      },
+      "filter_threshold_label": "selected"
+    }
+  ],
+  "best_policy": {
+    "filter_threshold": null,
+    "micro_threshold": 0.3,
+    "arms_considered": 4470,
+    "filter_pass_arms": 296,
+    "confirms": 285,
+    "confirm_rate_per_arm": 0.06375838926174497,
+    "positive": 228,
+    "positive_rate_per_confirm": 0.8,
+    "expected_net_r_sum": 187.9120011475561,
+    "expected_net_r_mean": 0.6616619758716764,
+    "expected_net_r_p10": -1.1165183975897077,
+    "expected_net_r_p50": 1.2120526781572747,
+    "expected_net_r_p90": 1.2465745971949238,
+    "target": 206,
+    "stop": 55,
+    "max_day_dominance_frac": 0.12631578947368421,
+    "max_day_dominance_day": "2026-04-28",
+    "symbol_side_count": 6,
+    "by_symbol_side": {
+      "NVDA.long": {
+        "confirms": 81,
+        "positive": 61,
+        "expected_net_r_mean": 0.5343332130218826,
+        "expected_net_r_p50": 1.147527884208253
+      },
+      "NVDA.short": {
+        "confirms": 40,
+        "positive": 30,
+        "expected_net_r_mean": 0.5399599626932046,
+        "expected_net_r_p50": 1.1747822194186113
+      },
+      "TQQQ.long": {
+        "confirms": 92,
+        "positive": 74,
+        "expected_net_r_mean": 0.7183496926456192,
+        "expected_net_r_p50": 1.240455552199672
+      },
+      "TQQQ.short": {
+        "confirms": 28,
+        "positive": 24,
+        "expected_net_r_mean": 0.9063606196153612,
+        "expected_net_r_p50": 1.242635323083798
+      },
+      "TSLA.long": {
+        "confirms": 33,
+        "positive": 29,
+        "expected_net_r_mean": 0.7704526835541461,
+        "expected_net_r_p50": 1.0871014469921088
+      },
+      "TSLA.short": {
+        "confirms": 11,
+        "positive": 10,
+        "expected_net_r_mean": 0.6236140407079218,
+        "expected_net_r_p50": 0.6949565668372853
+      }
+    },
+    "filter_threshold_label": "selected"
+  },
+  "warnings": [
+    "Offline counterfactual screen only; Java runtime is not wired and no live/replay parity is established.",
+    "Filter models are trained on replay-observed arms, not all setup candidates; use for research prioritization only."
+  ]
+}

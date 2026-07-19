@@ -1,0 +1,169 @@
+{
+  "generated_at_utc": "2026-06-29T05:19:34.378890Z",
+  "schema_version": "downstream_setup_filter_onnx_research_v1",
+  "promotion_status": "NO-GO",
+  "routes": [
+    {
+      "route_name": "longDownstreamSetupFilterAi",
+      "side": "long",
+      "status": "research_only_no_go",
+      "onnx_model": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/long_downstream_setup_filter.onnx",
+      "onnx_model_filename": "long_downstream_setup_filter.onnx",
+      "onnx_sha256": "214f590f598e18301dfd0246dc2ae3f409a568c2cdd5156025279265c2220e42",
+      "feature_schema": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/long_downstream_setup_filter_feature_schema.json",
+      "feature_schema_filename": "long_downstream_setup_filter_feature_schema.json",
+      "feature_schema_sha256": "50c55b0bac09ab1efdd0e5de6d249480eacad883e6ae20307bc641536fd0be07",
+      "feature_columns_sha256": "8cf12ca98a653b6490a469584e3782562436219d6902ca43fc490dd652c89a6a",
+      "feature_count": 59,
+      "feature_preset": "catboost_cost_aware_core",
+      "excluded_feature_groups": [
+        "databento_silver",
+        "enriched_meta"
+      ],
+      "input_name": "features",
+      "label_output_name": "label",
+      "probability_output_name": "probabilities",
+      "positive_class_index": 1,
+      "positive_class_label": 1,
+      "selected_threshold": 0.75,
+      "model_family": "CatBoostClassifier",
+      "source_pickle": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/long_downstream_setup_filter.pkl",
+      "source_pickle_sha256": "fa6cf676f3142f7c6b6bce6b65c37b4f90fad6c31164834894d0dde02f59f725",
+      "onnx_metadata": {
+        "ir_version": 3,
+        "producer_name": "CatBoost",
+        "opset_imports": {
+          "ai.onnx.ml": 2
+        },
+        "inputs": [
+          "features"
+        ],
+        "outputs": [
+          "label",
+          "probabilities"
+        ]
+      },
+      "validation": {
+        "status": "skipped_missing_onnx_runtime",
+        "reason": "No registered implementation for operator 'ZipMap' and domain 'ai.onnx.ml' in\nArrayFeatureExtractor, Binarizer, DictVectorizer, FeatureVectorizer,\nImputer, LabelEncoder, LinearClassifier, LinearRegressor, Normalizer,\nOneHotEncoder, OpFunction, OpRun, OpRunAiOnnxMl, SVMClassifier,\nSVMRegressor, Scaler, TreeEnsemble, TreeEnsembleClassifier,\nTreeEnsembleRegressor"
+      }
+    },
+    {
+      "route_name": "shortDownstreamSetupFilterAi",
+      "side": "short",
+      "status": "research_only_no_go",
+      "onnx_model": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/short_downstream_setup_filter.onnx",
+      "onnx_model_filename": "short_downstream_setup_filter.onnx",
+      "onnx_sha256": "a1bed2bc18c06c86b5bdbbc21e4f14b2ac1508e1e02531b24701bf837a907179",
+      "feature_schema": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/short_downstream_setup_filter_feature_schema.json",
+      "feature_schema_filename": "short_downstream_setup_filter_feature_schema.json",
+      "feature_schema_sha256": "7ba0cd5275514abba12795745763780eee65b6fa4bc334e72210621c28393532",
+      "feature_columns_sha256": "62a1efa6d8207e1a18348bef7cd819b278ce7b631ce31b9d35ad9360d01afad5",
+      "feature_count": 59,
+      "feature_preset": "catboost_cost_aware_core",
+      "excluded_feature_groups": [
+        "databento_silver",
+        "enriched_meta"
+      ],
+      "input_name": "features",
+      "label_output_name": "label",
+      "probability_output_name": "probabilities",
+      "positive_class_index": 1,
+      "positive_class_label": 1,
+      "selected_threshold": 0.75,
+      "model_family": "CatBoostClassifier",
+      "source_pickle": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/short_downstream_setup_filter.pkl",
+      "source_pickle_sha256": "410f3e4c68da831f9eb9e3582571fbea61e7c1eded190c82026d0022fa0e63b8",
+      "onnx_metadata": {
+        "ir_version": 3,
+        "producer_name": "CatBoost",
+        "opset_imports": {
+          "ai.onnx.ml": 2
+        },
+        "inputs": [
+          "features"
+        ],
+        "outputs": [
+          "label",
+          "probabilities"
+        ]
+      },
+      "validation": {
+        "status": "skipped_missing_onnx_runtime",
+        "reason": "No registered implementation for operator 'ZipMap' and domain 'ai.onnx.ml' in\nArrayFeatureExtractor, Binarizer, DictVectorizer, FeatureVectorizer,\nImputer, LabelEncoder, LinearClassifier, LinearRegressor, Normalizer,\nOneHotEncoder, OpFunction, OpRun, OpRunAiOnnxMl, SVMClassifier,\nSVMRegressor, Scaler, TreeEnsemble, TreeEnsembleClassifier,\nTreeEnsembleRegressor"
+      }
+    }
+  ],
+  "offline_policy": {
+    "summary_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_summary.json",
+    "side_filter_threshold_selected": {
+      "long": 0.75,
+      "short": 0.75
+    },
+    "best_policy": {
+      "filter_threshold": null,
+      "micro_threshold": 0.3,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 285,
+      "confirm_rate_per_arm": 0.06375838926174497,
+      "positive": 228,
+      "positive_rate_per_confirm": 0.8,
+      "expected_net_r_sum": 187.9120011475561,
+      "expected_net_r_mean": 0.6616619758716764,
+      "expected_net_r_p10": -1.1165183975897077,
+      "expected_net_r_p50": 1.2120526781572747,
+      "expected_net_r_p90": 1.2465745971949238,
+      "target": 206,
+      "stop": 55,
+      "max_day_dominance_frac": 0.12631578947368421,
+      "max_day_dominance_day": "2026-04-28",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 81,
+          "positive": 61,
+          "expected_net_r_mean": 0.5343332130218826,
+          "expected_net_r_p50": 1.147527884208253
+        },
+        "NVDA.short": {
+          "confirms": 40,
+          "positive": 30,
+          "expected_net_r_mean": 0.5399599626932046,
+          "expected_net_r_p50": 1.1747822194186113
+        },
+        "TQQQ.long": {
+          "confirms": 92,
+          "positive": 74,
+          "expected_net_r_mean": 0.7183496926456192,
+          "expected_net_r_p50": 1.240455552199672
+        },
+        "TQQQ.short": {
+          "confirms": 28,
+          "positive": 24,
+          "expected_net_r_mean": 0.9063606196153612,
+          "expected_net_r_p50": 1.242635323083798
+        },
+        "TSLA.long": {
+          "confirms": 33,
+          "positive": 29,
+          "expected_net_r_mean": 0.7704526835541461,
+          "expected_net_r_p50": 1.0871014469921088
+        },
+        "TSLA.short": {
+          "confirms": 11,
+          "positive": 10,
+          "expected_net_r_mean": 0.6236140407079218,
+          "expected_net_r_p50": 0.6949565668372853
+        }
+      },
+      "filter_threshold_label": "selected"
+    }
+  },
+  "warnings": [
+    "Research-only export of filters trained on replay-observed setup arms, not all possible runtime setup candidates.",
+    "ONNX conversion preserves model scoring, but Java/replay feature-vector parity is not proven by this artifact alone.",
+    "Runtime use must rebuild the exact feature order from the per-side feature schema and enforce manifest/hash checks.",
+    "Promotion remains NO-GO until controlled Java replay, lifecycle summaries, calibration, dominance, parity, and paper/shadow gates pass."
+  ]
+}

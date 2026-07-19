@@ -1,0 +1,161 @@
+{
+  "schema_version": "setup_downstream_confirmable_labels_v1",
+  "generated_at_utc": "2026-06-28T12:23:06.071457Z",
+  "inputs": {
+    "log": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_230823.log",
+    "recorded_events": [
+      "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz"
+    ]
+  },
+  "labels_csv": "setup_downstream_confirmable_labels_v1.csv",
+  "assumptions": {
+    "label_schema_version": "setup_downstream_confirmable_labels_v1",
+    "label_min_micro_prob": 0.3,
+    "min_expected_net_r": 0.0,
+    "horizon_seconds": 600,
+    "profit_pct": 0.0035,
+    "risk_pct": 0.0025,
+    "entry_slippage_bps": 2.0,
+    "exit_slippage_bps": 2.0,
+    "default_spread_bps": 0.0,
+    "round_trip_commission_bps": 0.0,
+    "fill_probability": 0.98,
+    "partial_fill_penalty_r": 0.02,
+    "missed_fill_penalty_r": 0.05,
+    "micro_threshold_grid": [
+      0.2,
+      0.25,
+      0.3,
+      0.35,
+      0.4,
+      0.45,
+      0.5,
+      0.52,
+      0.55,
+      0.57,
+      0.58,
+      0.6,
+      0.62,
+      0.64
+    ]
+  },
+  "label_columns": {
+    "long_binary": "Label_Long_Setup_DownstreamPositive",
+    "short_binary": "Label_Short_Setup_DownstreamPositive",
+    "long_expected_net_r": "Expected_Long_Setup_DownstreamNetR",
+    "short_expected_net_r": "Expected_Short_Setup_DownstreamNetR",
+    "max_future_micro_long_prob": "Max_Future_Micro_Long_Prob",
+    "max_future_micro_short_prob": "Max_Future_Micro_Short_Prob",
+    "best_entry_delay_seconds": "Best_Entry_Delay_Seconds"
+  },
+  "summary": {
+    "symbol_side": {
+      "NVDA.long": {
+        "arms": 843,
+        "candidate_arms": 138,
+        "positive_arms": 82,
+        "candidate_rate": 0.16370106761565836,
+        "positive_rate": 0.09727164887307237,
+        "best_expected_net_r_mean": 0.22321034273350018,
+        "best_expected_net_r_p50": 1.0559666167734783
+      },
+      "NVDA.short": {
+        "arms": 866,
+        "candidate_arms": 87,
+        "positive_arms": 56,
+        "candidate_rate": 0.10046189376443418,
+        "positive_rate": 0.06466512702078522,
+        "best_expected_net_r_mean": 0.3388449641882528,
+        "best_expected_net_r_p50": 1.1755386081131776
+      },
+      "QQQ.long": {
+        "arms": 448,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "QQQ.short": {
+        "arms": 106,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "SPY.long": {
+        "arms": 130,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "SPY.short": {
+        "arms": 97,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "TQQQ.long": {
+        "arms": 771,
+        "candidate_arms": 306,
+        "positive_arms": 142,
+        "candidate_rate": 0.3968871595330739,
+        "positive_rate": 0.18417639429312582,
+        "best_expected_net_r_mean": -0.014232911405637804,
+        "best_expected_net_r_p50": -0.7982580861057041
+      },
+      "TQQQ.short": {
+        "arms": 201,
+        "candidate_arms": 65,
+        "positive_arms": 36,
+        "candidate_rate": 0.32338308457711445,
+        "positive_rate": 0.1791044776119403,
+        "best_expected_net_r_mean": 0.20053534577517326,
+        "best_expected_net_r_p50": 1.2207559210139345
+      },
+      "TSLA.long": {
+        "arms": 666,
+        "candidate_arms": 81,
+        "positive_arms": 39,
+        "candidate_rate": 0.12162162162162163,
+        "positive_rate": 0.05855855855855856,
+        "best_expected_net_r_mean": -0.15469948520655416,
+        "best_expected_net_r_p50": -1.09316916625193
+      },
+      "TSLA.short": {
+        "arms": 342,
+        "candidate_arms": 35,
+        "positive_arms": 16,
+        "candidate_rate": 0.1023391812865497,
+        "positive_rate": 0.04678362573099415,
+        "best_expected_net_r_mean": -0.17386178866487448,
+        "best_expected_net_r_p50": -1.0973357584922612
+      }
+    },
+    "max_micro_probability_by_symbol_side": {
+      "NVDA.long": 0.5175,
+      "NVDA.short": 0.4544,
+      "QQQ.long": 0.1991,
+      "QQQ.short": 0.227,
+      "SPY.long": 0.2897,
+      "SPY.short": 0.2734,
+      "TQQQ.long": 0.5961,
+      "TQQQ.short": 0.5718,
+      "TSLA.long": 0.4977,
+      "TSLA.short": 0.4417
+    }
+  },
+  "warnings": [
+    "Counterfactual labels are generated from replay-observed setup arms only; use for research/retraining, not direct promotion.",
+    "Positive labels require a configurable micro-probability floor and positive expected net R after spread/slippage/fill penalties."
+  ]
+}

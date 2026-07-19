@@ -1,0 +1,384 @@
+{
+  "generated_at_utc": "2026-06-29T05:19:34.378890Z",
+  "schema_version": "downstream_setup_filter_onnx_research_v1",
+  "promotion_status": "NO-GO",
+  "target_opset": 15,
+  "source": {
+    "filter_bundle_dir": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628",
+    "filter_script": "scripts/train_downstream_setup_filter.py",
+    "training_rows_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv",
+    "source_manifest_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_manifest.json",
+    "policy_summary_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_summary.json"
+  },
+  "routes": [
+    {
+      "route_name": "longDownstreamSetupFilterAi",
+      "side": "long",
+      "status": "research_only_no_go",
+      "onnx_model": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/long_downstream_setup_filter.onnx",
+      "onnx_model_filename": "long_downstream_setup_filter.onnx",
+      "onnx_sha256": "214f590f598e18301dfd0246dc2ae3f409a568c2cdd5156025279265c2220e42",
+      "feature_schema": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/long_downstream_setup_filter_feature_schema.json",
+      "feature_schema_filename": "long_downstream_setup_filter_feature_schema.json",
+      "feature_schema_sha256": "50c55b0bac09ab1efdd0e5de6d249480eacad883e6ae20307bc641536fd0be07",
+      "feature_columns_sha256": "8cf12ca98a653b6490a469584e3782562436219d6902ca43fc490dd652c89a6a",
+      "feature_count": 59,
+      "feature_preset": "catboost_cost_aware_core",
+      "excluded_feature_groups": [
+        "databento_silver",
+        "enriched_meta"
+      ],
+      "input_name": "features",
+      "label_output_name": "label",
+      "probability_output_name": "probabilities",
+      "positive_class_index": 1,
+      "positive_class_label": 1,
+      "selected_threshold": 0.75,
+      "model_family": "CatBoostClassifier",
+      "source_pickle": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/long_downstream_setup_filter.pkl",
+      "source_pickle_sha256": "fa6cf676f3142f7c6b6bce6b65c37b4f90fad6c31164834894d0dde02f59f725",
+      "onnx_metadata": {
+        "ir_version": 3,
+        "producer_name": "CatBoost",
+        "opset_imports": {
+          "ai.onnx.ml": 2
+        },
+        "inputs": [
+          "features"
+        ],
+        "outputs": [
+          "label",
+          "probabilities"
+        ]
+      },
+      "validation": {
+        "status": "skipped_missing_onnx_runtime",
+        "reason": "No registered implementation for operator 'ZipMap' and domain 'ai.onnx.ml' in\nArrayFeatureExtractor, Binarizer, DictVectorizer, FeatureVectorizer,\nImputer, LabelEncoder, LinearClassifier, LinearRegressor, Normalizer,\nOneHotEncoder, OpFunction, OpRun, OpRunAiOnnxMl, SVMClassifier,\nSVMRegressor, Scaler, TreeEnsemble, TreeEnsembleClassifier,\nTreeEnsembleRegressor"
+      }
+    },
+    {
+      "route_name": "shortDownstreamSetupFilterAi",
+      "side": "short",
+      "status": "research_only_no_go",
+      "onnx_model": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/short_downstream_setup_filter.onnx",
+      "onnx_model_filename": "short_downstream_setup_filter.onnx",
+      "onnx_sha256": "a1bed2bc18c06c86b5bdbbc21e4f14b2ac1508e1e02531b24701bf837a907179",
+      "feature_schema": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/short_downstream_setup_filter_feature_schema.json",
+      "feature_schema_filename": "short_downstream_setup_filter_feature_schema.json",
+      "feature_schema_sha256": "7ba0cd5275514abba12795745763780eee65b6fa4bc334e72210621c28393532",
+      "feature_columns_sha256": "62a1efa6d8207e1a18348bef7cd819b278ce7b631ce31b9d35ad9360d01afad5",
+      "feature_count": 59,
+      "feature_preset": "catboost_cost_aware_core",
+      "excluded_feature_groups": [
+        "databento_silver",
+        "enriched_meta"
+      ],
+      "input_name": "features",
+      "label_output_name": "label",
+      "probability_output_name": "probabilities",
+      "positive_class_index": 1,
+      "positive_class_label": 1,
+      "selected_threshold": 0.75,
+      "model_family": "CatBoostClassifier",
+      "source_pickle": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/short_downstream_setup_filter.pkl",
+      "source_pickle_sha256": "410f3e4c68da831f9eb9e3582571fbea61e7c1eded190c82026d0022fa0e63b8",
+      "onnx_metadata": {
+        "ir_version": 3,
+        "producer_name": "CatBoost",
+        "opset_imports": {
+          "ai.onnx.ml": 2
+        },
+        "inputs": [
+          "features"
+        ],
+        "outputs": [
+          "label",
+          "probabilities"
+        ]
+      },
+      "validation": {
+        "status": "skipped_missing_onnx_runtime",
+        "reason": "No registered implementation for operator 'ZipMap' and domain 'ai.onnx.ml' in\nArrayFeatureExtractor, Binarizer, DictVectorizer, FeatureVectorizer,\nImputer, LabelEncoder, LinearClassifier, LinearRegressor, Normalizer,\nOneHotEncoder, OpFunction, OpRun, OpRunAiOnnxMl, SVMClassifier,\nSVMRegressor, Scaler, TreeEnsemble, TreeEnsembleClassifier,\nTreeEnsembleRegressor"
+      }
+    }
+  ],
+  "source_training_manifest": {
+    "generated_at_utc": "2026-06-29T05:18:42.804825Z",
+    "schema_version": "downstream_setup_filter_research_v1",
+    "training_rows_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv",
+    "outputs": {
+      "scorecard_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_scorecard.csv",
+      "threshold_grid_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_threshold_grid.csv",
+      "feature_importance_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_feature_importance.csv",
+      "holdout_predictions_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_holdout_predictions.csv",
+      "manifest_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_manifest.json",
+      "summary_md": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/downstream_setup_filter_summary.md"
+    },
+    "model_family": "catboost",
+    "feature_preset": "catboost_cost_aware_core",
+    "feature_selection": {
+      "excluded_groups": [
+        "databento_silver",
+        "enriched_meta"
+      ],
+      "excluded_counts": {
+        "enriched_meta": 32,
+        "databento_silver": 67
+      },
+      "excluded_columns": {
+        "enriched_meta": [
+          "tsm_ret_30s_p50",
+          "tsm_ret_120s_p50",
+          "tsm_ret_30s_p10",
+          "tsm_ret_30s_p90",
+          "tsm_up_prob_30s",
+          "tsm_vol_forecast_120s",
+          "tsm_uncertainty",
+          "regime_trend_prob",
+          "regime_chop_prob",
+          "regime_volatile_prob",
+          "regime_transition_prob",
+          "news_event_earnings",
+          "news_event_analyst",
+          "news_event_legal",
+          "news_event_earnings_beat_miss",
+          "news_event_analyst_upgrade_downgrade",
+          "news_event_legal_regulatory",
+          "news_event_product_capex",
+          "news_event_macro_spillover",
+          "news_novelty_score",
+          "news_relevance_score",
+          "news_embedding_cluster",
+          "seq_lstm_up_prob_30s",
+          "seq_tcn_up_prob_30s",
+          "seq_transformer_up_prob_30s",
+          "seq_patchtst_up_prob_30s",
+          "seq_model_consensus_up_prob_30s",
+          "setup_breakout_prob",
+          "setup_pullback_continuation_prob",
+          "setup_reversal_prob",
+          "setup_trend_exhaustion_prob",
+          "setup_failed_breakout_prob"
+        ],
+        "databento_silver": [
+          "EqMbp1SilverRows30s",
+          "EqMbp1JoinCoverage30s",
+          "EqMbp1SourceMaxLagSec30s",
+          "EqMbp1BidMean30s",
+          "EqMbp1AskMean30s",
+          "EqMbp1BidLast30s",
+          "EqMbp1AskLast30s",
+          "EqMbp1BidSizeMean30s",
+          "EqMbp1AskSizeMean30s",
+          "EqMbp1BidSizeLast30s",
+          "EqMbp1AskSizeLast30s",
+          "EqMbp1BidCountMean30s",
+          "EqMbp1AskCountMean30s",
+          "EqMbp1MidMean30s",
+          "EqMbp1MidLast30s",
+          "EqMbp1MicropriceMean30s",
+          "EqMbp1MicropriceLast30s",
+          "EqMbp1SpreadMean30s",
+          "EqMbp1SpreadBpsMean30s",
+          "EqMbp1SpreadBpsLast30s",
+          "EqMbp1RawSpreadMinBps30s",
+          "EqMbp1RawSpreadMaxBps30s",
+          "EqMbp1L1ImbalanceMean30s",
+          "EqMbp1L1ImbalanceLast30s",
+          "EqMbp1QuoteUpdateCount30s",
+          "EqMbp1EventCount30s",
+          "EqMbp1QuoteUpdateCoverage30s",
+          "EqMbp1QuoteStateValidCoverage30s",
+          "EqMbp1ValidSpreadCoverage30s",
+          "EqMbp1LockedCrossedSeconds30s",
+          "EqMbp1LockedCrossedCoverage30s",
+          "EqMbp1QuoteAgeMsMean30s",
+          "EqMbp1QuoteAgeMsMax30s",
+          "OpraTcbboSilverRows30s",
+          "OpraTcbboJoinCoverage30s",
+          "OpraTcbboSourceMaxLagSec30s",
+          "OpraTcbboCallTradeCount30s",
+          "OpraTcbboPutTradeCount30s",
+          "OpraTcbboTotalTradeCount30s",
+          "OpraTcbboCallContractVolume30s",
+          "OpraTcbboPutContractVolume30s",
+          "OpraTcbboTotalContractVolume30s",
+          "OpraTcbboCallPremiumNotional30s",
+          "OpraTcbboPutPremiumNotional30s",
+          "OpraTcbboTotalPremiumNotional30s",
+          "OpraTcbboCallQuoteContextCount30s",
+          "OpraTcbboPutQuoteContextCount30s",
+          "OpraTcbboTotalQuoteContextCount30s",
+          "OpraTcbboCallActiveContractSeconds30s",
+          "OpraTcbboPutActiveContractSeconds30s",
+          "OpraTcbboCallActiveSeconds30s",
+          "OpraTcbboPutActiveSeconds30s",
+          "OpraTcbboAnyActiveSeconds30s",
+          "OpraTcbboAnyActiveCoverage30s",
+          "OpraTcbboCallAvgSpreadBpsMean30s",
+          "OpraTcbboPutAvgSpreadBpsMean30s",
+          "OpraTcbboCallMedianSpreadBpsMean30s",
+          "OpraTcbboPutMedianSpreadBpsMean30s",
+          "OpraTcbboCallMinSpreadBps30s",
+          "OpraTcbboPutMinSpreadBps30s",
+          "OpraTcbboCallAtBidVolume30s",
+          "OpraTcbboPutAtBidVolume30s",
+          "OpraTcbboCallAtAskVolume30s",
+          "OpraTcbboPutAtAskVolume30s",
+          "OpraTcbboCallMinusPutVolume30s",
+          "OpraTcbboOptionVolumeImbalance30s",
+          "OpraTcbboPutCallVolumeRatio30s"
+        ]
+      }
+    },
+    "scorecard": [
+      {
+        "side": "long",
+        "status": "trained",
+        "model_family": "CatBoostClassifier",
+        "feature_preset": "catboost_cost_aware_core",
+        "excluded_feature_groups": "databento_silver;enriched_meta",
+        "rows": 2858,
+        "positives": 263,
+        "positive_rate": 0.09202239328201539,
+        "feature_count": 59,
+        "train_rows": 2000,
+        "train_positives": 188,
+        "holdout_rows": 858,
+        "holdout_positives": 75,
+        "holdout_positive_rate": 0.08741258741258741,
+        "holdout_auc": 0.8271604938271605,
+        "holdout_average_precision": 0.2816229438671345,
+        "holdout_brier_score": 0.08732186704901419,
+        "selected_threshold": 0.75,
+        "selected_threshold_reason": "eligible_min_precision",
+        "selected_precision": 0.42105263157894735,
+        "selected_recall": 0.10666666666666667,
+        "selected_predicted_positive": 19,
+        "selected_pred_pos_rate": 0.022144522144522144,
+        "selected_expected_net_r_mean": 0.4559559752456089,
+        "selected_expected_net_r_p50": 1.2327647865069657,
+        "selected_expected_net_r_positive_count": 8,
+        "holdout_expected_net_r_mean": -0.01228309273031965,
+        "model_path": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/long_downstream_setup_filter.pkl"
+      },
+      {
+        "side": "short",
+        "status": "trained",
+        "model_family": "CatBoostClassifier",
+        "feature_preset": "catboost_cost_aware_core",
+        "excluded_feature_groups": "databento_silver;enriched_meta",
+        "rows": 1612,
+        "positives": 108,
+        "positive_rate": 0.06699751861042183,
+        "feature_count": 59,
+        "train_rows": 1128,
+        "train_positives": 74,
+        "holdout_rows": 484,
+        "holdout_positives": 34,
+        "holdout_positive_rate": 0.07024793388429752,
+        "holdout_auc": 0.8722875816993463,
+        "holdout_average_precision": 0.3077932967892825,
+        "holdout_brier_score": 0.06548177865717805,
+        "selected_threshold": 0.75,
+        "selected_threshold_reason": "eligible_min_precision",
+        "selected_precision": 0.42857142857142855,
+        "selected_recall": 0.08823529411764706,
+        "selected_predicted_positive": 7,
+        "selected_pred_pos_rate": 0.014462809917355372,
+        "selected_expected_net_r_mean": 0.6587276100061663,
+        "selected_expected_net_r_p50": 1.246842940250409,
+        "selected_expected_net_r_positive_count": 3,
+        "holdout_expected_net_r_mean": 0.21010602509468554,
+        "model_path": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_catboost_core_20260628/short_downstream_setup_filter.pkl"
+      }
+    ],
+    "warnings": [
+      "Research-only arm-quality filter trained on replay arms, not all candidate setup bars.",
+      "Default CatBoost cost-aware core preset intentionally excludes optional enriched meta and Databento silver aggregate columns so those features are not required by training or Java replay/live scoring.",
+      "Feature importances and holdout metrics are directional; promotion requires integration, replay, calibration, dominance, parity, and paper/shadow gates.",
+      "Future-outcome label fields are explicitly excluded from model features to avoid leakage."
+    ]
+  },
+  "offline_policy": {
+    "summary_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_filter_replay_policy_eval_catboost_core_20260628/downstream_filter_replay_policy_summary.json",
+    "side_filter_threshold_selected": {
+      "long": 0.75,
+      "short": 0.75
+    },
+    "best_policy": {
+      "filter_threshold": null,
+      "micro_threshold": 0.3,
+      "arms_considered": 4470,
+      "filter_pass_arms": 296,
+      "confirms": 285,
+      "confirm_rate_per_arm": 0.06375838926174497,
+      "positive": 228,
+      "positive_rate_per_confirm": 0.8,
+      "expected_net_r_sum": 187.9120011475561,
+      "expected_net_r_mean": 0.6616619758716764,
+      "expected_net_r_p10": -1.1165183975897077,
+      "expected_net_r_p50": 1.2120526781572747,
+      "expected_net_r_p90": 1.2465745971949238,
+      "target": 206,
+      "stop": 55,
+      "max_day_dominance_frac": 0.12631578947368421,
+      "max_day_dominance_day": "2026-04-28",
+      "symbol_side_count": 6,
+      "by_symbol_side": {
+        "NVDA.long": {
+          "confirms": 81,
+          "positive": 61,
+          "expected_net_r_mean": 0.5343332130218826,
+          "expected_net_r_p50": 1.147527884208253
+        },
+        "NVDA.short": {
+          "confirms": 40,
+          "positive": 30,
+          "expected_net_r_mean": 0.5399599626932046,
+          "expected_net_r_p50": 1.1747822194186113
+        },
+        "TQQQ.long": {
+          "confirms": 92,
+          "positive": 74,
+          "expected_net_r_mean": 0.7183496926456192,
+          "expected_net_r_p50": 1.240455552199672
+        },
+        "TQQQ.short": {
+          "confirms": 28,
+          "positive": 24,
+          "expected_net_r_mean": 0.9063606196153612,
+          "expected_net_r_p50": 1.242635323083798
+        },
+        "TSLA.long": {
+          "confirms": 33,
+          "positive": 29,
+          "expected_net_r_mean": 0.7704526835541461,
+          "expected_net_r_p50": 1.0871014469921088
+        },
+        "TSLA.short": {
+          "confirms": 11,
+          "positive": 10,
+          "expected_net_r_mean": 0.6236140407079218,
+          "expected_net_r_p50": 0.6949565668372853
+        }
+      },
+      "filter_threshold_label": "selected"
+    }
+  },
+  "outputs": {
+    "route_manifest_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json",
+    "artifact_manifest_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_onnx_manifest.json",
+    "summary_md": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_onnx_summary.md",
+    "feature_schemas": {
+      "long": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/long_downstream_setup_filter_feature_schema.json",
+      "short": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/short_downstream_setup_filter_feature_schema.json"
+    }
+  },
+  "warnings": [
+    "Research-only export of filters trained on replay-observed setup arms, not all possible runtime setup candidates.",
+    "ONNX conversion preserves model scoring, but Java/replay feature-vector parity is not proven by this artifact alone.",
+    "Runtime use must rebuild the exact feature order from the per-side feature schema and enforce manifest/hash checks.",
+    "Promotion remains NO-GO until controlled Java replay, lifecycle summaries, calibration, dominance, parity, and paper/shadow gates pass."
+  ]
+}

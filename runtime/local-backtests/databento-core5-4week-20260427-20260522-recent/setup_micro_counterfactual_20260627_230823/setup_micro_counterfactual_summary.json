@@ -1,0 +1,1516 @@
+{
+  "generated_at_utc": "2026-06-28T12:23:06.071457Z",
+  "schema_version": "setup_micro_counterfactual_report_v1",
+  "inputs": {
+    "log": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_230823.log",
+    "recorded_events": [
+      "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz"
+    ]
+  },
+  "outputs": {
+    "arms_csv": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_micro_counterfactual_arms.csv",
+    "micro_evals_csv": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_micro_counterfactual_micro_evals.csv",
+    "decisions_csv": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_micro_counterfactual_decisions.csv",
+    "labels_csv": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_downstream_confirmable_labels_v1.csv",
+    "summary_json": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_micro_counterfactual_summary.json",
+    "summary_md": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_micro_counterfactual_summary.md",
+    "labels_manifest_json": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_downstream_confirmable_labels_v1_manifest.json"
+  },
+  "assumptions": {
+    "label_schema_version": "setup_downstream_confirmable_labels_v1",
+    "label_min_micro_prob": 0.3,
+    "min_expected_net_r": 0.0,
+    "horizon_seconds": 600,
+    "profit_pct": 0.0035,
+    "risk_pct": 0.0025,
+    "entry_slippage_bps": 2.0,
+    "exit_slippage_bps": 2.0,
+    "default_spread_bps": 0.0,
+    "round_trip_commission_bps": 0.0,
+    "fill_probability": 0.98,
+    "partial_fill_penalty_r": 0.02,
+    "missed_fill_penalty_r": 0.05,
+    "micro_threshold_grid": [
+      0.2,
+      0.25,
+      0.3,
+      0.35,
+      0.4,
+      0.45,
+      0.5,
+      0.52,
+      0.55,
+      0.57,
+      0.58,
+      0.6,
+      0.62,
+      0.64
+    ]
+  },
+  "parse_summary": {
+    "log_path": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_230823.log",
+    "counts": {
+      "setup_long_fail": 27136,
+      "setup_short_fail": 28391,
+      "arbitration_fail": 25551,
+      "setup_long_pass": 2885,
+      "arbitration_pass": 4470,
+      "arbitration_selected_long": 2858,
+      "arms_total": 4470,
+      "arms_long": 2858,
+      "arms_TSLA_long": 666,
+      "micro_total": 45919,
+      "micro_fail": 45919,
+      "micro_TSLA_long": 7229,
+      "micro_within_ttl": 45919,
+      "setup_short_pass": 1630,
+      "arbitration_selected_short": 1612,
+      "arms_short": 1612,
+      "arms_TSLA_short": 342,
+      "micro_TSLA_short": 3715,
+      "arms_TQQQ_short": 201,
+      "micro_TQQQ_short": 1774,
+      "arms_TQQQ_long": 771,
+      "micro_TQQQ_long": 6394,
+      "arms_NVDA_short": 866,
+      "micro_NVDA_short": 9348,
+      "arms_NVDA_long": 843,
+      "micro_NVDA_long": 9078,
+      "arms_SPY_short": 97,
+      "micro_SPY_short": 1087,
+      "arms_SPY_long": 130,
+      "micro_SPY_long": 1480,
+      "arms_QQQ_long": 448,
+      "micro_QQQ_long": 4623,
+      "arms_QQQ_short": 106,
+      "micro_QQQ_short": 1191
+    },
+    "arms": 4470,
+    "micro_evals": 45919,
+    "unmatched_micro_examples": []
+  },
+  "bars_summary": {
+    "counts": {
+      "equity_bars": 932320,
+      "equity_bars_NVDA": 287501,
+      "equity_bars_QQQ": 142298,
+      "equity_bars_SPY": 198893,
+      "equity_bars_TQQQ": 110244,
+      "equity_bars_TSLA": 193384
+    },
+    "symbols": [
+      "NVDA",
+      "QQQ",
+      "SPY",
+      "TQQQ",
+      "TSLA"
+    ],
+    "bars_by_symbol": {
+      "NVDA": 287501,
+      "QQQ": 142298,
+      "SPY": 198893,
+      "TQQQ": 110244,
+      "TSLA": 193384
+    },
+    "errors": []
+  },
+  "outcome_counts": {
+    "ok": 45544,
+    "entry_bar_gap_too_large": 375
+  },
+  "arms_total": 4470,
+  "micro_evals_total": 45919,
+  "bars_total": 932320,
+  "arms_by_symbol_side": {
+    "NVDA.long": 843,
+    "NVDA.short": 866,
+    "QQQ.long": 448,
+    "QQQ.short": 106,
+    "SPY.long": 130,
+    "SPY.short": 97,
+    "TQQQ.long": 771,
+    "TQQQ.short": 201,
+    "TSLA.long": 666,
+    "TSLA.short": 342
+  },
+  "micro_evals_by_symbol_side": {
+    "NVDA.long": 9078,
+    "NVDA.short": 9348,
+    "QQQ.long": 4623,
+    "QQQ.short": 1191,
+    "SPY.long": 1480,
+    "SPY.short": 1087,
+    "TQQQ.long": 6394,
+    "TQQQ.short": 1774,
+    "TSLA.long": 7229,
+    "TSLA.short": 3715
+  },
+  "positive_labels_by_symbol_side": {
+    "NVDA.long": 82,
+    "NVDA.short": 56,
+    "QQQ.long": 0,
+    "QQQ.short": 0,
+    "SPY.long": 0,
+    "SPY.short": 0,
+    "TQQQ.long": 142,
+    "TQQQ.short": 36,
+    "TSLA.long": 39,
+    "TSLA.short": 16
+  },
+  "label_summary": {
+    "symbol_side": {
+      "NVDA.long": {
+        "arms": 843,
+        "candidate_arms": 138,
+        "positive_arms": 82,
+        "candidate_rate": 0.16370106761565836,
+        "positive_rate": 0.09727164887307237,
+        "best_expected_net_r_mean": 0.22321034273350018,
+        "best_expected_net_r_p50": 1.0559666167734783
+      },
+      "NVDA.short": {
+        "arms": 866,
+        "candidate_arms": 87,
+        "positive_arms": 56,
+        "candidate_rate": 0.10046189376443418,
+        "positive_rate": 0.06466512702078522,
+        "best_expected_net_r_mean": 0.3388449641882528,
+        "best_expected_net_r_p50": 1.1755386081131776
+      },
+      "QQQ.long": {
+        "arms": 448,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "QQQ.short": {
+        "arms": 106,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "SPY.long": {
+        "arms": 130,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "SPY.short": {
+        "arms": 97,
+        "candidate_arms": 0,
+        "positive_arms": 0,
+        "candidate_rate": 0.0,
+        "positive_rate": 0.0,
+        "best_expected_net_r_mean": null,
+        "best_expected_net_r_p50": null
+      },
+      "TQQQ.long": {
+        "arms": 771,
+        "candidate_arms": 306,
+        "positive_arms": 142,
+        "candidate_rate": 0.3968871595330739,
+        "positive_rate": 0.18417639429312582,
+        "best_expected_net_r_mean": -0.014232911405637804,
+        "best_expected_net_r_p50": -0.7982580861057041
+      },
+      "TQQQ.short": {
+        "arms": 201,
+        "candidate_arms": 65,
+        "positive_arms": 36,
+        "candidate_rate": 0.32338308457711445,
+        "positive_rate": 0.1791044776119403,
+        "best_expected_net_r_mean": 0.20053534577517326,
+        "best_expected_net_r_p50": 1.2207559210139345
+      },
+      "TSLA.long": {
+        "arms": 666,
+        "candidate_arms": 81,
+        "positive_arms": 39,
+        "candidate_rate": 0.12162162162162163,
+        "positive_rate": 0.05855855855855856,
+        "best_expected_net_r_mean": -0.15469948520655416,
+        "best_expected_net_r_p50": -1.09316916625193
+      },
+      "TSLA.short": {
+        "arms": 342,
+        "candidate_arms": 35,
+        "positive_arms": 16,
+        "candidate_rate": 0.1023391812865497,
+        "positive_rate": 0.04678362573099415,
+        "best_expected_net_r_mean": -0.17386178866487448,
+        "best_expected_net_r_p50": -1.0973357584922612
+      }
+    },
+    "max_micro_probability_by_symbol_side": {
+      "NVDA.long": 0.5175,
+      "NVDA.short": 0.4544,
+      "QQQ.long": 0.1991,
+      "QQQ.short": 0.227,
+      "SPY.long": 0.2897,
+      "SPY.short": 0.2734,
+      "TQQQ.long": 0.5961,
+      "TQQQ.short": 0.5718,
+      "TSLA.long": 0.4977,
+      "TSLA.short": 0.4417
+    }
+  },
+  "threshold_summary": {
+    "thresholds": [
+      {
+        "threshold": 0.2,
+        "arms": 4470,
+        "confirms": 1843,
+        "confirm_rate": 0.4123042505592841,
+        "positive": 866,
+        "positive_rate_per_arm": 0.19373601789709172,
+        "positive_rate_per_confirm": 0.4698860553445469,
+        "target": 686,
+        "stop": 821,
+        "expected_net_r_mean": -0.0683663507920042,
+        "expected_net_r_p10": -1.1965369314090248,
+        "expected_net_r_p50": -0.17777519357465457,
+        "expected_net_r_p90": 1.2456971063850297,
+        "realized_net_r_mean": -0.04833301101224924,
+        "realized_net_r_p50": -0.15997468732107611,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 337,
+            "positive": 178,
+            "confirm_rate": 0.3997627520759193,
+            "positive_rate_per_arm": 0.2111506524317912
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 258,
+            "positive": 138,
+            "confirm_rate": 0.2979214780600462,
+            "positive_rate_per_arm": 0.15935334872979215
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 1,
+            "positive": 1,
+            "confirm_rate": 0.009433962264150943,
+            "positive_rate_per_arm": 0.009433962264150943
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 2,
+            "positive": 1,
+            "confirm_rate": 0.015384615384615385,
+            "positive_rate_per_arm": 0.007692307692307693
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 1,
+            "positive": 1,
+            "confirm_rate": 0.010309278350515464,
+            "positive_rate_per_arm": 0.010309278350515464
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 653,
+            "positive": 288,
+            "confirm_rate": 0.8469520103761349,
+            "positive_rate_per_arm": 0.3735408560311284
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 142,
+            "positive": 67,
+            "confirm_rate": 0.7064676616915423,
+            "positive_rate_per_arm": 0.3333333333333333
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 297,
+            "positive": 125,
+            "confirm_rate": 0.44594594594594594,
+            "positive_rate_per_arm": 0.18768768768768768
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 152,
+            "positive": 67,
+            "confirm_rate": 0.4444444444444444,
+            "positive_rate_per_arm": 0.195906432748538
+          }
+        }
+      },
+      {
+        "threshold": 0.25,
+        "arms": 4470,
+        "confirms": 1159,
+        "confirm_rate": 0.2592841163310962,
+        "positive": 524,
+        "positive_rate_per_arm": 0.11722595078299776,
+        "positive_rate_per_confirm": 0.45211389128559104,
+        "target": 439,
+        "stop": 573,
+        "expected_net_r_mean": -0.11628618253262561,
+        "expected_net_r_p10": -1.194230614936206,
+        "expected_net_r_p50": -1.079203999999931,
+        "expected_net_r_p90": 1.2456476292922667,
+        "realized_net_r_mean": -0.0972307985026794,
+        "realized_net_r_p50": -1.0797999999999295,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 220,
+            "positive": 110,
+            "confirm_rate": 0.2609727164887307,
+            "positive_rate_per_arm": 0.13048635824436536
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 157,
+            "positive": 81,
+            "confirm_rate": 0.1812933025404157,
+            "positive_rate_per_arm": 0.09353348729792148
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 1,
+            "positive": 0,
+            "confirm_rate": 0.007692307692307693,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 1,
+            "positive": 1,
+            "confirm_rate": 0.010309278350515464,
+            "positive_rate_per_arm": 0.010309278350515464
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 432,
+            "positive": 186,
+            "confirm_rate": 0.5603112840466926,
+            "positive_rate_per_arm": 0.24124513618677043
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 102,
+            "positive": 49,
+            "confirm_rate": 0.5074626865671642,
+            "positive_rate_per_arm": 0.24378109452736318
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 162,
+            "positive": 65,
+            "confirm_rate": 0.24324324324324326,
+            "positive_rate_per_arm": 0.09759759759759759
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 84,
+            "positive": 32,
+            "confirm_rate": 0.24561403508771928,
+            "positive_rate_per_arm": 0.0935672514619883
+          }
+        }
+      },
+      {
+        "threshold": 0.3,
+        "arms": 4470,
+        "confirms": 712,
+        "confirm_rate": 0.1592841163310962,
+        "positive": 307,
+        "positive_rate_per_arm": 0.06868008948545862,
+        "positive_rate_per_confirm": 0.4311797752808989,
+        "target": 276,
+        "stop": 379,
+        "expected_net_r_mean": -0.15522437389332625,
+        "expected_net_r_p10": -1.1946906309653682,
+        "expected_net_r_p50": -1.104729164827977,
+        "expected_net_r_p90": 1.2460878236761501,
+        "realized_net_r_mean": -0.1369636468299245,
+        "realized_net_r_p50": -1.10584608655916,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 138,
+            "positive": 66,
+            "confirm_rate": 0.16370106761565836,
+            "positive_rate_per_arm": 0.07829181494661921
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 87,
+            "positive": 42,
+            "confirm_rate": 0.10046189376443418,
+            "positive_rate_per_arm": 0.04849884526558892
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 306,
+            "positive": 122,
+            "confirm_rate": 0.3968871595330739,
+            "positive_rate_per_arm": 0.1582360570687419
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 65,
+            "positive": 31,
+            "confirm_rate": 0.32338308457711445,
+            "positive_rate_per_arm": 0.15422885572139303
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 81,
+            "positive": 34,
+            "confirm_rate": 0.12162162162162163,
+            "positive_rate_per_arm": 0.05105105105105105
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 35,
+            "positive": 12,
+            "confirm_rate": 0.1023391812865497,
+            "positive_rate_per_arm": 0.03508771929824561
+          }
+        }
+      },
+      {
+        "threshold": 0.35,
+        "arms": 4470,
+        "confirms": 411,
+        "confirm_rate": 0.09194630872483221,
+        "positive": 174,
+        "positive_rate_per_arm": 0.038926174496644296,
+        "positive_rate_per_confirm": 0.4233576642335766,
+        "target": 164,
+        "stop": 226,
+        "expected_net_r_mean": -0.17848399392222541,
+        "expected_net_r_p10": -1.229137765672433,
+        "expected_net_r_p50": -1.104991772868126,
+        "expected_net_r_p90": 1.2461513589719542,
+        "realized_net_r_mean": -0.16069795298186249,
+        "realized_net_r_p50": -1.1061140539470673,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 77,
+            "positive": 37,
+            "confirm_rate": 0.09134045077105575,
+            "positive_rate_per_arm": 0.04389086595492289
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 43,
+            "positive": 17,
+            "confirm_rate": 0.049653579676674366,
+            "positive_rate_per_arm": 0.019630484988452657
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 194,
+            "positive": 82,
+            "confirm_rate": 0.251621271076524,
+            "positive_rate_per_arm": 0.10635538261997406
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 41,
+            "positive": 19,
+            "confirm_rate": 0.20398009950248755,
+            "positive_rate_per_arm": 0.0945273631840796
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 40,
+            "positive": 16,
+            "confirm_rate": 0.06006006006006006,
+            "positive_rate_per_arm": 0.024024024024024024
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 16,
+            "positive": 3,
+            "confirm_rate": 0.04678362573099415,
+            "positive_rate_per_arm": 0.008771929824561403
+          }
+        }
+      },
+      {
+        "threshold": 0.4,
+        "arms": 4470,
+        "confirms": 214,
+        "confirm_rate": 0.04787472035794183,
+        "positive": 83,
+        "positive_rate_per_arm": 0.018568232662192395,
+        "positive_rate_per_confirm": 0.3878504672897196,
+        "target": 78,
+        "stop": 127,
+        "expected_net_r_mean": -0.25220672666661303,
+        "expected_net_r_p10": -1.2431489681948855,
+        "expected_net_r_p50": -1.105133717458686,
+        "expected_net_r_p90": 1.246464562241951,
+        "realized_net_r_mean": -0.23592523129246218,
+        "realized_net_r_p50": -1.106258895366006,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 36,
+            "positive": 12,
+            "confirm_rate": 0.042704626334519574,
+            "positive_rate_per_arm": 0.014234875444839857
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 18,
+            "positive": 7,
+            "confirm_rate": 0.020785219399538105,
+            "positive_rate_per_arm": 0.008083140877598153
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 120,
+            "positive": 45,
+            "confirm_rate": 0.1556420233463035,
+            "positive_rate_per_arm": 0.058365758754863814
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 25,
+            "positive": 12,
+            "confirm_rate": 0.12437810945273632,
+            "positive_rate_per_arm": 0.05970149253731343
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 8,
+            "positive": 5,
+            "confirm_rate": 0.012012012012012012,
+            "positive_rate_per_arm": 0.0075075075075075074
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 7,
+            "positive": 2,
+            "confirm_rate": 0.02046783625730994,
+            "positive_rate_per_arm": 0.005847953216374269
+          }
+        }
+      },
+      {
+        "threshold": 0.45,
+        "arms": 4470,
+        "confirms": 105,
+        "confirm_rate": 0.02348993288590604,
+        "positive": 39,
+        "positive_rate_per_arm": 0.0087248322147651,
+        "positive_rate_per_confirm": 0.37142857142857144,
+        "target": 38,
+        "stop": 64,
+        "expected_net_r_mean": -0.2504601667466497,
+        "expected_net_r_p10": -1.1354820952141322,
+        "expected_net_r_p50": -1.105058272374054,
+        "expected_net_r_p90": 1.246020602633785,
+        "realized_net_r_mean": -0.23414302729249975,
+        "realized_net_r_p50": -1.1061819105857695,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 12,
+            "positive": 3,
+            "confirm_rate": 0.014234875444839857,
+            "positive_rate_per_arm": 0.0035587188612099642
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 2,
+            "positive": 1,
+            "confirm_rate": 0.0023094688221709007,
+            "positive_rate_per_arm": 0.0011547344110854503
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 74,
+            "positive": 25,
+            "confirm_rate": 0.0959792477302205,
+            "positive_rate_per_arm": 0.0324254215304799
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 14,
+            "positive": 7,
+            "confirm_rate": 0.06965174129353234,
+            "positive_rate_per_arm": 0.03482587064676617
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 3,
+            "positive": 3,
+            "confirm_rate": 0.0045045045045045045,
+            "positive_rate_per_arm": 0.0045045045045045045
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.5,
+        "arms": 4470,
+        "confirms": 38,
+        "confirm_rate": 0.008501118568232663,
+        "positive": 11,
+        "positive_rate_per_arm": 0.0024608501118568234,
+        "positive_rate_per_confirm": 0.2894736842105263,
+        "target": 11,
+        "stop": 26,
+        "expected_net_r_mean": -0.4362819235115434,
+        "expected_net_r_p10": -1.133978057146384,
+        "expected_net_r_p50": -1.105485821109879,
+        "expected_net_r_p90": 1.2458896728781583,
+        "realized_net_r_mean": -0.4237570648076974,
+        "realized_net_r_p50": -1.106618184805999,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 3,
+            "positive": 1,
+            "confirm_rate": 0.0035587188612099642,
+            "positive_rate_per_arm": 0.0011862396204033216
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 31,
+            "positive": 8,
+            "confirm_rate": 0.040207522697795074,
+            "positive_rate_per_arm": 0.010376134889753566
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 4,
+            "positive": 2,
+            "confirm_rate": 0.01990049751243781,
+            "positive_rate_per_arm": 0.009950248756218905
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.52,
+        "arms": 4470,
+        "confirms": 27,
+        "confirm_rate": 0.006040268456375839,
+        "positive": 9,
+        "positive_rate_per_arm": 0.0020134228187919465,
+        "positive_rate_per_confirm": 0.3333333333333333,
+        "target": 9,
+        "stop": 17,
+        "expected_net_r_mean": -0.318406036377338,
+        "expected_net_r_p10": -1.130556565616466,
+        "expected_net_r_p50": -1.1050428951298632,
+        "expected_net_r_p90": 1.2462356383818913,
+        "realized_net_r_mean": -0.30347554732381427,
+        "realized_net_r_p50": -1.1061662195202686,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 24,
+            "positive": 8,
+            "confirm_rate": 0.0311284046692607,
+            "positive_rate_per_arm": 0.010376134889753566
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 3,
+            "positive": 1,
+            "confirm_rate": 0.014925373134328358,
+            "positive_rate_per_arm": 0.004975124378109453
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.55,
+        "arms": 4470,
+        "confirms": 14,
+        "confirm_rate": 0.003131991051454139,
+        "positive": 2,
+        "positive_rate_per_arm": 0.00044742729306487697,
+        "positive_rate_per_confirm": 0.14285714285714285,
+        "target": 2,
+        "stop": 11,
+        "expected_net_r_mean": -0.758942534999215,
+        "expected_net_r_p10": -1.130406796290809,
+        "expected_net_r_p50": -1.1056204315726632,
+        "expected_net_r_p90": 0.6102427846128309,
+        "realized_net_r_mean": -0.7530025867338929,
+        "realized_net_r_p50": -1.106755542421085,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 12,
+            "positive": 2,
+            "confirm_rate": 0.01556420233463035,
+            "positive_rate_per_arm": 0.0025940337224383916
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 2,
+            "positive": 0,
+            "confirm_rate": 0.009950248756218905,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.57,
+        "arms": 4470,
+        "confirms": 5,
+        "confirm_rate": 0.0011185682326621924,
+        "positive": 1,
+        "positive_rate_per_arm": 0.00022371364653243848,
+        "positive_rate_per_confirm": 0.2,
+        "target": 1,
+        "stop": 4,
+        "expected_net_r_mean": -0.6537074728916316,
+        "expected_net_r_p10": -1.149910299438939,
+        "expected_net_r_p50": -1.106918533546558,
+        "expected_net_r_p90": 0.302363595425634,
+        "realized_net_r_mean": -0.6456198702975832,
+        "realized_net_r_p50": -1.1080801362719976,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 4,
+            "positive": 1,
+            "confirm_rate": 0.005188067444876783,
+            "positive_rate_per_arm": 0.0012970168612191958
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 1,
+            "positive": 0,
+            "confirm_rate": 0.004975124378109453,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.58,
+        "arms": 4470,
+        "confirms": 3,
+        "confirm_rate": 0.0006711409395973154,
+        "positive": 0,
+        "positive_rate_per_arm": 0.0,
+        "positive_rate_per_confirm": 0.0,
+        "target": 0,
+        "stop": 3,
+        "expected_net_r_mean": -1.1344415584422187,
+        "expected_net_r_p10": -1.1530560010486608,
+        "expected_net_r_p50": -1.1404731946097737,
+        "expected_net_r_p90": -1.1134144613687549,
+        "realized_net_r_mean": -1.1361648555532844,
+        "realized_net_r_p50": -1.1423195863365037,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 3,
+            "positive": 0,
+            "confirm_rate": 0.0038910505836575876,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.6,
+        "arms": 4470,
+        "confirms": 0,
+        "confirm_rate": 0.0,
+        "positive": 0,
+        "positive_rate_per_arm": 0.0,
+        "positive_rate_per_confirm": 0.0,
+        "target": 0,
+        "stop": 0,
+        "expected_net_r_mean": null,
+        "expected_net_r_p10": null,
+        "expected_net_r_p50": null,
+        "expected_net_r_p90": null,
+        "realized_net_r_mean": null,
+        "realized_net_r_p50": null,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.62,
+        "arms": 4470,
+        "confirms": 0,
+        "confirm_rate": 0.0,
+        "positive": 0,
+        "positive_rate_per_arm": 0.0,
+        "positive_rate_per_confirm": 0.0,
+        "target": 0,
+        "stop": 0,
+        "expected_net_r_mean": null,
+        "expected_net_r_p10": null,
+        "expected_net_r_p50": null,
+        "expected_net_r_p90": null,
+        "realized_net_r_mean": null,
+        "realized_net_r_p50": null,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      },
+      {
+        "threshold": 0.64,
+        "arms": 4470,
+        "confirms": 0,
+        "confirm_rate": 0.0,
+        "positive": 0,
+        "positive_rate_per_arm": 0.0,
+        "positive_rate_per_confirm": 0.0,
+        "target": 0,
+        "stop": 0,
+        "expected_net_r_mean": null,
+        "expected_net_r_p10": null,
+        "expected_net_r_p50": null,
+        "expected_net_r_p90": null,
+        "realized_net_r_mean": null,
+        "realized_net_r_p50": null,
+        "by_symbol_side": {
+          "NVDA.long": {
+            "arms": 843,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "NVDA.short": {
+            "arms": 866,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.long": {
+            "arms": 448,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "QQQ.short": {
+            "arms": 106,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.long": {
+            "arms": 130,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "SPY.short": {
+            "arms": 97,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.long": {
+            "arms": 771,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TQQQ.short": {
+            "arms": 201,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.long": {
+            "arms": 666,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          },
+          "TSLA.short": {
+            "arms": 342,
+            "confirms": 0,
+            "positive": 0,
+            "confirm_rate": 0.0,
+            "positive_rate_per_arm": 0.0
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,9 +1,9 @@
 # Four-week Databento latest-model replay summary
 
-Run log: `/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_200624.log`
-Recorded events: `/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz`
-Setup dir: `/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`
-Lifecycle/micro dir: `/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`
+Run log: `/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_230823.log`
+Recorded events: `/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz`
+Setup dir: `/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854`
+Lifecycle/micro dir: `/Users/FXG06FA/trading-agent-main/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports`
 
 ## Slice validation
 

@@ -23,7 +23,7 @@
   },
   "arm_setup_probability_stats": {
     "NVDA.long": {
-      "avg": 0.6420511269276393,
+      "avg": 0.6420511269276395,
       "binary_count": 0,
       "count": 843,
       "max": 0.8281,
@@ -37,7 +37,7 @@
       "p99": 0.7598
     },
     "NVDA.short": {
-      "avg": 0.6516036951501155,
+      "avg": 0.6516036951501153,
       "binary_count": 0,
       "count": 866,
       "max": 0.8021,
@@ -51,7 +51,7 @@
       "p99": 0.7475
     },
     "QQQ.long": {
-      "avg": 0.6741736607142857,
+      "avg": 0.6741736607142859,
       "binary_count": 0,
       "count": 448,
       "max": 0.8598,
@@ -65,7 +65,7 @@
       "p99": 0.8027
     },
     "QQQ.short": {
-      "avg": 0.6615084905660378,
+      "avg": 0.6615084905660377,
       "binary_count": 0,
       "count": 106,
       "max": 0.7677,
@@ -79,7 +79,7 @@
       "p99": 0.7514
     },
     "SPY.long": {
-      "avg": 0.6650892307692308,
+      "avg": 0.6650892307692309,
       "binary_count": 0,
       "count": 130,
       "max": 0.755,
@@ -107,7 +107,7 @@
       "p99": 0.7546
     },
     "TQQQ.long": {
-      "avg": 0.6523184176394293,
+      "avg": 0.6523184176394294,
       "binary_count": 0,
       "count": 771,
       "max": 0.9655,
@@ -135,7 +135,7 @@
       "p99": 0.7597
     },
     "TSLA.long": {
-      "avg": 0.6404767267267267,
+      "avg": 0.6404767267267275,
       "binary_count": 0,
       "count": 666,
       "max": 0.8089,
@@ -163,7 +163,7 @@
       "p99": 0.7385
     }
   },
-  "log_file_scanned": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_200624.log",
+  "log_file_scanned": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_230823.log",
   "micro_counts": {
     "NVDA.long.fail": 9078,
     "NVDA.short.fail": 9348,
@@ -178,7 +178,7 @@
   },
   "micro_margin_stats": {
     "NVDA.long": {
-      "avg": -0.4776365609165014,
+      "avg": -0.4776365609165019,
       "binary_count": 0,
       "count": 9078,
       "max": -0.12250000000000005,
@@ -192,7 +192,7 @@
       "p99": -0.2555
     },
     "NVDA.short": {
-      "avg": -0.4813596384253316,
+      "avg": -0.4813596277278564,
       "binary_count": 0,
       "count": 9348,
       "max": -0.16559999999999997,
@@ -206,7 +206,7 @@
       "p99": -0.2569
     },
     "QQQ.long": {
-      "avg": -0.5762937270170885,
+      "avg": -0.5762937270170881,
       "binary_count": 0,
       "count": 4623,
       "max": -0.4409,
@@ -220,7 +220,7 @@
       "p99": -0.4783
     },
     "QQQ.short": {
-      "avg": -0.5428237615449203,
+      "avg": -0.5428237615449198,
       "binary_count": 0,
       "count": 1191,
       "max": -0.393,
@@ -234,7 +234,7 @@
       "p99": -0.43420000000000003
     },
     "SPY.long": {
-      "avg": -0.5814305405405406,
+      "avg": -0.5814305405405409,
       "binary_count": 0,
       "count": 1480,
       "max": -0.3503,
@@ -248,7 +248,7 @@
       "p99": -0.4729
     },
     "SPY.short": {
-      "avg": -0.569453725850966,
+      "avg": -0.5694537258509654,
       "binary_count": 0,
       "count": 1087,
       "max": -0.3466,
@@ -262,7 +262,7 @@
       "p99": -0.4717
     },
     "TQQQ.long": {
-      "avg": -0.37321360650609947,
+      "avg": -0.37321360650609997,
       "binary_count": 0,
       "count": 6394,
       "max": -0.04390000000000005,
@@ -276,7 +276,7 @@
       "p99": -0.1331
     },
     "TQQQ.short": {
-      "avg": -0.36504160090191656,
+      "avg": -0.36504160090191684,
       "binary_count": 0,
       "count": 1774,
       "max": -0.04820000000000002,
@@ -290,7 +290,7 @@
       "p99": -0.14179999999999998
     },
     "TSLA.long": {
-      "avg": -0.4677380135565085,
+      "avg": -0.4677380412228529,
       "binary_count": 0,
       "count": 7229,
       "max": -0.14230000000000004,
@@ -304,7 +304,7 @@
       "p99": -0.2873
     },
     "TSLA.short": {
-      "avg": -0.4489415074024226,
+      "avg": -0.4489415074024231,
       "binary_count": 0,
       "count": 3715,
       "max": -0.17830000000000001,
@@ -320,7 +320,7 @@
   },
   "micro_probability_stats": {
     "NVDA.long": {
-      "avg": 0.16236343908349857,
+      "avg": 0.16236343908349835,
       "binary_count": 0,
       "count": 9078,
       "max": 0.5175,
@@ -334,7 +334,7 @@
       "p99": 0.3845
     },
     "NVDA.short": {
-      "avg": 0.13864036157466839,
+      "avg": 0.13864037227214351,
       "binary_count": 0,
       "count": 9348,
       "max": 0.4544,
@@ -348,7 +348,7 @@
       "p99": 0.3631
     },
     "QQQ.long": {
-      "avg": 0.06370627298291152,
+      "avg": 0.06370627298291154,
       "binary_count": 0,
       "count": 4623,
       "max": 0.1991,
@@ -362,7 +362,7 @@
       "p99": 0.1617
     },
     "QQQ.short": {
-      "avg": 0.07717623845507976,
+      "avg": 0.07717623845507975,
       "binary_count": 0,
       "count": 1191,
       "max": 0.227,
@@ -376,7 +376,7 @@
       "p99": 0.1858
     },
     "SPY.long": {
-      "avg": 0.05856945945945946,
+      "avg": 0.05856945945945954,
       "binary_count": 0,
       "count": 1480,
       "max": 0.2897,
@@ -390,7 +390,7 @@
       "p99": 0.1671
     },
     "SPY.short": {
-      "avg": 0.050546274149034044,
+      "avg": 0.050546274149033996,
       "binary_count": 0,
       "count": 1087,
       "max": 0.2734,
@@ -404,7 +404,7 @@
       "p99": 0.1483
     },
     "TQQQ.long": {
-      "avg": 0.26678639349390054,
+      "avg": 0.2667863934939001,
       "binary_count": 0,
       "count": 6394,
       "max": 0.5961,
@@ -418,7 +418,7 @@
       "p99": 0.5069
     },
     "TQQQ.short": {
-      "avg": 0.25495839909808343,
+      "avg": 0.2549583990980835,
       "binary_count": 0,
       "count": 1774,
       "max": 0.5718,
@@ -432,7 +432,7 @@
       "p99": 0.4782
     },
     "TSLA.long": {
-      "avg": 0.1722619864434915,
+      "avg": 0.17226195877714756,
       "binary_count": 0,
       "count": 7229,
       "max": 0.4977,
@@ -446,7 +446,7 @@
       "p99": 0.3527
     },
     "TSLA.short": {
-      "avg": 0.17105849259757738,
+      "avg": 0.17105849259757733,
       "binary_count": 0,
       "count": 3715,
       "max": 0.4417,
@@ -462,93 +462,93 @@
   },
   "sample_lines": {
     "arbitration": [
-      "20:06:31.116 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.172 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.192 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.216 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.245 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.300 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.322 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.350 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.388 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.433 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.455 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.490 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.520 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.546 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.573 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.595 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.617 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.645 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.675 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
-      "20:06:31.714 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty"
+      "23:08:36.452 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.509 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.530 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.555 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.584 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.641 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.662 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.694 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.732 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.782 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.808 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.844 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.875 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.903 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.929 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.951 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:36.972 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:37.003 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:37.034 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+      "23:08:37.075 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty"
     ],
     "arms": [
-      "20:06:32.880 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777299180 ttlSeconds=30 setupProb=0.6178",
-      "20:06:33.561 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300200 ttlSeconds=30 setupProb=0.6256",
-      "20:06:33.578 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300230 ttlSeconds=30 setupProb=0.6444",
-      "20:06:33.715 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300470 ttlSeconds=30 setupProb=0.6085",
-      "20:06:33.732 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300500 ttlSeconds=30 setupProb=0.6164",
-      "20:06:33.754 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300530 ttlSeconds=30 setupProb=0.6129",
-      "20:06:33.780 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300590 ttlSeconds=30 setupProb=0.6330",
-      "20:06:33.967 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300890 ttlSeconds=30 setupProb=0.6512",
-      "20:06:34.087 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301070 ttlSeconds=30 setupProb=0.6723",
-      "20:06:34.122 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301130 ttlSeconds=30 setupProb=0.6311",
-      "20:06:34.146 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301160 ttlSeconds=30 setupProb=0.6221",
-      "20:06:34.231 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301340 ttlSeconds=30 setupProb=0.7060",
-      "20:06:34.423 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301640 ttlSeconds=30 setupProb=0.6050",
-      "20:06:34.480 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301730 ttlSeconds=30 setupProb=0.6096",
-      "20:06:34.495 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301760 ttlSeconds=30 setupProb=0.6174",
-      "20:06:34.518 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301820 ttlSeconds=30 setupProb=0.6055",
-      "20:06:34.843 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302270 ttlSeconds=30 setupProb=0.6054",
-      "20:06:34.944 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302390 ttlSeconds=30 setupProb=0.6048",
-      "20:06:35.118 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302630 ttlSeconds=30 setupProb=0.6249",
-      "20:06:35.166 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302720 ttlSeconds=30 setupProb=0.6534"
+      "23:08:38.347 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777299180 ttlSeconds=30 setupProb=0.6178",
+      "23:08:39.046 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300200 ttlSeconds=30 setupProb=0.6256",
+      "23:08:39.065 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300230 ttlSeconds=30 setupProb=0.6444",
+      "23:08:39.208 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300470 ttlSeconds=30 setupProb=0.6085",
+      "23:08:39.226 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300500 ttlSeconds=30 setupProb=0.6164",
+      "23:08:39.251 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300530 ttlSeconds=30 setupProb=0.6129",
+      "23:08:39.300 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300590 ttlSeconds=30 setupProb=0.6330",
+      "23:08:39.492 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777300890 ttlSeconds=30 setupProb=0.6512",
+      "23:08:39.610 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301070 ttlSeconds=30 setupProb=0.6723",
+      "23:08:39.650 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301130 ttlSeconds=30 setupProb=0.6311",
+      "23:08:39.675 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301160 ttlSeconds=30 setupProb=0.6221",
+      "23:08:39.762 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed short micro-entry symbol=TSLA epoch=1777301340 ttlSeconds=30 setupProb=0.7060",
+      "23:08:39.958 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301640 ttlSeconds=30 setupProb=0.6050",
+      "23:08:40.025 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301730 ttlSeconds=30 setupProb=0.6096",
+      "23:08:40.042 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301760 ttlSeconds=30 setupProb=0.6174",
+      "23:08:40.065 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777301820 ttlSeconds=30 setupProb=0.6055",
+      "23:08:40.416 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302270 ttlSeconds=30 setupProb=0.6054",
+      "23:08:40.523 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302390 ttlSeconds=30 setupProb=0.6048",
+      "23:08:40.696 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302630 ttlSeconds=30 setupProb=0.6249",
+      "23:08:40.756 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.MICRO.ENTRY] Armed long micro-entry symbol=TSLA epoch=1777302720 ttlSeconds=30 setupProb=0.6534"
     ],
     "guard": [],
     "micro": [
-      "20:06:32.883 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1410 threshold=0.6400 secondsSinceArm=0",
-      "20:06:32.886 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1368 threshold=0.6400 secondsSinceArm=5",
-      "20:06:32.888 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1337 threshold=0.6400 secondsSinceArm=10",
-      "20:06:32.892 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1363 threshold=0.6400 secondsSinceArm=15",
-      "20:06:32.899 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1727 threshold=0.6400 secondsSinceArm=20",
-      "20:06:32.905 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1431 threshold=0.6400 secondsSinceArm=25",
-      "20:06:32.906 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1724 threshold=0.6400 secondsSinceArm=30",
-      "20:06:33.563 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1375 threshold=0.6200 secondsSinceArm=0",
-      "20:06:33.564 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1382 threshold=0.6200 secondsSinceArm=0",
-      "20:06:33.568 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1382 threshold=0.6200 secondsSinceArm=10",
-      "20:06:33.574 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1506 threshold=0.6200 secondsSinceArm=15",
-      "20:06:33.577 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1410 threshold=0.6200 secondsSinceArm=25",
-      "20:06:33.579 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1900 threshold=0.6200 secondsSinceArm=0",
-      "20:06:33.581 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1909 threshold=0.6200 secondsSinceArm=0",
-      "20:06:33.582 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1933 threshold=0.6200 secondsSinceArm=0",
-      "20:06:33.589 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1937 threshold=0.6200 secondsSinceArm=5",
-      "20:06:33.591 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1852 threshold=0.6200 secondsSinceArm=10",
-      "20:06:33.592 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1760 threshold=0.6200 secondsSinceArm=10",
-      "20:06:33.594 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1685 threshold=0.6200 secondsSinceArm=10",
-      "20:06:33.598 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1647 threshold=0.6200 secondsSinceArm=20"
+      "23:08:38.356 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1410 threshold=0.6400 secondsSinceArm=0",
+      "23:08:38.359 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1368 threshold=0.6400 secondsSinceArm=5",
+      "23:08:38.362 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1337 threshold=0.6400 secondsSinceArm=10",
+      "23:08:38.366 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1363 threshold=0.6400 secondsSinceArm=15",
+      "23:08:38.372 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1727 threshold=0.6400 secondsSinceArm=20",
+      "23:08:38.378 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1431 threshold=0.6400 secondsSinceArm=25",
+      "23:08:38.381 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.LONG.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1724 threshold=0.6400 secondsSinceArm=30",
+      "23:08:39.051 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1375 threshold=0.6200 secondsSinceArm=0",
+      "23:08:39.051 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1382 threshold=0.6200 secondsSinceArm=0",
+      "23:08:39.055 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1382 threshold=0.6200 secondsSinceArm=10",
+      "23:08:39.062 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1506 threshold=0.6200 secondsSinceArm=15",
+      "23:08:39.064 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1410 threshold=0.6200 secondsSinceArm=25",
+      "23:08:39.068 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1900 threshold=0.6200 secondsSinceArm=0",
+      "23:08:39.069 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1909 threshold=0.6200 secondsSinceArm=0",
+      "23:08:39.071 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1933 threshold=0.6200 secondsSinceArm=0",
+      "23:08:39.077 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1937 threshold=0.6200 secondsSinceArm=5",
+      "23:08:39.080 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1852 threshold=0.6200 secondsSinceArm=10",
+      "23:08:39.081 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1760 threshold=0.6200 secondsSinceArm=10",
+      "23:08:39.082 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1685 threshold=0.6200 secondsSinceArm=10",
+      "23:08:39.086 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.MICRO.SHORT.ENTRY] MICRO_ENTRY_CONFIRMS=FAIL | symbol=TSLA prob=0.1647 threshold=0.6200 secondsSinceArm=20"
     ],
     "setup": [
-      "20:06:31.116 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.02912621359232 askOrFallback=369.86 qty=162 prob=0.3268 threshold=0.6200",
-      "20:06:31.116 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.02912621359232 bidOrFallback=369.49 qty=162 prob=0.3735 threshold=0.6240",
-      "20:06:31.172 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=44.74683544303802 askOrFallback=369.12 qty=162 prob=0.4016 threshold=0.6200",
-      "20:06:31.172 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=44.74683544303802 bidOrFallback=368.63 qty=162 prob=0.3961 threshold=0.6240",
-      "20:06:31.191 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.90048543689307 askOrFallback=368.73 qty=162 prob=0.3910 threshold=0.6200",
-      "20:06:31.192 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.90048543689307 bidOrFallback=368.46 qty=162 prob=0.3611 threshold=0.6240",
-      "20:06:31.216 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=43.78216911764696 askOrFallback=368.9 qty=162 prob=0.4320 threshold=0.6200",
-      "20:06:31.216 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=43.78216911764696 bidOrFallback=368.65 qty=162 prob=0.2860 threshold=0.6240",
-      "20:06:31.245 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.6124988910436 askOrFallback=370.5 qty=161 prob=0.3784 threshold=0.6200",
-      "20:06:31.245 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.6124988910436 bidOrFallback=369.33 qty=162 prob=0.3379 threshold=0.6240",
-      "20:06:31.300 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=51.89663035334514 askOrFallback=369.9 qty=162 prob=0.3927 threshold=0.6200",
-      "20:06:31.300 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=51.89663035334514 bidOrFallback=369.78 qty=162 prob=0.3167 threshold=0.6240",
-      "20:06:31.322 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=48.999206014927225 askOrFallback=370.15 qty=162 prob=0.3809 threshold=0.6200",
-      "20:06:31.322 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=48.999206014927225 bidOrFallback=369.51 qty=162 prob=0.3150 threshold=0.6240",
-      "20:06:31.350 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=40.55079855911518 askOrFallback=367.98 qty=163 prob=0.5200 threshold=0.6200",
-      "20:06:31.350 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=40.55079855911518 bidOrFallback=367.88 qty=163 prob=0.4381 threshold=0.6240",
-      "20:06:31.388 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.207274882522015 askOrFallback=368.45 qty=162 prob=0.5058 threshold=0.6200",
-      "20:06:31.388 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.207274882522015 bidOrFallback=368.15 qty=162 prob=0.3312 threshold=0.6240",
-      "20:06:31.433 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=47.976464866158096 askOrFallback=368.93 qty=162 prob=0.4796 threshold=0.6200",
-      "20:06:31.433 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=47.976464866158096 bidOrFallback=368.6 qty=162 prob=0.3964 threshold=0.6240"
+      "23:08:36.452 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.02912621359232 askOrFallback=369.86 qty=162 prob=0.3268 threshold=0.6200",
+      "23:08:36.452 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.02912621359232 bidOrFallback=369.49 qty=162 prob=0.3735 threshold=0.6240",
+      "23:08:36.509 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=44.74683544303802 askOrFallback=369.12 qty=162 prob=0.4016 threshold=0.6200",
+      "23:08:36.509 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=44.74683544303802 bidOrFallback=368.63 qty=162 prob=0.3961 threshold=0.6240",
+      "23:08:36.530 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.90048543689307 askOrFallback=368.73 qty=162 prob=0.3910 threshold=0.6200",
+      "23:08:36.530 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.90048543689307 bidOrFallback=368.46 qty=162 prob=0.3611 threshold=0.6240",
+      "23:08:36.555 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=43.78216911764696 askOrFallback=368.9 qty=162 prob=0.4320 threshold=0.6200",
+      "23:08:36.555 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=43.78216911764696 bidOrFallback=368.65 qty=162 prob=0.2860 threshold=0.6240",
+      "23:08:36.584 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.6124988910436 askOrFallback=370.5 qty=161 prob=0.3784 threshold=0.6200",
+      "23:08:36.584 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=49.6124988910436 bidOrFallback=369.33 qty=162 prob=0.3379 threshold=0.6240",
+      "23:08:36.640 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=51.89663035334514 askOrFallback=369.9 qty=162 prob=0.3927 threshold=0.6200",
+      "23:08:36.641 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=51.89663035334514 bidOrFallback=369.78 qty=162 prob=0.3167 threshold=0.6240",
+      "23:08:36.662 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=48.999206014927225 askOrFallback=370.15 qty=162 prob=0.3809 threshold=0.6200",
+      "23:08:36.662 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=48.999206014927225 bidOrFallback=369.51 qty=162 prob=0.3150 threshold=0.6240",
+      "23:08:36.693 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=40.55079855911518 askOrFallback=367.98 qty=163 prob=0.5200 threshold=0.6200",
+      "23:08:36.694 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=40.55079855911518 bidOrFallback=367.88 qty=163 prob=0.4381 threshold=0.6240",
+      "23:08:36.732 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.207274882522015 askOrFallback=368.45 qty=162 prob=0.5058 threshold=0.6200",
+      "23:08:36.732 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=42.207274882522015 bidOrFallback=368.15 qty=162 prob=0.3312 threshold=0.6240",
+      "23:08:36.782 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=47.976464866158096 askOrFallback=368.93 qty=162 prob=0.4796 threshold=0.6200",
+      "23:08:36.782 [Strategy-Actor-Thread-TSLA] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=47.976464866158096 bidOrFallback=368.6 qty=162 prob=0.3964 threshold=0.6240"
     ]
   },
   "setup_counts": {
@@ -575,7 +575,7 @@
   },
   "setup_margin_stats": {
     "NVDA.long": {
-      "avg": -0.0970089465325569,
+      "avg": -0.09700895712016917,
       "binary_count": 4,
       "count": 9445,
       "max": 0.20809999999999995,
@@ -589,7 +589,7 @@
       "p99": 0.06540000000000001
     },
     "NVDA.short": {
-      "avg": -0.09233516146109053,
+      "avg": -0.09233516146109091,
       "binary_count": 1,
       "count": 9445,
       "max": 0.15810000000000002,
@@ -603,7 +603,7 @@
       "p99": 0.06559999999999999
     },
     "QQQ.long": {
-      "avg": -0.0953067773788151,
+      "avg": -0.09530679982046669,
       "binary_count": 0,
       "count": 4456,
       "max": 0.2398,
@@ -617,7 +617,7 @@
       "p99": 0.08030000000000004
     },
     "QQQ.short": {
-      "avg": -0.13272185816876125,
+      "avg": -0.13272188061041307,
       "binary_count": 2,
       "count": 4456,
       "max": 0.14370000000000005,
@@ -631,7 +631,7 @@
       "p99": 0.02069999999999994
     },
     "SPY.long": {
-      "avg": -0.17632044936997116,
+      "avg": -0.17632044936997082,
       "binary_count": 0,
       "count": 6587,
       "max": 0.119,
@@ -645,7 +645,7 @@
       "p99": 0.016199999999999992
     },
     "SPY.short": {
-      "avg": -0.20543689084560499,
+      "avg": -0.20543690602702264,
       "binary_count": 0,
       "count": 6587,
       "max": 0.17379999999999995,
@@ -659,7 +659,7 @@
       "p99": 0.017199999999999993
     },
     "TQQQ.long": {
-      "avg": -0.05875364259028641,
+      "avg": -0.05875364259028661,
       "binary_count": 0,
       "count": 3212,
       "max": 0.34550000000000003,
@@ -673,7 +673,7 @@
       "p99": 0.1352
     },
     "TQQQ.short": {
-      "avg": -0.11093773349937731,
+      "avg": -0.11093776463262783,
       "binary_count": 0,
       "count": 3212,
       "max": 0.1452,
@@ -687,7 +687,7 @@
       "p99": 0.05030000000000001
     },
     "TSLA.long": {
-      "avg": -0.0978753045404208,
+      "avg": -0.09787530454042041,
       "binary_count": 2,
       "count": 6321,
       "max": 0.1915,
@@ -718,7 +718,7 @@
   "setup_probability_guard_counts": {},
   "setup_probability_stats": {
     "NVDA.long": {
-      "avg": 0.5223494441503441,
+      "avg": 0.5223494335627323,
       "binary_count": 0,
       "count": 9445,
       "max": 0.8281,
@@ -732,7 +732,7 @@
       "p99": 0.6788
     },
     "NVDA.short": {
-      "avg": 0.5294469454737957,
+      "avg": 0.5294469454737956,
       "binary_count": 0,
       "count": 9445,
       "max": 0.8021,
@@ -746,7 +746,7 @@
       "p99": 0.694
     },
     "QQQ.long": {
-      "avg": 0.5420756283662478,
+      "avg": 0.5420756059245951,
       "binary_count": 0,
       "count": 4456,
       "max": 0.8598,
@@ -760,7 +760,7 @@
       "p99": 0.7221
     },
     "QQQ.short": {
-      "avg": 0.5060950179533213,
+      "avg": 0.5060949955116703,
       "binary_count": 0,
       "count": 4456,
       "max": 0.7677,
@@ -774,7 +774,7 @@
       "p99": 0.6624
     },
     "SPY.long": {
-      "avg": 0.4674002125398512,
+      "avg": 0.4674002125398526,
       "binary_count": 0,
       "count": 6587,
       "max": 0.755,
@@ -788,7 +788,7 @@
       "p99": 0.6614
     },
     "SPY.short": {
-      "avg": 0.4378131471079399,
+      "avg": 0.437813131926522,
       "binary_count": 0,
       "count": 6587,
       "max": 0.7978,
@@ -802,7 +802,7 @@
       "p99": 0.6614
     },
     "TQQQ.long": {
-      "avg": 0.5483048879202989,
+      "avg": 0.5483048879203003,
       "binary_count": 0,
       "count": 3212,
       "max": 0.9655,
@@ -816,7 +816,7 @@
       "p99": 0.7409
     },
     "TQQQ.short": {
-      "avg": 0.5000809464508095,
+      "avg": 0.5000809153175587,
       "binary_count": 0,
       "count": 3212,
       "max": 0.7692,
@@ -830,7 +830,7 @@
       "p99": 0.6623
     },
     "TSLA.long": {
-      "avg": 0.5123040974529346,
+      "avg": 0.5123040974529343,
       "binary_count": 0,
       "count": 6321,
       "max": 0.8089,
@@ -844,7 +844,7 @@
       "p99": 0.6884
     },
     "TSLA.short": {
-      "avg": 0.5033181300427148,
+      "avg": 0.5033181300427151,
       "binary_count": 0,
       "count": 6321,
       "max": 0.7782,

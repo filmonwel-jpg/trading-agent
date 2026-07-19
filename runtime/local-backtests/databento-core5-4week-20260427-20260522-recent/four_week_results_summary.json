@@ -4,7 +4,7 @@
       "closed_trade_rows": [],
       "closed_trades": 0,
       "filled_order_rows": 0,
-      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_230833-trade-lifecycle-summary.csv",
       "lifecycle_metrics": {
         "ArmConfirmations": "0",
         "ArmConversionRate": "0.000000",
@@ -24,7 +24,7 @@
       },
       "lifecycle_rows": 1,
       "order_rows": 0,
-      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "orders_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_230833-orders.csv",
       "stream_sanity": {
         "entryRejectedEquityBars": 90,
         "equityBarsMissingContract": 0,
@@ -53,7 +53,7 @@
           "entry_rejected_equity_bars=90"
         ]
       },
-      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "stream_sanity_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/NVDA-2026_04_27-to-2026_05_22-20260627_230833-stream-sanity.json",
       "trade_log_pnl_sum": 0,
       "trade_log_rows": 0,
       "trade_pnl_sum": 0
@@ -62,7 +62,7 @@
       "closed_trade_rows": [],
       "closed_trades": 0,
       "filled_order_rows": 0,
-      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_230833-trade-lifecycle-summary.csv",
       "lifecycle_metrics": {
         "ArmConfirmations": "0",
         "ArmConversionRate": "0.000000",
@@ -82,7 +82,7 @@
       },
       "lifecycle_rows": 1,
       "order_rows": 0,
-      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "orders_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_230833-orders.csv",
       "stream_sanity": {
         "entryRejectedEquityBars": 107,
         "equityBarsMissingContract": 0,
@@ -111,7 +111,7 @@
           "entry_rejected_equity_bars=107"
         ]
       },
-      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "stream_sanity_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/QQQ-2026_04_27-to-2026_05_22-20260627_230833-stream-sanity.json",
       "trade_log_pnl_sum": 0,
       "trade_log_rows": 0,
       "trade_pnl_sum": 0
@@ -120,7 +120,7 @@
       "closed_trade_rows": [],
       "closed_trades": 0,
       "filled_order_rows": 0,
-      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_230833-trade-lifecycle-summary.csv",
       "lifecycle_metrics": {
         "ArmConfirmations": "0",
         "ArmConversionRate": "0.000000",
@@ -140,7 +140,7 @@
       },
       "lifecycle_rows": 1,
       "order_rows": 0,
-      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "orders_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_230833-orders.csv",
       "stream_sanity": {
         "entryRejectedEquityBars": 154,
         "equityBarsMissingContract": 0,
@@ -169,7 +169,7 @@
           "entry_rejected_equity_bars=154"
         ]
       },
-      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "stream_sanity_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/SPY-2026_04_27-to-2026_05_22-20260627_230833-stream-sanity.json",
       "trade_log_pnl_sum": 0,
       "trade_log_rows": 0,
       "trade_pnl_sum": 0
@@ -178,7 +178,7 @@
       "closed_trade_rows": [],
       "closed_trades": 0,
       "filled_order_rows": 0,
-      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_230833-trade-lifecycle-summary.csv",
       "lifecycle_metrics": {
         "ArmConfirmations": "0",
         "ArmConversionRate": "0.000000",
@@ -198,7 +198,7 @@
       },
       "lifecycle_rows": 1,
       "order_rows": 0,
-      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "orders_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_230833-orders.csv",
       "stream_sanity": {
         "entryRejectedEquityBars": 2456,
         "equityBarsMissingContract": 0,
@@ -227,17 +227,16 @@
           "entry_rejected_equity_bars=2456"
         ]
       },
-      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
-      "trade_log_pnl_sum": 130.0,
-      "trade_log_rows": 1,
-      "trade_pnl_sum": 0,
-      "trades_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260626_195622-trades.csv"
+      "stream_sanity_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TQQQ-2026_04_27-to-2026_05_22-20260627_230833-stream-sanity.json",
+      "trade_log_pnl_sum": 0,
+      "trade_log_rows": 0,
+      "trade_pnl_sum": 0
     },
     "TSLA": {
       "closed_trade_rows": [],
       "closed_trades": 0,
       "filled_order_rows": 0,
-      "lifecycle_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_200629-trade-lifecycle-summary.csv",
+      "lifecycle_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_230833-trade-lifecycle-summary.csv",
       "lifecycle_metrics": {
         "ArmConfirmations": "0",
         "ArmConversionRate": "0.000000",
@@ -257,7 +256,7 @@
       },
       "lifecycle_rows": 1,
       "order_rows": 0,
-      "orders_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_200629-orders.csv",
+      "orders_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_230833-orders.csv",
       "stream_sanity": {
         "entryRejectedEquityBars": 3,
         "equityBarsMissingContract": 0,
@@ -286,7 +285,7 @@
           "entry_rejected_equity_bars=3"
         ]
       },
-      "stream_sanity_file": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_200629-stream-sanity.json",
+      "stream_sanity_file": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/TSLA-2026_04_27-to-2026_05_22-20260627_230833-stream-sanity.json",
       "trade_log_pnl_sum": 0,
       "trade_log_rows": 0,
       "trade_pnl_sum": 0
@@ -304,15 +303,15 @@
   "env": {
     "END_DATE": "2026-05-22",
     "JAVA_TOOL_OPTIONS": "-Dbacktest.strategy.tradeAmount=60000 -Dtrading.trade-amount=60000 -Dtrading.risk.max-order-notional=70000 -Dbacktest.strategy.maxOrderNotional=70000",
-    "LIFECYCLE_DIR": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports",
-    "RECORDED_EVENTS": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz",
-    "RUN_DIR": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run",
-    "RUN_LOG": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_200624.log",
-    "RUN_TS": "20260627_200624",
-    "SETUP_DIR": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854",
-    "SETUP_THRESHOLDS_FILE": "/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_runtime_thresholds.properties",
+    "LIFECYCLE_DIR": "/Users/FXG06FA/trading-agent-main/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports",
+    "RECORDED_EVENTS": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/databento-20260427-20260522-core5-4week-daily-prevclose.ndjson.gz",
+    "RUN_DIR": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run",
+    "RUN_LOG": "/Users/FXG06FA/trading-agent-main/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_230823.log",
+    "RUN_TS": "20260627_230823",
+    "SETUP_DIR": "/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854",
+    "SETUP_THRESHOLDS_FILE": "/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_runtime_thresholds.properties",
     "START_DATE": "2026-04-27",
-    "SYMBOLS_FILE": "/Users/filmonghezehey/trading-agent/worktrees/databento/config/databento_core_5_symbols.txt"
+    "SYMBOLS_FILE": "/Users/FXG06FA/trading-agent-main/config/databento_core_5_symbols.txt"
   },
   "log_validation": {
     "counters": {
@@ -325,10 +324,10 @@
       "wrapper_completed_5_failed_0": 1
     },
     "first_markers": {
-      "lifecycle_route_manifest_validated": "20:06:30.322 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.ROUTE] Validated lifecycle/micro route manifest schema symbol=TSLA manifest=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/lifecycle_micro_route_manifest.json",
-      "setup_manifest_loaded": "20:06:30.205 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.SCHEMA] Loaded setup_manifest.json feature schemas symbol=TSLA featureCount=34 regimeFeatureCount=24 path=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_manifest.json",
-      "setup_thresholds_file": "[BACKTEST] setup_thresholds_file=/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_runtime_thresholds.properties",
-      "threshold_config": "20:06:30.328 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][DATA][AI.CONFIG] symbol=TSLA thresholds base{le=0.6120 se=0.6120 lx=0.5800 sx=0.6000 regime=0.5000} open30{le=0.6200 se=0.6240 lx=0.5800 sx=0.6000} choppy{le=0.6560 se=0.6440 lx=0.5800 sx=0.6000} trend{le=0.6360 se=0.6480 lx=0.5800 sx=0.6000} volatile{le=0.6040 se=0.6080 lx=0.5800 sx=0.6000}"
+      "lifecycle_route_manifest_validated": "23:08:35.046 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.ROUTE] Validated lifecycle/micro route manifest schema symbol=TSLA manifest=/Users/FXG06FA/trading-agent-main/runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports/lifecycle_micro_route_manifest.json",
+      "setup_manifest_loaded": "23:08:34.842 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][INFO][AI.SCHEMA] Loaded setup_manifest.json feature schemas symbol=TSLA featureCount=34 regimeFeatureCount=24 path=/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_manifest.json",
+      "setup_thresholds_file": "[BACKTEST] setup_thresholds_file=/Users/FXG06FA/trading-agent-main/runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854/setup_runtime_thresholds.properties",
+      "threshold_config": "23:08:35.058 [main] INFO com.calgary.fili.trader.bot.strategy.PingPongStrategy -- >>> [FLOW][DATA][AI.CONFIG] symbol=TSLA thresholds base{le=0.6120 se=0.6120 lx=0.5800 sx=0.6000 regime=0.5000} open30{le=0.6200 se=0.6240 lx=0.5800 sx=0.6000} choppy{le=0.6560 se=0.6440 lx=0.5800 sx=0.6000} trend{le=0.6360 se=0.6480 lx=0.5800 sx=0.6000} volatile{le=0.6040 se=0.6080 lx=0.5800 sx=0.6000}"
     },
     "previous_close_counts": {
       "NVDA": 20,

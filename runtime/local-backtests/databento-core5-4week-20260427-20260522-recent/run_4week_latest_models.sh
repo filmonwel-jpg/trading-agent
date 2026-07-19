@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/Users/filmonghezehey/trading-agent/worktrees/databento"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 cd "$ROOT"
 
 OUT_BASE="$ROOT/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent"
@@ -15,6 +16,19 @@ RUN_LOG="$RUN_DIR/databento-core5-4week-recent-$RUN_TS.log"
 LATEST_ENV="$RUN_DIR/latest_run.env"
 
 mkdir -p "$RUN_DIR"
+
+for required_path in \
+  "$RECORDED_EVENTS" \
+  "$SETUP_DIR" \
+  "$SETUP_DIR/setup_runtime_thresholds.properties" \
+  "$LIFECYCLE_DIR" \
+  "$SYMBOLS_FILE" \
+  "$ROOT/scripts/run_databento_historical_ibkr_sim_backtest.sh"; do
+  if [[ ! -e "$required_path" ]]; then
+    echo "[RUN4W][ERROR] missing required path: $required_path" >&2
+    exit 2
+  fi
+done
 
 # Match the existing recorded-replay sizing/risk environment used in the prior local checks.
 TRADE_JAVA_TOOL_OPTIONS="-Dbacktest.strategy.tradeAmount=60000 -Dtrading.trade-amount=60000 -Dtrading.risk.max-order-notional=70000 -Dbacktest.strategy.maxOrderNotional=70000"

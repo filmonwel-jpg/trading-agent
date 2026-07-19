@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-BASE = Path('/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent')
+BASE = Path(__file__).resolve().parent
 RUN_DIR = BASE / 'run'
 LATEST_ENV = RUN_DIR / 'latest_run.env'
 SLICE_MANIFEST = BASE / 'databento-20260427-20260522-core5-4week-daily-prevclose.manifest.json'

@@ -1,0 +1,94 @@
+{
+  "generated_at_utc": "2026-06-28T12:27:22.862594Z",
+  "schema_version": "setup_downstream_training_rows_v1",
+  "input_30s_csv": "runtime/research_runs/input_cache/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv",
+  "labels_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/setup_downstream_confirmable_labels_v1.csv",
+  "outputs": {
+    "training_rows_csv": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv",
+    "manifest_json": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_training_rows/setup_downstream_training_rows_v1_manifest.json",
+    "summary_md": "runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_training_rows/setup_downstream_training_rows_v1_summary.md"
+  },
+  "join_tolerance_seconds": 31,
+  "labels_rows": 4470,
+  "input_30s_rows": 830700,
+  "joined_rows": 4470,
+  "matched_rows": 4470,
+  "unmatched_rows": 0,
+  "match_rate": 1.0,
+  "join_abs_epoch_delta_seconds": {
+    "min": 1.0,
+    "p50": 1.0,
+    "p90": 1.0,
+    "max": 1.0
+  },
+  "positive_counts": {
+    "long": 263,
+    "short": 108
+  },
+  "by_symbol_side": {
+    "NVDA.long": {
+      "rows": 843,
+      "matched_rows": 843,
+      "long_positive": 82,
+      "short_positive": 0
+    },
+    "NVDA.short": {
+      "rows": 866,
+      "matched_rows": 866,
+      "long_positive": 0,
+      "short_positive": 56
+    },
+    "QQQ.long": {
+      "rows": 448,
+      "matched_rows": 448,
+      "long_positive": 0,
+      "short_positive": 0
+    },
+    "QQQ.short": {
+      "rows": 106,
+      "matched_rows": 106,
+      "long_positive": 0,
+      "short_positive": 0
+    },
+    "SPY.long": {
+      "rows": 130,
+      "matched_rows": 130,
+      "long_positive": 0,
+      "short_positive": 0
+    },
+    "SPY.short": {
+      "rows": 97,
+      "matched_rows": 97,
+      "long_positive": 0,
+      "short_positive": 0
+    },
+    "TQQQ.long": {
+      "rows": 771,
+      "matched_rows": 771,
+      "long_positive": 142,
+      "short_positive": 0
+    },
+    "TQQQ.short": {
+      "rows": 201,
+      "matched_rows": 201,
+      "long_positive": 0,
+      "short_positive": 36
+    },
+    "TSLA.long": {
+      "rows": 666,
+      "matched_rows": 666,
+      "long_positive": 39,
+      "short_positive": 0
+    },
+    "TSLA.short": {
+      "rows": 342,
+      "matched_rows": 342,
+      "long_positive": 0,
+      "short_positive": 16
+    }
+  },
+  "warnings": [
+    "Rows are replay setup arms, not all possible 30s bars; use as arm-quality/filter training evidence unless a broader all-candidate replay is generated.",
+    "Nearest-epoch join is required because replay arm epochs and 30s BarEpochSec can differ by approximately one second."
+  ]
+}
