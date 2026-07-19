@@ -308,7 +308,14 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
             strategy.onOrderFlowSnapshot(event.atBidVol, event.atAskVol);
         }
         strategy.onTickForExitsOnly(event.close);
-        strategy.onSourceBar(event.barEpochSec, event.open, event.high, event.low, event.close, event.volume, event.wap > 0.0 ? event.wap : event.close);
+        strategy.onSourceBar(
+            event.barEpochSec, event.open, event.high, event.low, event.close, event.volume,
+            event.wap > 0.0 ? event.wap : event.close,
+            event.tradeCount, event.quoteCount, event.atBidVol, event.atAskVol,
+            event.tradeSecondsPresent, event.quoteUpdateSecondsPresent, event.quoteStateSecondsValid, event.syntheticSeconds,
+            event.tradeCoverage, event.quoteUpdateCoverage, event.quoteStateCoverage, event.syntheticCoverage,
+            event.quoteAgeMsMean, event.quoteAgeMsMax, event.validSpreadCoverage, event.lockedCrossedSeconds, event.qualityScore
+        );
         if (!eodFlattenRequested && !barTs.toLocalTime().isBefore(EOD_FLATTEN_TIME)) {
             eodFlattenRequested = true;
             strategy.forceEndOfDayFlatten(event.close);

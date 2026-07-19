@@ -5,11 +5,15 @@ import java.lang.reflect.Constructor;
 import java.time.LocalDateTime;
 import java.util.Deque;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiFunction;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -227,6 +231,52 @@ class PingPongStrategyAiEvaluationTest {
             verify(longEntry, times(1)).predictProbability(any(float[].class));
             verify(shortEntry, times(1)).predictProbability(any(float[].class));
             verify(parent, never()).placeTrade(anyString(), anyString(), anyDouble(), anyInt(), anyString());
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
+    void downstreamSetupFilterRunsAfterNormalSetupArmAndBeforeEntryExecution() throws Exception {
+        IBKRTrader parent = mock(IBKRTrader.class);
+        PingPongStrategy strategy = newStrategy(parent);
+        try {
+            seedFeatureState(strategy);
+            ReflectionTestUtils.setField(strategy, "allowNewEntries", true);
+            ReflectionTestUtils.setField(strategy, "positionSynced", true);
+            ReflectionTestUtils.setField(strategy, "currentPosition", 0);
+            strategy.setAiThresholds(0.68, 0.63, 0.58, 0.60);
+
+            AtomicBoolean setupModelEvaluated = new AtomicBoolean(false);
+            AiPredictor longEntry = mock(AiPredictor.class);
+            AiPredictor shortEntry = mock(AiPredictor.class);
+            AiPredictor longExit = mock(AiPredictor.class);
+            AiPredictor shortExit = mock(AiPredictor.class);
+            when(longEntry.predictProbability(any(float[].class))).thenAnswer(invocation -> {
+                setupModelEvaluated.set(true);
+                return 0.74;
+            });
+            when(shortEntry.predictProbability(any(float[].class))).thenReturn(0.61);
+            configureBasePredictors(strategy, longEntry, shortEntry, longExit, shortExit);
+
+            BiFunction<String, Map<String, Float>, DownstreamSetupFilter.Decision> blockingFilter = (side, features) -> {
+                assertTrue(setupModelEvaluated.get(), "normal setup model should evaluate before downstream filter");
+                assertEquals("long", side);
+                assertEquals(0.74f, features.get("SetupProb"), 1.0e-6f);
+                assertEquals(0.68f, features.get("SetupThreshold"), 1.0e-6f);
+                assertEquals(0.06f, features.get("SetupThresholdMargin"), 1.0e-6f);
+                assertEquals(1.0f, features.get("SetupArbitrationReason_only_long_passed"), 1.0e-6f);
+                return new DownstreamSetupFilter.Decision(false, 0.49, 0.50, 139, "unitTestDownstreamSetupFilter");
+            };
+            ReflectionTestUtils.setField(strategy, "downstreamSetupFilterScorer", blockingFilter);
+
+            ReflectionTestUtils.invokeMethod(strategy, "askArtificialIntelligence");
+
+            verify(longEntry, times(1)).predictProbability(any(float[].class));
+            verify(shortEntry, times(1)).predictProbability(any(float[].class));
+            verify(parent, never()).placeTrade(anyString(), anyString(), anyDouble(), anyInt(), anyString());
+            assertFalse((Boolean) ReflectionTestUtils.getField(strategy, "microLongEntryArmed"));
+            assertFalse((Boolean) ReflectionTestUtils.getField(strategy, "microShortEntryArmed"));
         } finally {
             strategy.stop();
         }

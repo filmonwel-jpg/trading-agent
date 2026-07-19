@@ -1854,7 +1854,14 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         flowConditionDebug("DATABENTO->AI.BAR", "FORWARD_BAR_TO_STRATEGY", canForward, "positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
         if (canForward) {
             shopStrategy.onTickForExitsOnly(event.close);
-            shopStrategy.onSourceBar(event.barEpochSec, event.open, event.high, event.low, event.close, event.volume, event.wap > 0.0 ? event.wap : event.close);
+            shopStrategy.onSourceBar(
+                event.barEpochSec, event.open, event.high, event.low, event.close, event.volume,
+                event.wap > 0.0 ? event.wap : event.close,
+                event.tradeCount, event.quoteCount, event.atBidVol, event.atAskVol,
+                event.tradeSecondsPresent, event.quoteUpdateSecondsPresent, event.quoteStateSecondsValid, event.syntheticSeconds,
+                event.tradeCoverage, event.quoteUpdateCoverage, event.quoteStateCoverage, event.syntheticCoverage,
+                event.quoteAgeMsMean, event.quoteAgeMsMax, event.validSpreadCoverage, event.lockedCrossedSeconds, event.qualityScore
+            );
         }
     }
 

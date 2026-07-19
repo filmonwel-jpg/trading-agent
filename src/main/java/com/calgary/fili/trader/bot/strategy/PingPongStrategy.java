@@ -31,6 +31,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +82,7 @@ public class PingPongStrategy implements TradingStrategy {
     private record MicroBar(long epoch, double open, double high, double low, double close, long volume, double wap) {}
 
     private record EntrySignal(String side, String action, double probability, double threshold,
-                               int quantity, double referencePrice) {
+                               int quantity, double referencePrice, String arbitrationReason) {
         double margin() {
             return probability - threshold;
         }
@@ -371,8 +372,13 @@ public class PingPongStrategy implements TradingStrategy {
     private static final boolean LIFECYCLE_EXIT_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.exit.lifecycleEnabled", "false"));
     private static final boolean LIFECYCLE_DIAGNOSTIC_FALLBACK = Boolean.parseBoolean(System.getProperty("strategy.lifecycle.diagnosticFallback", "false"));
     private static final boolean MICRO_ENTRY_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.entryEnabled", "false"));
+    private static final boolean MICRO_ENTRY_RESEARCH_NO_TRADE = Boolean.parseBoolean(System.getProperty("strategy.micro.entryResearchNoTrade", "false"));
     private static final boolean MICRO_EXIT_GUARD_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.micro.exitGuardEnabled", "false"));
     private static final boolean POSTHOC_CALIBRATION_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.calibration.posthocEnabled", "true"));
+    private static final boolean DOWNSTREAM_SETUP_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("strategy.downstreamSetupFilter.enabled", "false"));
+    private static final String DOWNSTREAM_SETUP_FILTER_ROUTE_MANIFEST = System.getProperty("strategy.downstreamSetupFilter.routeManifest", "").trim();
+    private static final String DOWNSTREAM_SETUP_FILTER_FEATURES_CSV = System.getProperty("strategy.downstreamSetupFilter.featuresCsv", "").trim();
+    private static final boolean DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED = Boolean.parseBoolean(System.getProperty("strategy.downstreamSetupFilter.failClosed", "true"));
     private static final String LIFECYCLE_MODEL_DIR = System.getProperty("strategy.lifecycle.modelDir", "").trim();
     private static final String MICRO_MODEL_DIR = System.getProperty("strategy.micro.modelDir", "").trim();
     private static final double LIFECYCLE_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.longThreshold", "0.60"));
@@ -632,6 +638,9 @@ public class PingPongStrategy implements TradingStrategy {
     private LazyAiPredictor shortMicroEntryAi;
     private LazyAiPredictor longMicroExitGuardAi;
     private LazyAiPredictor shortMicroExitGuardAi;
+    private DownstreamSetupFilter downstreamSetupFilter;
+    private DownstreamSetupFeatureStore downstreamSetupFeatureStore;
+    private BiFunction<String, Map<String, Float>, DownstreamSetupFilter.Decision> downstreamSetupFilterScorer;
     private final Map<String, ProbabilityCalibrator> upgradedRouteCalibrators = new ConcurrentHashMap<>();
     private final Map<String, Double> upgradedRouteThresholds = new ConcurrentHashMap<>();
     private volatile List<String> setupFeatureColumns;
@@ -799,12 +808,60 @@ public class PingPongStrategy implements TradingStrategy {
     private double bucketClose = 0.0;
     private long bucketVolume = 0L;
     private double bucketWapSum = 0.0;
+    private long sourceQualityBucketStartEpoch = -1L;
+    private long sourceQualityTradeCount = 0L;
+    private long sourceQualityQuoteCount = 0L;
+    private long sourceQualityAtBidVol = 0L;
+    private long sourceQualityAtAskVol = 0L;
+    private double sourceQualityTradeSecondsPresent = 0.0;
+    private double sourceQualityQuoteUpdateSecondsPresent = 0.0;
+    private double sourceQualityQuoteStateSecondsValid = 0.0;
+    private double sourceQualitySyntheticSeconds = 0.0;
+    private double sourceQualityValidSpreadSeconds = 0.0;
+    private double sourceQualityLockedCrossedSeconds = 0.0;
+    private double sourceQualityTradeCoverageSum = 0.0;
+    private int sourceQualityTradeCoverageCount = 0;
+    private double sourceQualityQuoteUpdateCoverageSum = 0.0;
+    private int sourceQualityQuoteUpdateCoverageCount = 0;
+    private double sourceQualityQuoteStateCoverageSum = 0.0;
+    private int sourceQualityQuoteStateCoverageCount = 0;
+    private double sourceQualitySyntheticCoverageSum = 0.0;
+    private int sourceQualitySyntheticCoverageCount = 0;
+    private double sourceQualityValidSpreadCoverageSum = 0.0;
+    private int sourceQualityValidSpreadCoverageCount = 0;
+    private int sourceQualitySnapshotCount = 0;
+    private double sourceQualityScoreSum = 0.0;
+    private int sourceQualityScoreCount = 0;
+    private double sourceQualityQuoteAgeMsMeanSum = 0.0;
+    private int sourceQualityQuoteAgeMsMeanCount = 0;
+    private double sourceQualityQuoteAgeMsMax = 0.0;
+    private double sourceQualitySpreadBpsSum = 0.0;
+    private double sourceQualitySpreadBpsMin = Double.NaN;
+    private double sourceQualitySpreadBpsMax = Double.NaN;
+    private int sourceQualitySpreadBpsCount = 0;
+    private double sourceQualityL1ImbalanceSum = 0.0;
+    private double sourceQualityL1ImbalanceSqSum = 0.0;
+    private int sourceQualityL1ImbalanceCount = 0;
+    private long sourceQualityLastObservedEpoch = -1L;
+    private double sourceQualityLastOpen = Double.NaN;
+    private double sourceQualityLastBid = Double.NaN;
+    private double sourceQualityLastAsk = Double.NaN;
+    private long sourceQualityLastBidSize = 0L;
+    private long sourceQualityLastAskSize = 0L;
+    private double sourceQualityBidSum = 0.0;
+    private double sourceQualityAskSum = 0.0;
+    private double sourceQualityBidSizeSum = 0.0;
+    private double sourceQualityAskSizeSum = 0.0;
+    private int sourceQualityQuoteSampleCount = 0;
+    private double sourceQualityLastSpreadBps = Double.NaN;
+    private double sourceQualityLastL1Imbalance = Double.NaN;
     private final Deque<Double> training30sReturnWindow20 = new ArrayDeque<>();
     private final Deque<Double> training30sVolumeWindow20 = new ArrayDeque<>();
     private final Deque<Double> training30sOptionFlowWindow20 = new ArrayDeque<>();
     private Map<String, Float> lastTraining30sFeatureValues = new HashMap<>();
     private double lastTraining30sClose = 0.0;
     private long lastTraining30sEpoch = 0L;
+    private double lastFinalized30sWap = 0.0;
     private long current30sAiDecisionEpoch = 0L;
 
     private boolean microLongEntryArmed = false;
@@ -1058,6 +1115,7 @@ public class PingPongStrategy implements TradingStrategy {
         this.longMicroExitGuardAi = loadUpgradedRouteModel("long_micro_exit_guard_5s.onnx", microModelDir, MICRO_EXIT_GUARD_ENABLED, "5s long micro exit guard");
         this.shortMicroExitGuardAi = loadUpgradedRouteModel("short_micro_exit_guard_5s.onnx", microModelDir, MICRO_EXIT_GUARD_ENABLED, "5s short micro exit guard");
         validateUpgradedRouteManifest(lifecycleModelDir, microModelDir);
+        loadDownstreamSetupFilter();
 
         if (LIFECYCLE_EXIT_ENABLED && (this.longExitLifecycleAi == null || this.shortExitLifecycleAi == null)) {
             if (LIFECYCLE_DIAGNOSTIC_FALLBACK) {
@@ -1116,6 +1174,48 @@ public class PingPongStrategy implements TradingStrategy {
                 flowError("AI.ROUTE", "Missing required upgraded route model symbol=" + symbol + " route=" + routeName + " model=" + modelName + " reason=" + exception.getMessage());
             }
             return null;
+        }
+
+    }
+
+    private void loadDownstreamSetupFilter() {
+        if (!DOWNSTREAM_SETUP_FILTER_ENABLED) {
+            return;
+        }
+        if (DOWNSTREAM_SETUP_FILTER_ROUTE_MANIFEST.isBlank()) {
+            handleDownstreamSetupFilterLoadFailure("missing strategy.downstreamSetupFilter.routeManifest");
+            return;
+        }
+        try {
+            this.downstreamSetupFilter = DownstreamSetupFilter.load(Path.of(DOWNSTREAM_SETUP_FILTER_ROUTE_MANIFEST));
+            this.downstreamSetupFilterScorer = this.downstreamSetupFilter::score;
+            if (!DOWNSTREAM_SETUP_FILTER_FEATURES_CSV.isBlank()) {
+                this.downstreamSetupFeatureStore = DownstreamSetupFeatureStore.load(Path.of(DOWNSTREAM_SETUP_FILTER_FEATURES_CSV));
+            }
+            flowInfo(
+                "AI.DOWNSTREAM_SETUP_FILTER",
+                "Loaded controlled downstream setup-quality filter symbol=" + symbol
+                    + " manifest=" + this.downstreamSetupFilter.manifestPath()
+                    + " featureSidecar=" + (this.downstreamSetupFeatureStore == null ? "<none>" : this.downstreamSetupFeatureStore.sourceCsv())
+                    + " featureSidecarRows=" + (this.downstreamSetupFeatureStore == null ? 0 : this.downstreamSetupFeatureStore.rowCount())
+                    + " failClosed=" + DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
+                    + " status=research_only_no_go"
+            );
+        } catch (Exception exception) {
+            handleDownstreamSetupFilterLoadFailure(exception.getMessage());
+        }
+    }
+
+    private void handleDownstreamSetupFilterLoadFailure(String reason) {
+        String message = "Downstream setup-quality filter unavailable symbol=" + symbol
+            + " reason=" + reason
+            + " failClosed=" + DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
+            + " status=research_only_no_go";
+        if (DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED) {
+            allowNewEntries = false;
+            flowError("AI.DOWNSTREAM_SETUP_FILTER", message + " action=disable_new_entries");
+        } else {
+            flowWarn("AI.DOWNSTREAM_SETUP_FILTER", message + " action=continue_without_filter");
         }
     }
 
@@ -1500,8 +1600,23 @@ public class PingPongStrategy implements TradingStrategy {
     }
 
     private double upgradedRouteThreshold(String modelName, double fallback) {
+        if (hasExplicitRouteThresholdOverride(modelName)) {
+            return fallback;
+        }
         Double threshold = upgradedRouteThresholds.get(modelName);
         return threshold == null ? fallback : threshold;
+    }
+
+    private boolean hasExplicitRouteThresholdOverride(String modelName) {
+        return switch (modelName) {
+            case "longMicroEntryAi" -> System.getProperty("strategy.micro.longEntryThreshold") != null;
+            case "shortMicroEntryAi" -> System.getProperty("strategy.micro.shortEntryThreshold") != null;
+            case "longExitLifecycleAi" -> System.getProperty("strategy.exit.lifecycle.longThreshold") != null;
+            case "shortExitLifecycleAi" -> System.getProperty("strategy.exit.lifecycle.shortThreshold") != null;
+            case "longMicroExitGuardAi" -> System.getProperty("strategy.micro.longExitGuardThreshold") != null;
+            case "shortMicroExitGuardAi" -> System.getProperty("strategy.micro.shortExitGuardThreshold") != null;
+            default -> false;
+        };
     }
 
     private double predictUpgradedRouteProbability(String modelName, LazyAiPredictor predictor, float[] features) {
@@ -1767,7 +1882,7 @@ public class PingPongStrategy implements TradingStrategy {
                 if (event instanceof StrategyEvent.TickEvent e) {
                     handleTickForExitsOnly(e.price);
                 } else if (event instanceof StrategyEvent.BarEvent e) {
-                    handle5SecondBar(e.time, e.open, e.high, e.low, e.close, e.volume, e.wap);
+                    handle5SecondBar(e);
                 } else if (event instanceof StrategyEvent.TapeTradeEvent e) {
                     handleTapeTrade(e.tradePrice, e.tradeSize, e.bidPrice, e.askPrice);
                 } else if (event instanceof StrategyEvent.OptionVolumeEvent e) {
@@ -2119,11 +2234,37 @@ public class PingPongStrategy implements TradingStrategy {
         eventQueue.offer(new StrategyEvent.BarEvent(time, open, high, low, close, volume, wap));
     }
 
+    public void onSourceBar(long time, double open, double high, double low, double close, long volume, double wap,
+                            long tradeCount, long quoteCount, long atBidVol, long atAskVol,
+                            double tradeSecondsPresent, double quoteUpdateSecondsPresent,
+                            double quoteStateSecondsValid, double syntheticSeconds,
+                            double tradeCoverage, double quoteUpdateCoverage, double quoteStateCoverage,
+                            double syntheticCoverage, double quoteAgeMsMean, double quoteAgeMsMax,
+                            double validSpreadCoverage, double lockedCrossedSeconds, double qualityScore) {
+        eventQueue.offer(new StrategyEvent.BarEvent(
+            time, open, high, low, close, volume, wap, true, tradeCount, quoteCount, atBidVol, atAskVol,
+            tradeSecondsPresent, quoteUpdateSecondsPresent, quoteStateSecondsValid, syntheticSeconds,
+            tradeCoverage, quoteUpdateCoverage, quoteStateCoverage, syntheticCoverage,
+            quoteAgeMsMean, quoteAgeMsMax, validSpreadCoverage, lockedCrossedSeconds, qualityScore
+        ));
+    }
+
     public void on5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
         onSourceBar(time, open, high, low, close, volume, wap);
     }
 
     private void handle5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
+        handle5SecondBar(new StrategyEvent.BarEvent(time, open, high, low, close, volume, wap));
+    }
+
+    private void handle5SecondBar(StrategyEvent.BarEvent sourceBar) {
+        long time = sourceBar.time;
+        double open = sourceBar.open;
+        double high = sourceBar.high;
+        double low = sourceBar.low;
+        double close = sourceBar.close;
+        long volume = sourceBar.volume;
+        double wap = sourceBar.wap;
         // Method name is legacy, but the input stream may now be 1-second bars from Databento.
         // The only thing that matters here is the event timestamp; we rebucket incoming source bars into fixed
         // 30-second AI bars regardless of the source cadence.
@@ -2151,6 +2292,8 @@ public class PingPongStrategy implements TradingStrategy {
                 return;
             }
             startNew30SecondBucket(nextBucketStart, open, high, low, close, volume, wap);
+            startSourceQualityBucket(nextBucketStart);
+            accumulateSourceQuality(sourceBar);
             if (time >= bucketStartEpoch + 29L) {
                 finalizeCurrent30SecondBucket();
             }
@@ -2170,6 +2313,8 @@ public class PingPongStrategy implements TradingStrategy {
                 return;
             }
             startNew30SecondBucket(nextBucketStart, open, high, low, close, volume, wap);
+            startSourceQualityBucket(nextBucketStart);
+            accumulateSourceQuality(sourceBar);
             if (time >= bucketStartEpoch + 29L) {
                 finalizeCurrent30SecondBucket();
             }
@@ -2177,6 +2322,7 @@ public class PingPongStrategy implements TradingStrategy {
         }
 
         accumulateIntoCurrent30SecondBucket(high, low, close, volume, wap);
+        accumulateSourceQuality(sourceBar);
         if (time >= bucketStartEpoch + 29L) {
             finalizeCurrent30SecondBucket();
         }
@@ -2362,6 +2508,17 @@ public class PingPongStrategy implements TradingStrategy {
                     long confirmedArmEpoch = microArmEpoch;
                     emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "long", confirmedArmEpoch, microBar.epoch(), prob, threshold, qty, microBar.close()));
                     clearMicroEntryArms("long-confirmed");
+                    if (MICRO_ENTRY_RESEARCH_NO_TRADE) {
+                        flowInfo(
+                            "AI.MICRO.ENTRY",
+                            "Research no-trade long confirmation symbol=" + symbol
+                                + " armEpoch=" + confirmedArmEpoch
+                                + " confirmEpoch=" + microBar.epoch()
+                                + " prob=" + formatProb(prob)
+                                + " threshold=" + formatProb(threshold)
+                        );
+                        return;
+                    }
                     this.inFlightOrder = true;
                     parent.placeTrade(symbol, "BUY", priceForAction("BUY", microBar.close()), qty, "FAST_LMT");
                     return;
@@ -2383,6 +2540,17 @@ public class PingPongStrategy implements TradingStrategy {
                     long confirmedArmEpoch = microArmEpoch;
                     emitLifecycleTelemetry(() -> lifecycleTelemetryListener.onMicroEntryConfirmed(symbol, "short", confirmedArmEpoch, microBar.epoch(), prob, threshold, qty, microBar.close()));
                     clearMicroEntryArms("short-confirmed");
+                    if (MICRO_ENTRY_RESEARCH_NO_TRADE) {
+                        flowInfo(
+                            "AI.MICRO.ENTRY",
+                            "Research no-trade short confirmation symbol=" + symbol
+                                + " armEpoch=" + confirmedArmEpoch
+                                + " confirmEpoch=" + microBar.epoch()
+                                + " prob=" + formatProb(prob)
+                                + " threshold=" + formatProb(threshold)
+                        );
+                        return;
+                    }
                     this.inFlightOrder = true;
                     parent.placeTrade(symbol, "SELL", priceForAction("SELL", microBar.close()), qty, "FAST_LMT");
                 }
@@ -2525,11 +2693,245 @@ public class PingPongStrategy implements TradingStrategy {
         bucketWapSum += (effectiveWap * Math.max(0L, volume));
     }
 
+    private void startSourceQualityBucket(long bucketEpoch) {
+        sourceQualityBucketStartEpoch = bucketEpoch;
+        sourceQualityTradeCount = 0L;
+        sourceQualityQuoteCount = 0L;
+        sourceQualityAtBidVol = 0L;
+        sourceQualityAtAskVol = 0L;
+        sourceQualityTradeSecondsPresent = 0.0;
+        sourceQualityQuoteUpdateSecondsPresent = 0.0;
+        sourceQualityQuoteStateSecondsValid = 0.0;
+        sourceQualitySyntheticSeconds = 0.0;
+        sourceQualityValidSpreadSeconds = 0.0;
+        sourceQualityLockedCrossedSeconds = 0.0;
+        sourceQualityTradeCoverageSum = 0.0;
+        sourceQualityTradeCoverageCount = 0;
+        sourceQualityQuoteUpdateCoverageSum = 0.0;
+        sourceQualityQuoteUpdateCoverageCount = 0;
+        sourceQualityQuoteStateCoverageSum = 0.0;
+        sourceQualityQuoteStateCoverageCount = 0;
+        sourceQualitySyntheticCoverageSum = 0.0;
+        sourceQualitySyntheticCoverageCount = 0;
+        sourceQualityValidSpreadCoverageSum = 0.0;
+        sourceQualityValidSpreadCoverageCount = 0;
+        sourceQualitySnapshotCount = 0;
+        sourceQualityScoreSum = 0.0;
+        sourceQualityScoreCount = 0;
+        sourceQualityQuoteAgeMsMeanSum = 0.0;
+        sourceQualityQuoteAgeMsMeanCount = 0;
+        sourceQualityQuoteAgeMsMax = 0.0;
+        sourceQualitySpreadBpsSum = 0.0;
+        sourceQualitySpreadBpsMin = Double.NaN;
+        sourceQualitySpreadBpsMax = Double.NaN;
+        sourceQualitySpreadBpsCount = 0;
+        sourceQualityL1ImbalanceSum = 0.0;
+        sourceQualityL1ImbalanceSqSum = 0.0;
+        sourceQualityL1ImbalanceCount = 0;
+        sourceQualityLastObservedEpoch = -1L;
+        sourceQualityLastOpen = Double.NaN;
+        sourceQualityLastBid = Double.NaN;
+        sourceQualityLastAsk = Double.NaN;
+        sourceQualityLastBidSize = 0L;
+        sourceQualityLastAskSize = 0L;
+        sourceQualityBidSum = 0.0;
+        sourceQualityAskSum = 0.0;
+        sourceQualityBidSizeSum = 0.0;
+        sourceQualityAskSizeSum = 0.0;
+        sourceQualityQuoteSampleCount = 0;
+        sourceQualityLastSpreadBps = Double.NaN;
+        sourceQualityLastL1Imbalance = Double.NaN;
+    }
+
+    private void accumulateSourceQuality(StrategyEvent.BarEvent sourceBar) {
+        if (!sourceBar.sourceQualityPresent || sourceQualityBucketStartEpoch < 0L) {
+            return;
+        }
+        fillMissingSourceQualitySeconds(sourceBar.time);
+
+        sourceQualitySnapshotCount++;
+        sourceQualityLastOpen = sourceBar.open;
+        sourceQualityTradeCount += Math.max(0L, sourceBar.tradeCount);
+        sourceQualityQuoteCount += Math.max(0L, sourceBar.quoteCount);
+        sourceQualityAtBidVol += Math.max(0L, sourceBar.atBidVol);
+        sourceQualityAtAskVol += Math.max(0L, sourceBar.atAskVol);
+        sourceQualityTradeSecondsPresent += finiteNonNegative(sourceBar.tradeSecondsPresent);
+        sourceQualityQuoteUpdateSecondsPresent += finiteNonNegative(sourceBar.quoteUpdateSecondsPresent);
+        sourceQualityQuoteStateSecondsValid += finiteNonNegative(sourceBar.quoteStateSecondsValid);
+        sourceQualitySyntheticSeconds += finiteNonNegative(sourceBar.syntheticSeconds);
+        sourceQualityValidSpreadSeconds += finiteCoverageSeconds(sourceBar.validSpreadCoverage);
+        sourceQualityLockedCrossedSeconds += finiteNonNegative(sourceBar.lockedCrossedSeconds);
+        if (Double.isFinite(sourceBar.tradeCoverage)) {
+            sourceQualityTradeCoverageSum += clampUnit(sourceBar.tradeCoverage);
+            sourceQualityTradeCoverageCount++;
+        }
+        if (Double.isFinite(sourceBar.quoteUpdateCoverage)) {
+            sourceQualityQuoteUpdateCoverageSum += clampUnit(sourceBar.quoteUpdateCoverage);
+            sourceQualityQuoteUpdateCoverageCount++;
+        }
+        if (Double.isFinite(sourceBar.quoteStateCoverage)) {
+            sourceQualityQuoteStateCoverageSum += clampUnit(sourceBar.quoteStateCoverage);
+            sourceQualityQuoteStateCoverageCount++;
+        }
+        if (Double.isFinite(sourceBar.syntheticCoverage)) {
+            sourceQualitySyntheticCoverageSum += clampUnit(sourceBar.syntheticCoverage);
+            sourceQualitySyntheticCoverageCount++;
+        }
+        if (Double.isFinite(sourceBar.validSpreadCoverage)) {
+            sourceQualityValidSpreadCoverageSum += clampUnit(sourceBar.validSpreadCoverage);
+            sourceQualityValidSpreadCoverageCount++;
+        }
+
+        if (Double.isFinite(sourceBar.qualityScore)) {
+            sourceQualityScoreSum += sourceBar.qualityScore;
+            sourceQualityScoreCount++;
+        }
+        if (Double.isFinite(sourceBar.quoteAgeMsMean)) {
+            sourceQualityQuoteAgeMsMeanSum += Math.max(0.0, sourceBar.quoteAgeMsMean);
+            sourceQualityQuoteAgeMsMeanCount++;
+        }
+        if (Double.isFinite(sourceBar.quoteAgeMsMax)) {
+            sourceQualityQuoteAgeMsMax = Math.max(sourceQualityQuoteAgeMsMax, Math.max(0.0, sourceBar.quoteAgeMsMax));
+        }
+
+        double spreadBps = sourceSpreadBps();
+        if (Double.isFinite(spreadBps)) {
+            accumulateSourceQuoteSample(latestBidPrice, latestAskPrice, latestBidSize, latestAskSize);
+            accumulateSourceSpreadBps(spreadBps);
+            sourceQualityLastSpreadBps = spreadBps;
+        }
+
+        double l1Imbalance = sourceL1Imbalance();
+        if (Double.isFinite(l1Imbalance)) {
+            accumulateSourceL1Imbalance(l1Imbalance);
+            sourceQualityLastL1Imbalance = l1Imbalance;
+        }
+        if (latestBidPrice > 0.0 && latestAskPrice > 0.0) {
+            sourceQualityLastBid = latestBidPrice;
+            sourceQualityLastAsk = latestAskPrice;
+            sourceQualityLastBidSize = latestBidSize;
+            sourceQualityLastAskSize = latestAskSize;
+        }
+        sourceQualityLastObservedEpoch = sourceBar.time;
+    }
+
+    private void fillMissingSourceQualitySeconds(long nextObservedEpoch) {
+        long bucketEndEpoch = sourceQualityBucketStartEpoch + AI_BUCKET_SECONDS - 1L;
+        long startEpoch = sourceQualityLastObservedEpoch >= sourceQualityBucketStartEpoch
+            ? sourceQualityLastObservedEpoch + 1L
+            : sourceQualityBucketStartEpoch;
+        long endEpoch = Math.min(nextObservedEpoch - 1L, bucketEndEpoch);
+        for (long missingEpoch = startEpoch; missingEpoch <= endEpoch; missingEpoch++) {
+            recordMissingSourceQualitySecond(missingEpoch);
+        }
+    }
+
+    private void completeSourceQualityBucket(long bucketEpoch) {
+        if (sourceQualityBucketStartEpoch != bucketEpoch || sourceQualitySnapshotCount <= 0) {
+            return;
+        }
+        fillMissingSourceQualitySeconds(bucketEpoch + AI_BUCKET_SECONDS);
+    }
+
+    private void recordMissingSourceQualitySecond(long missingEpoch) {
+        sourceQualitySyntheticSeconds += 1.0;
+        sourceQualityQuoteStateSecondsValid += 1.0;
+        sourceQualityValidSpreadSeconds += 1.0;
+        sourceQualitySyntheticCoverageSum += 1.0;
+        sourceQualitySyntheticCoverageCount++;
+        sourceQualityQuoteStateCoverageSum += 1.0;
+        sourceQualityQuoteStateCoverageCount++;
+        sourceQualityValidSpreadCoverageSum += 1.0;
+        sourceQualityValidSpreadCoverageCount++;
+        sourceQualityScoreSum += 0.55;
+        sourceQualityScoreCount++;
+
+        double quoteAgeMs = sourceQualityLastObservedEpoch >= sourceQualityBucketStartEpoch
+            ? Math.max(0.0, (missingEpoch - sourceQualityLastObservedEpoch) * 1_000.0)
+            : 999_999.0;
+        sourceQualityQuoteAgeMsMeanSum += quoteAgeMs;
+        sourceQualityQuoteAgeMsMeanCount++;
+        sourceQualityQuoteAgeMsMax = Math.max(sourceQualityQuoteAgeMsMax, quoteAgeMs);
+
+        if (Double.isFinite(sourceQualityLastSpreadBps)) {
+            accumulateSourceQuoteSample(sourceQualityLastBid, sourceQualityLastAsk, sourceQualityLastBidSize, sourceQualityLastAskSize);
+            accumulateSourceSpreadBps(sourceQualityLastSpreadBps);
+        }
+        if (Double.isFinite(sourceQualityLastL1Imbalance)) {
+            accumulateSourceL1Imbalance(sourceQualityLastL1Imbalance);
+        }
+    }
+
+    private void accumulateSourceSpreadBps(double spreadBps) {
+        sourceQualitySpreadBpsSum += spreadBps;
+        sourceQualitySpreadBpsMin = Double.isFinite(sourceQualitySpreadBpsMin) ? Math.min(sourceQualitySpreadBpsMin, spreadBps) : spreadBps;
+        sourceQualitySpreadBpsMax = Double.isFinite(sourceQualitySpreadBpsMax) ? Math.max(sourceQualitySpreadBpsMax, spreadBps) : spreadBps;
+        sourceQualitySpreadBpsCount++;
+    }
+
+    private void accumulateSourceL1Imbalance(double l1Imbalance) {
+        sourceQualityL1ImbalanceSum += l1Imbalance;
+        sourceQualityL1ImbalanceSqSum += l1Imbalance * l1Imbalance;
+        sourceQualityL1ImbalanceCount++;
+    }
+
+    private void accumulateSourceQuoteSample(double bid, double ask, long bidSize, long askSize) {
+        if (!(Double.isFinite(bid) && Double.isFinite(ask) && bid > 0.0 && ask > 0.0)) {
+            return;
+        }
+        sourceQualityBidSum += bid;
+        sourceQualityAskSum += ask;
+        sourceQualityBidSizeSum += Math.max(0L, bidSize);
+        sourceQualityAskSizeSum += Math.max(0L, askSize);
+        sourceQualityQuoteSampleCount++;
+    }
+
+    private double finiteNonNegative(double value) {
+        return Double.isFinite(value) ? Math.max(0.0, value) : 0.0;
+    }
+
+    private double finiteCoverageSeconds(double coverage) {
+        if (!Double.isFinite(coverage)) {
+            return 0.0;
+        }
+        return clampUnit(coverage);
+    }
+
+    private double clampUnit(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
+    }
+
+    private double coverageFromSeconds(double secondsPresent) {
+        return sourceQualitySnapshotCount > 0 ? clampUnit(secondsPresent / AI_BUCKET_SECONDS) : 0.0;
+    }
+
+    private double averageCoverage(double coverageSum, int count, double secondsPresentFallback) {
+        return count > 0 ? clampUnit(coverageSum / count) : coverageFromSeconds(secondsPresentFallback);
+    }
+
+    private double sourceSpreadBps() {
+        if (latestAskPrice > latestBidPrice && latestBidPrice > 0.0) {
+            double mid = (latestAskPrice + latestBidPrice) / 2.0;
+            if (mid > 0.0) {
+                return ((latestAskPrice - latestBidPrice) / mid) * 10_000.0;
+            }
+        }
+        return Double.NaN;
+    }
+
+    private double sourceL1Imbalance() {
+        double bidSize = Math.max(0.0, latestBidSize);
+        double askSize = Math.max(0.0, latestAskSize);
+        double totalSize = bidSize + askSize;
+        return totalSize > 0.0 ? (bidSize - askSize) / totalSize : Double.NaN;
+    }
+
     private void finalizeCurrent30SecondBucket() {
         if (bucketStartEpoch < 0L) {
             return;
         }
         long finalizedBucketStart = bucketStartEpoch;
+        completeSourceQualityBucket(finalizedBucketStart);
         double finalWap = bucketVolume > 0 ? (bucketWapSum / bucketVolume) : bucketClose;
         if (!isAligned30SecondBucketStart(finalizedBucketStart)) {
             flowCondition("STRATEGY.BAR", "UNALIGNED_30S_AI_LIFECYCLE_BUCKET_DROPPED", false,
@@ -2560,6 +2962,7 @@ public class PingPongStrategy implements TradingStrategy {
         bucketClose = 0.0;
         bucketVolume = 0L;
         bucketWapSum = 0.0;
+        startSourceQualityBucket(-1L);
     }
 
     private void process30SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
@@ -2591,6 +2994,7 @@ public class PingPongStrategy implements TradingStrategy {
         this.barLow = low;
         this.barClose = close;
         this.barVolume = volume;
+        this.lastFinalized30sWap = wap > 0.0 ? wap : close;
 
         if (barClose >= barOpen) {
             greenStreak++;
@@ -3285,6 +3689,9 @@ public class PingPongStrategy implements TradingStrategy {
                 sellReferencePrice
             );
             if (selectedEntry != null) {
+                if (!passesDownstreamSetupFilter(selectedEntry, liveFeatureValues)) {
+                    return;
+                }
                 if (MICRO_ENTRY_ENABLED) {
                     armMicroEntry(selectedEntry.side(), lastTraining30sFeatureValues, currentMicroArmEpoch(), selectedEntry.probability(), selectedEntry.threshold());
                     return;
@@ -3301,15 +3708,323 @@ public class PingPongStrategy implements TradingStrategy {
         }
     }
 
+    private boolean passesDownstreamSetupFilter(EntrySignal selectedEntry, Map<String, Float> liveFeatureValues) {
+        boolean active = DOWNSTREAM_SETUP_FILTER_ENABLED || downstreamSetupFilterScorer != null;
+        if (!active) {
+            return true;
+        }
+        if (selectedEntry == null) {
+            return false;
+        }
+        if (downstreamSetupFilterScorer == null) {
+            boolean passWithoutLoadedFilter = !DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED;
+            flowCondition(
+                "AI.DOWNSTREAM_SETUP_FILTER",
+                "SETUP_FILTER_PASSES",
+                passWithoutLoadedFilter,
+                "symbol=" + symbol
+                    + " side=" + selectedEntry.side()
+                    + " reason=filter_not_loaded"
+                    + " failClosed=" + DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
+                    + " status=research_only_no_go"
+            );
+            return passWithoutLoadedFilter;
+        }
+        Map<String, Float> downstreamFeatures = downstreamSetupFilterFeatureValues(selectedEntry, liveFeatureValues);
+        boolean featureSidecarHit = downstreamSetupFeatureStore != null
+            && !downstreamSetupFeatureStore.lookup(symbol, selectedEntry.side(), currentMicroArmEpoch()).isEmpty();
+        try {
+            DownstreamSetupFilter.Decision decision = downstreamSetupFilterScorer.apply(selectedEntry.side(), downstreamFeatures);
+            boolean pass = decision != null && decision.passed();
+            flowCondition(
+                "AI.DOWNSTREAM_SETUP_FILTER",
+                "SETUP_FILTER_PASSES",
+                pass,
+                "symbol=" + symbol
+                    + " side=" + selectedEntry.side()
+                    + " route=" + (decision == null ? "nullDecision" : decision.routeName())
+                    + " prob=" + formatProb(decision == null ? 0.0 : decision.probability())
+                    + " threshold=" + formatProb(decision == null ? 1.0 : decision.threshold())
+                    + " featureCount=" + (decision == null ? 0 : decision.featureCount())
+                    + " setupProb=" + formatProb(selectedEntry.probability())
+                    + " setupThreshold=" + formatProb(selectedEntry.threshold())
+                    + " arbitrationReason=" + selectedEntry.arbitrationReason()
+                    + " featureSidecar=" + (downstreamSetupFeatureStore == null ? "disabled" : (featureSidecarHit ? "hit" : "miss"))
+                    + " status=research_only_no_go"
+            );
+            return pass;
+        } catch (Exception exception) {
+            boolean passOnError = !DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED;
+            flowCondition(
+                "AI.DOWNSTREAM_SETUP_FILTER",
+                "SETUP_FILTER_PASSES",
+                passOnError,
+                "symbol=" + symbol
+                    + " side=" + selectedEntry.side()
+                    + " reason=score_exception"
+                    + " error=" + exception.getMessage()
+                    + " failClosed=" + DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
+                    + " status=research_only_no_go"
+            );
+            return passOnError;
+        }
+    }
+
+    private Map<String, Float> downstreamSetupFilterFeatureValues(EntrySignal selectedEntry, Map<String, Float> liveFeatureValues) {
+        Map<String, Float> values = new LinkedHashMap<>();
+        if (liveFeatureValues != null) {
+            values.putAll(liveFeatureValues);
+        }
+        values.putAll(lastTraining30sFeatureValues);
+
+        putFinite(values, "SetupProb", selectedEntry.probability());
+        putFinite(values, "SetupThreshold", selectedEntry.threshold());
+        putFinite(values, "SetupThresholdMargin", selectedEntry.margin());
+        putFinite(values, "SetupQty", selectedEntry.quantity());
+        boolean hasSourceQuality = sourceQualitySnapshotCount > 0 && sourceQualityBucketStartEpoch >= 0L;
+        double downstreamOpen = hasSourceQuality && Double.isFinite(sourceQualityLastOpen) ? sourceQualityLastOpen : barOpen;
+        double downstreamWap = lastFinalized30sWap > 0.0 ? lastFinalized30sWap : barClose;
+        double sourceAskMean = hasSourceQuality && sourceQualityQuoteSampleCount > 0 ? sourceQualityAskSum / sourceQualityQuoteSampleCount : latestAskPrice;
+        double sourceBidMean = hasSourceQuality && sourceQualityQuoteSampleCount > 0 ? sourceQualityBidSum / sourceQualityQuoteSampleCount : latestBidPrice;
+        double sourceAskSizeMean = hasSourceQuality && sourceQualityQuoteSampleCount > 0 ? sourceQualityAskSizeSum / sourceQualityQuoteSampleCount : latestAskSize;
+        double sourceBidSizeMean = hasSourceQuality && sourceQualityQuoteSampleCount > 0 ? sourceQualityBidSizeSum / sourceQualityQuoteSampleCount : latestBidSize;
+        putFinite(values, "Open", downstreamOpen);
+        putFinite(values, "High", barHigh);
+        putFinite(values, "Low", barLow == Double.MAX_VALUE ? 0.0 : barLow);
+        putFinite(values, "Close", barClose);
+        putFinite(values, "Volume", barVolume);
+        putFinite(values, "WAP", downstreamWap);
+        putFinite(values, "Count", hasSourceQuality ? sourceQualityTradeCount : barsCount);
+        putFinite(values, "YesterdayClose", yesterdayClose);
+
+        putFinite(values, "Ask", sourceAskMean);
+        putFinite(values, "AskLast", latestAskPrice);
+        putFinite(values, "AskSize", sourceAskSizeMean);
+        putFinite(values, "AskSizeLast", latestAskSize);
+        putFinite(values, "Bid", sourceBidMean);
+        putFinite(values, "BidLast", latestBidPrice);
+        putFinite(values, "BidSize", sourceBidSizeMean);
+        putFinite(values, "BidSizeLast", latestBidSize);
+        putFinite(values, "AtAskVol", hasSourceQuality ? sourceQualityAtAskVol : currentBarVolAsk);
+        putFinite(values, "AtBidVol", hasSourceQuality ? sourceQualityAtBidVol : currentBarVolBid);
+        putFinite(values, "PutVol", latestPutVolume);
+        putFinite(values, "CallVol", latestCallVolume);
+
+        double putDelta = floatValue(values, "f_30s_option_put_delta");
+        double callDelta = floatValue(values, "f_30s_option_call_delta");
+        putFinite(values, "PutVolDelta5s", putDelta);
+        putFinite(values, "CallVolDelta5s", callDelta);
+
+        double bid = latestBidPrice;
+        double ask = latestAskPrice;
+        double mid = bid > 0.0 && ask > 0.0 ? (bid + ask) / 2.0 : barClose;
+        double spread = ask >= bid && bid > 0.0 ? ask - bid : 0.0;
+        double spreadBps = mid > 0.0 ? (spread / mid) * 10_000.0 : 0.0;
+        double l1Imbalance = (latestBidSize - latestAskSize) / (double) (latestBidSize + latestAskSize + 1L);
+        boolean quoteValid = bid > 0.0 && ask >= bid;
+        boolean tradePresent = barVolume > 0L;
+        boolean lockedCrossed = bid > 0.0 && ask > 0.0 && ask <= bid;
+        double quoteAgeMs = quoteValid ? 0.0 : 999_999.0;
+        double fallbackQualityScore = Math.max(0.0, Math.min(1.0,
+            (tradePresent ? 0.45 : 0.0) + (quoteValid ? 0.35 : 0.0) + (barClose > 0.0 ? 0.20 : 0.0)));
+        double sourceQualityScore = hasSourceQuality && sourceQualityScoreCount > 0
+            ? clampUnit(sourceQualityScoreSum / sourceQualityScoreCount)
+            : fallbackQualityScore;
+        double sourceQuoteAgeMsMean = hasSourceQuality && sourceQualityQuoteAgeMsMeanCount > 0
+            ? sourceQualityQuoteAgeMsMeanSum / sourceQualityQuoteAgeMsMeanCount
+            : quoteAgeMs;
+        double sourceQuoteAgeMsMaxValue = hasSourceQuality && sourceQualityQuoteAgeMsMeanCount > 0
+            ? Math.max(sourceQualityQuoteAgeMsMax, sourceQuoteAgeMsMean)
+            : quoteAgeMs;
+        double sourceSpreadBpsMean = hasSourceQuality && sourceQualitySpreadBpsCount > 0
+            ? sourceQualitySpreadBpsSum / sourceQualitySpreadBpsCount
+            : spreadBps;
+        double sourceSpreadBpsMinValue = hasSourceQuality && Double.isFinite(sourceQualitySpreadBpsMin)
+            ? sourceQualitySpreadBpsMin
+            : spreadBps;
+        double sourceSpreadBpsMaxValue = hasSourceQuality && Double.isFinite(sourceQualitySpreadBpsMax)
+            ? sourceQualitySpreadBpsMax
+            : spreadBps;
+        double sourceL1ImbalanceMean = hasSourceQuality && sourceQualityL1ImbalanceCount > 0
+            ? sourceQualityL1ImbalanceSum / sourceQualityL1ImbalanceCount
+            : l1Imbalance;
+        double sourceL1ImbalanceStd = 0.0;
+        if (hasSourceQuality && sourceQualityL1ImbalanceCount > 1) {
+            double variance = (sourceQualityL1ImbalanceSqSum
+                - ((sourceQualityL1ImbalanceSum * sourceQualityL1ImbalanceSum) / sourceQualityL1ImbalanceCount))
+                / (sourceQualityL1ImbalanceCount - 1);
+            sourceL1ImbalanceStd = Math.sqrt(Math.max(0.0, variance));
+        }
+        double sourceTradeCoverage = hasSourceQuality
+            ? coverageFromSeconds(sourceQualityTradeSecondsPresent)
+            : (tradePresent ? 1.0 : 0.0);
+        double sourceQuoteUpdateCoverage = hasSourceQuality
+            ? coverageFromSeconds(sourceQualityQuoteUpdateSecondsPresent)
+            : (quoteValid ? 1.0 : 0.0);
+        double sourceQuoteStateCoverage = hasSourceQuality
+            ? coverageFromSeconds(sourceQualityQuoteStateSecondsValid)
+            : (quoteValid ? 1.0 : 0.0);
+        double sourceSyntheticCoverage = hasSourceQuality
+            ? coverageFromSeconds(sourceQualitySyntheticSeconds)
+            : (tradePresent ? 0.0 : 1.0);
+        double sourceValidSpreadCoverage = hasSourceQuality
+            ? coverageFromSeconds(sourceQualityValidSpreadSeconds)
+            : (quoteValid ? 1.0 : 0.0);
+
+        putFinite(values, "FeatureCompleteness", sourceQualityScore);
+        putFinite(values, "ImbalanceStd5s", sourceL1ImbalanceStd);
+        putFinite(values, "L1Imbalance", sourceL1ImbalanceMean);
+        putFinite(values, "LockedCrossedSeconds", hasSourceQuality ? sourceQualityLockedCrossedSeconds : (lockedCrossed ? 1.0 : 0.0));
+        putFinite(values, "MinuteOfDay", minuteOfDay());
+        putFinite(values, "QualityScore", sourceQualityScore);
+        putFinite(values, "QuoteAgeMs", sourceQuoteAgeMsMean);
+        putFinite(values, "QuoteAgeMsMax", sourceQuoteAgeMsMaxValue);
+        putFinite(values, "QuoteAgeMsMean", sourceQuoteAgeMsMean);
+        putFinite(values, "QuoteCoverage5s", sourceQuoteUpdateCoverage);
+        putFinite(values, "QuoteUpdateCount5s", hasSourceQuality ? sourceQualityQuoteCount : (quoteValid ? 1.0 : 0.0));
+        putFinite(values, "QuoteUpdateCoverage", sourceQuoteUpdateCoverage);
+        putFinite(values, "QuoteUpdateSecondsPresent", hasSourceQuality ? sourceQualityQuoteUpdateSecondsPresent : (quoteValid ? 1.0 : 0.0));
+        putFinite(values, "SecondsFromOpen", downstreamSecondsFromOpen());
+        putFinite(values, "SpreadBps", sourceSpreadBpsMean);
+        putFinite(values, "SpreadMaxBps5s", sourceSpreadBpsMaxValue);
+        putFinite(values, "SpreadMinBps5s", sourceSpreadBpsMinValue);
+        putFinite(values, "SyntheticCoverage", sourceSyntheticCoverage);
+        putFinite(values, "SyntheticSeconds", hasSourceQuality ? sourceQualitySyntheticSeconds : (tradePresent ? 0.0 : 1.0));
+        putFinite(values, "TradeCoverage", sourceTradeCoverage);
+        putFinite(values, "TradePrintCount5s", hasSourceQuality ? sourceQualityTradeCount : (tradePresent ? 1.0 : 0.0));
+        putFinite(values, "TradeSecondsPresent", hasSourceQuality ? sourceQualityTradeSecondsPresent : (tradePresent ? 1.0 : 0.0));
+        putFinite(values, "ValidSpreadCoverage", sourceValidSpreadCoverage);
+
+        putFinite(values, "EqMbp1BidMean30s", bid);
+        putFinite(values, "EqMbp1AskMean30s", ask);
+        putFinite(values, "EqMbp1BidLast30s", bid);
+        putFinite(values, "EqMbp1AskLast30s", ask);
+        putFinite(values, "EqMbp1BidSizeMean30s", latestBidSize);
+        putFinite(values, "EqMbp1AskSizeMean30s", latestAskSize);
+        putFinite(values, "EqMbp1BidSizeLast30s", latestBidSize);
+        putFinite(values, "EqMbp1AskSizeLast30s", latestAskSize);
+        putFinite(values, "EqMbp1MidMean30s", mid);
+        putFinite(values, "EqMbp1MidLast30s", mid);
+        putFinite(values, "EqMbp1MicropriceMean30s", microprice(bid, ask));
+        putFinite(values, "EqMbp1MicropriceLast30s", microprice(bid, ask));
+        putFinite(values, "EqMbp1SpreadMean30s", spread);
+        putFinite(values, "EqMbp1SpreadBpsMean30s", sourceSpreadBpsMean);
+        putFinite(values, "EqMbp1SpreadBpsLast30s", sourceSpreadBpsMean);
+        putFinite(values, "EqMbp1RawSpreadMinBps30s", sourceSpreadBpsMinValue);
+        putFinite(values, "EqMbp1RawSpreadMaxBps30s", sourceSpreadBpsMaxValue);
+        putFinite(values, "EqMbp1L1ImbalanceMean30s", sourceL1ImbalanceMean);
+        putFinite(values, "EqMbp1L1ImbalanceLast30s", l1Imbalance);
+        putFinite(values, "EqMbp1QuoteUpdateCount30s", hasSourceQuality ? sourceQualityQuoteCount : (quoteValid ? 1.0 : 0.0));
+        putFinite(values, "EqMbp1EventCount30s", hasSourceQuality ? sourceQualityQuoteCount : (quoteValid ? 1.0 : 0.0));
+        putFinite(values, "EqMbp1QuoteUpdateCoverage30s", sourceQuoteUpdateCoverage);
+        putFinite(values, "EqMbp1QuoteStateValidCoverage30s", sourceQuoteStateCoverage);
+        putFinite(values, "EqMbp1ValidSpreadCoverage30s", sourceValidSpreadCoverage);
+        putFinite(values, "EqMbp1LockedCrossedSeconds30s", hasSourceQuality ? sourceQualityLockedCrossedSeconds : (lockedCrossed ? 1.0 : 0.0));
+        putFinite(values, "EqMbp1LockedCrossedCoverage30s", hasSourceQuality ? clampUnit(sourceQualityLockedCrossedSeconds / AI_BUCKET_SECONDS) : (lockedCrossed ? 1.0 : 0.0));
+        putFinite(values, "EqMbp1QuoteAgeMsMean30s", sourceQuoteAgeMsMean);
+        putFinite(values, "EqMbp1QuoteAgeMsMax30s", sourceQuoteAgeMsMaxValue);
+
+        double optionTotal = putDelta + callDelta;
+        putFinite(values, "OpraTcbboCallTradeCount30s", callDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboPutTradeCount30s", putDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboTotalTradeCount30s", optionTotal > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboCallContractVolume30s", callDelta);
+        putFinite(values, "OpraTcbboPutContractVolume30s", putDelta);
+        putFinite(values, "OpraTcbboTotalContractVolume30s", optionTotal);
+        putFinite(values, "OpraTcbboCallPremiumNotional30s", callDelta * Math.max(0.0, barClose));
+        putFinite(values, "OpraTcbboPutPremiumNotional30s", putDelta * Math.max(0.0, barClose));
+        putFinite(values, "OpraTcbboTotalPremiumNotional30s", optionTotal * Math.max(0.0, barClose));
+        putFinite(values, "OpraTcbboCallQuoteContextCount30s", callDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboPutQuoteContextCount30s", putDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboTotalQuoteContextCount30s", optionTotal > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboCallActiveContractSeconds30s", callDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboPutActiveContractSeconds30s", putDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboCallActiveSeconds30s", callDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboPutActiveSeconds30s", putDelta > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboAnyActiveSeconds30s", optionTotal > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboAnyActiveCoverage30s", optionTotal > 0.0 ? 1.0 : 0.0);
+        putFinite(values, "OpraTcbboCallAvgSpreadBpsMean30s", spreadBps);
+        putFinite(values, "OpraTcbboPutAvgSpreadBpsMean30s", spreadBps);
+        putFinite(values, "OpraTcbboCallMedianSpreadBpsMean30s", spreadBps);
+        putFinite(values, "OpraTcbboPutMedianSpreadBpsMean30s", spreadBps);
+        putFinite(values, "OpraTcbboCallMinSpreadBps30s", spreadBps);
+        putFinite(values, "OpraTcbboPutMinSpreadBps30s", spreadBps);
+        putFinite(values, "OpraTcbboCallAtBidVolume30s", currentBarVolBid);
+        putFinite(values, "OpraTcbboPutAtBidVolume30s", currentBarVolBid);
+        putFinite(values, "OpraTcbboCallAtAskVolume30s", currentBarVolAsk);
+        putFinite(values, "OpraTcbboPutAtAskVolume30s", currentBarVolAsk);
+        putFinite(values, "OpraTcbboCallMinusPutVolume30s", callDelta - putDelta);
+        putFinite(values, "OpraTcbboOptionVolumeImbalance30s", optionTotal > 0.0 ? (callDelta - putDelta) / optionTotal : 0.0);
+        putFinite(values, "OpraTcbboPutCallVolumeRatio30s", putDelta / (callDelta + 1.0));
+
+        if (downstreamSetupFeatureStore != null) {
+            Map<String, Float> sidecarValues = downstreamSetupFeatureStore.lookup(symbol, selectedEntry.side(), currentMicroArmEpoch());
+            if (!sidecarValues.isEmpty()) {
+                values.putAll(sidecarValues);
+            }
+        }
+
+        values.put("Symbol_" + symbol.toUpperCase(Locale.US), 1.0f);
+        if (selectedEntry.arbitrationReason() != null && !selectedEntry.arbitrationReason().isBlank()) {
+            values.put("SetupArbitrationReason_" + selectedEntry.arbitrationReason(), 1.0f);
+        }
+        values.put("SessionBucket_" + sessionBucket(), 1.0f);
+        return values;
+    }
+
+    private void putFinite(Map<String, Float> values, String key, double rawValue) {
+        values.put(key, Double.isFinite(rawValue) ? (float) rawValue : 0.0f);
+    }
+
+    private double floatValue(Map<String, Float> values, String key) {
+        Float value = values.get(key);
+        return value == null || !Float.isFinite(value) ? 0.0 : value;
+    }
+
+    private int minuteOfDay() {
+        return currentMarketTime == null ? 0 : currentMarketTime.getHour() * 60 + currentMarketTime.getMinute();
+    }
+
+    private int secondsFromOpen() {
+        if (currentMarketTime == null) {
+            return 0;
+        }
+        return ((minuteOfDay() - (9 * 60 + 30)) * 60) + currentMarketTime.getSecond();
+    }
+
+    private int downstreamSecondsFromOpen() {
+        int seconds = secondsFromOpen();
+        return sourceQualityBucketStartEpoch >= 0L ? (int) (seconds + AI_BUCKET_SECONDS - 1) : seconds;
+    }
+
+    private String sessionBucket() {
+        int minuteOfDay = minuteOfDay();
+        if (minuteOfDay < 11 * 60) {
+            return "open";
+        }
+        if (minuteOfDay < 15 * 60) {
+            return "midday";
+        }
+        return "close";
+    }
+
+    private double microprice(double bid, double ask) {
+        double totalSize = latestBidSize + latestAskSize;
+        if (bid <= 0.0 || ask <= 0.0 || totalSize <= 0.0) {
+            return bid > 0.0 && ask > 0.0 ? (bid + ask) / 2.0 : barClose;
+        }
+        return ((ask * latestBidSize) + (bid * latestAskSize)) / totalSize;
+    }
+
     private EntrySignal chooseEntrySignal(boolean shouldEnterLong, double longProbability, double longThreshold,
                                           int buyQuantity, double buyReferencePrice,
                                           boolean shouldEnterShort, double shortProbability, double shortThreshold,
                                           int sellQuantity, double sellReferencePrice) {
         EntrySignal longSignal = shouldEnterLong && buyQuantity > 0
-            ? new EntrySignal("long", "BUY", longProbability, longThreshold, buyQuantity, buyReferencePrice)
+            ? new EntrySignal("long", "BUY", longProbability, longThreshold, buyQuantity, buyReferencePrice, "only_long_passed")
             : null;
         EntrySignal shortSignal = shouldEnterShort && sellQuantity > 0
-            ? new EntrySignal("short", "SELL", shortProbability, shortThreshold, sellQuantity, sellReferencePrice)
+            ? new EntrySignal("short", "SELL", shortProbability, shortThreshold, sellQuantity, sellReferencePrice, "only_short_passed")
             : null;
 
         if (longSignal == null && shortSignal == null) {
@@ -3363,6 +4078,15 @@ public class PingPongStrategy implements TradingStrategy {
         }
 
         EntrySignal selected = marginDifference > 0.0 ? longSignal : shortSignal;
+        selected = new EntrySignal(
+            selected.side(),
+            selected.action(),
+            selected.probability(),
+            selected.threshold(),
+            selected.quantity(),
+            selected.referencePrice(),
+            "best_threshold_margin"
+        );
         flowCondition(
             "AI.ENTRY.ARBITRATION",
             "ENTRY_SIDE_SELECTED",
@@ -3890,6 +4614,7 @@ public class PingPongStrategy implements TradingStrategy {
             lastTraining30sFeatureValues = new HashMap<>();
             lastTraining30sClose = 0.0;
             lastTraining30sEpoch = 0L;
+            lastFinalized30sWap = 0.0;
             clearMicroEntryArms("new-day-reset");
 
             // We still reset barsCount to ensure the Strategy rewarms for the configured opening-profile bar count after the morning bell.
@@ -4030,6 +4755,7 @@ public class PingPongStrategy implements TradingStrategy {
         if (shortMicroEntryAi != null) shortMicroEntryAi.close();
         if (longMicroExitGuardAi != null) longMicroExitGuardAi.close();
         if (shortMicroExitGuardAi != null) shortMicroExitGuardAi.close();
+        if (downstreamSetupFilter != null) downstreamSetupFilter.close();
         flowInfo("STRATEGY.STOP", "Strategy stopped symbol=" + symbol);
     }
 

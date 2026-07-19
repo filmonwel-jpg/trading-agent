@@ -21,8 +21,40 @@ public abstract class StrategyEvent {
         public final double close;
         public final long volume;
         public final double wap;
+        public final boolean sourceQualityPresent;
+        public final long tradeCount;
+        public final long quoteCount;
+        public final long atBidVol;
+        public final long atAskVol;
+        public final double tradeSecondsPresent;
+        public final double quoteUpdateSecondsPresent;
+        public final double quoteStateSecondsValid;
+        public final double syntheticSeconds;
+        public final double tradeCoverage;
+        public final double quoteUpdateCoverage;
+        public final double quoteStateCoverage;
+        public final double syntheticCoverage;
+        public final double quoteAgeMsMean;
+        public final double quoteAgeMsMax;
+        public final double validSpreadCoverage;
+        public final double lockedCrossedSeconds;
+        public final double qualityScore;
 
         public BarEvent(long time, double open, double high, double low, double close, long volume, double wap) {
+            this(time, open, high, low, close, volume, wap, false, 0L, 0L,
+                0L, 0L,
+                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
+                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+        }
+
+        public BarEvent(long time, double open, double high, double low, double close, long volume, double wap,
+                        boolean sourceQualityPresent, long tradeCount, long quoteCount,
+                        long atBidVol, long atAskVol,
+                        double tradeSecondsPresent, double quoteUpdateSecondsPresent,
+                        double quoteStateSecondsValid, double syntheticSeconds,
+                        double tradeCoverage, double quoteUpdateCoverage, double quoteStateCoverage,
+                        double syntheticCoverage, double quoteAgeMsMean, double quoteAgeMsMax,
+                        double validSpreadCoverage, double lockedCrossedSeconds, double qualityScore) {
             this.time = time;
             this.open = open;
             this.high = high;
@@ -30,6 +62,24 @@ public abstract class StrategyEvent {
             this.close = close;
             this.volume = volume;
             this.wap = wap;
+            this.sourceQualityPresent = sourceQualityPresent;
+            this.tradeCount = tradeCount;
+            this.quoteCount = quoteCount;
+            this.atBidVol = atBidVol;
+            this.atAskVol = atAskVol;
+            this.tradeSecondsPresent = tradeSecondsPresent;
+            this.quoteUpdateSecondsPresent = quoteUpdateSecondsPresent;
+            this.quoteStateSecondsValid = quoteStateSecondsValid;
+            this.syntheticSeconds = syntheticSeconds;
+            this.tradeCoverage = tradeCoverage;
+            this.quoteUpdateCoverage = quoteUpdateCoverage;
+            this.quoteStateCoverage = quoteStateCoverage;
+            this.syntheticCoverage = syntheticCoverage;
+            this.quoteAgeMsMean = quoteAgeMsMean;
+            this.quoteAgeMsMax = quoteAgeMsMax;
+            this.validSpreadCoverage = validSpreadCoverage;
+            this.lockedCrossedSeconds = lockedCrossedSeconds;
+            this.qualityScore = qualityScore;
         }
     }
 

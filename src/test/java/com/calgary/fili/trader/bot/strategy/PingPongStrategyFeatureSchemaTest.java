@@ -302,6 +302,143 @@ class PingPongStrategyFeatureSchemaTest {
         }
     }
 
+    @Test
+    void downstreamSetupFilterFeatureValuesExposeSetupAliasesAndCategoricalOneHots() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            seedFeatureState(strategy);
+            @SuppressWarnings("unchecked")
+            Map<String, Float> liveFeatureValues = ReflectionTestUtils.invokeMethod(strategy, "constructFeatureValueMap", 55.0);
+            Map<String, Float> training30sValues = new LinkedHashMap<>();
+            training30sValues.put("f_30s_option_put_delta", 7.0f);
+            training30sValues.put("f_30s_option_call_delta", 11.0f);
+            ReflectionTestUtils.setField(strategy, "lastTraining30sFeatureValues", training30sValues);
+
+            Object selectedEntry = ReflectionTestUtils.invokeMethod(
+                strategy,
+                "chooseEntrySignal",
+                true,
+                0.74d,
+                0.68d,
+                321,
+                100.05d,
+                false,
+                0.61d,
+                0.63d,
+                0,
+                99.95d
+            );
+
+            @SuppressWarnings("unchecked")
+            Map<String, Float> downstreamValues = ReflectionTestUtils.invokeMethod(
+                strategy,
+                "downstreamSetupFilterFeatureValues",
+                selectedEntry,
+                liveFeatureValues
+            );
+
+            assertEquals(0.74f, downstreamValues.get("SetupProb"), 1.0e-6f);
+            assertEquals(0.68f, downstreamValues.get("SetupThreshold"), 1.0e-6f);
+            assertEquals(0.06f, downstreamValues.get("SetupThresholdMargin"), 1.0e-6f);
+            assertEquals(321.0f, downstreamValues.get("SetupQty"), 1.0e-6f);
+            assertEquals(1.0f, downstreamValues.get("Symbol_AAPL"), 1.0e-6f);
+            assertEquals(1.0f, downstreamValues.get("SetupArbitrationReason_only_long_passed"), 1.0e-6f);
+            assertEquals(1.0f, downstreamValues.get("SessionBucket_open"), 1.0e-6f);
+            assertEquals(7.0f, downstreamValues.get("PutVolDelta5s"), 1.0e-6f);
+            assertEquals(11.0f, downstreamValues.get("CallVolDelta5s"), 1.0e-6f);
+            assertTrue(downstreamValues.containsKey("EqMbp1SpreadBpsMean30s"));
+            assertTrue(downstreamValues.containsKey("OpraTcbboPutCallVolumeRatio30s"));
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
+    void downstreamSetupFilterFeatureValuesUseSourceQualityAggregates() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            seedFeatureState(strategy);
+            @SuppressWarnings("unchecked")
+            Map<String, Float> liveFeatureValues = ReflectionTestUtils.invokeMethod(strategy, "constructFeatureValueMap", 55.0);
+            Map<String, Float> training30sValues = new LinkedHashMap<>();
+            training30sValues.put("f_30s_option_put_delta", 7.0f);
+            training30sValues.put("f_30s_option_call_delta", 11.0f);
+            ReflectionTestUtils.setField(strategy, "lastTraining30sFeatureValues", training30sValues);
+
+            ReflectionTestUtils.invokeMethod(strategy, "startSourceQualityBucket", 1_777_777_770L);
+            ReflectionTestUtils.setField(strategy, "latestBidSize", 1_000L);
+            ReflectionTestUtils.setField(strategy, "latestAskSize", 500L);
+            ReflectionTestUtils.invokeMethod(
+                strategy,
+                "accumulateSourceQuality",
+                new StrategyEvent.BarEvent(
+                    1_777_777_770L, 99.5, 100.5, 99.3, 100.0, 100L, 100.0,
+                    true, 3L, 10L, 2L, 5L,
+                    0.8, 0.9, 1.0, 0.0,
+                    0.8, 0.9, 1.0, 0.0,
+                    12.0, 20.0, 0.7, 0.0, 0.77
+                )
+            );
+            ReflectionTestUtils.setField(strategy, "latestBidSize", 500L);
+            ReflectionTestUtils.setField(strategy, "latestAskSize", 1_000L);
+            ReflectionTestUtils.invokeMethod(
+                strategy,
+                "accumulateSourceQuality",
+                new StrategyEvent.BarEvent(
+                    1_777_777_771L, 100.0, 100.8, 99.8, 100.2, 120L, 100.2,
+                    true, 4L, 11L, 3L, 7L,
+                    0.7, 0.8, 0.9, 0.1,
+                    0.6, 0.8, 0.9, 0.1,
+                    16.0, 25.0, 0.9, 1.0, 0.83
+                )
+            );
+
+            Object selectedEntry = ReflectionTestUtils.invokeMethod(
+                strategy,
+                "chooseEntrySignal",
+                true,
+                0.74d,
+                0.68d,
+                321,
+                100.05d,
+                false,
+                0.61d,
+                0.63d,
+                0,
+                99.95d
+            );
+
+            @SuppressWarnings("unchecked")
+            Map<String, Float> downstreamValues = ReflectionTestUtils.invokeMethod(
+                strategy,
+                "downstreamSetupFilterFeatureValues",
+                selectedEntry,
+                liveFeatureValues
+            );
+
+            assertEquals(7.0f, downstreamValues.get("Count"), 1.0e-6f);
+            assertEquals(7.0f, downstreamValues.get("TradePrintCount5s"), 1.0e-6f);
+            assertEquals(21.0f, downstreamValues.get("QuoteUpdateCount5s"), 1.0e-6f);
+            assertEquals(5.0f, downstreamValues.get("AtBidVol"), 1.0e-6f);
+            assertEquals(12.0f, downstreamValues.get("AtAskVol"), 1.0e-6f);
+            assertEquals(1.5f, downstreamValues.get("TradeSecondsPresent"), 1.0e-6f);
+            assertEquals(1.7f, downstreamValues.get("QuoteUpdateSecondsPresent"), 1.0e-6f);
+            assertEquals(0.05f, downstreamValues.get("TradeCoverage"), 1.0e-6f);
+            assertEquals(0.05666667f, downstreamValues.get("QuoteUpdateCoverage"), 1.0e-6f);
+            assertEquals(0.05333333f, downstreamValues.get("ValidSpreadCoverage"), 1.0e-6f);
+            assertEquals(0.8f, downstreamValues.get("QualityScore"), 1.0e-6f);
+            assertEquals(0.8f, downstreamValues.get("FeatureCompleteness"), 1.0e-6f);
+            assertEquals(14.0f, downstreamValues.get("QuoteAgeMsMean"), 1.0e-6f);
+            assertEquals(25.0f, downstreamValues.get("QuoteAgeMsMax"), 1.0e-6f);
+            assertEquals(1.0f, downstreamValues.get("LockedCrossedSeconds"), 1.0e-6f);
+            assertEquals(10.0f, downstreamValues.get("SpreadBps"), 1.0e-3f);
+            assertEquals(0.0f, downstreamValues.get("L1Imbalance"), 1.0e-6f);
+            assertTrue(downstreamValues.get("ImbalanceStd5s") > 0.47f);
+        } finally {
+            strategy.stop();
+        }
+    }
+
     private static PingPongStrategy newStrategy() {
         return new PingPongStrategy(
             mock(IBKRTrader.class),
@@ -444,4 +581,3 @@ class PingPongStrategyFeatureSchemaTest {
         }
     }
 }
-

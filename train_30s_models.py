@@ -2691,10 +2691,11 @@ def main():
         # future enhancement. Mark bins as empty here until a post-hoc calibrator
         # fitting step generates them from the frozen holdout.)
 
+    active_model_family = _normalize_model_family(MODEL_FAMILY)
     calibration_manifest = {
         'schema_version': SETUP_MANIFEST_SCHEMA_VERSION,
         'calibration_schema_version': 'setup_30s_calibration_v1',
-        'method': 'raw_random_forest_probability_no_posthoc_calibrator',
+        'method': f'raw_{active_model_family}_probability_no_posthoc_calibrator',
         'split_convention': 'chronological_walk_forward_folds_train_tail_threshold_tune',
         'generated_at_utc': generated_at,
         'artifacts': {
@@ -2708,7 +2709,7 @@ def main():
         'models': cal_model_entries,
         'errors': [],
         'warnings': [
-            'Metrics describe raw RandomForest predict_proba outputs averaged across walk-forward '
+            f'Metrics describe raw {active_model_family} predict_proba outputs averaged across walk-forward '
             'folds; no isotonic/Platt post-hoc calibrator is fitted yet. Treat bundles as '
             'research-only until post-hoc calibration, frozen-holdout threshold stability, and '
             'paper/shadow drift checks pass.'

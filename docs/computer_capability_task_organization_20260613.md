@@ -1969,6 +1969,75 @@ June 27 implementation update for the next run on the replay/backtest computer:
 - Expected four-week replay interpretation: the model bundle is unchanged, but the runtime decision policy is changed. Do not expect exact reproduction of the prior `22,201` arms / `1` trade / `+130` PnL. Setup arms should now be governed by real calibrated probabilities and may drop; micro-entry evaluation counts may drop; trade count/PnL may be zero, unchanged, or different depending on which setup arms survive real thresholds, side arbitration, and changed micro-entry setup features.
 - Evidence to collect from the replay computer: setup probability histogram/non-binary sample, arm `setupProb` values, `AI.ENTRY.ARBITRATION` selection/no-trade counts, micro-entry pass/fail counts, closed trade/PnL/R outputs, per-day/per-symbol/long-short contribution, and any setup probability guard failures. Promotion status remains **NO-GO** until those replay artifacts and the remaining P1/P2 gates pass.
 
+June 27 clean post-fix replay result from the replay/backtest computer:
+
+- Replay artifact root: `/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent`.
+- Clean diagnostic scanned only `/Users/filmonghezehey/trading-agent/worktrees/databento/runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/run/databento-core5-4week-recent-20260627_200624.log`. The earlier all-log diagnostic was contaminated by the June 26 pre-fix log, so only this single-log result should be used for post-fix conclusions.
+- Four-week summary changed from `22,201` setup arms / `1` confirmation / `1` closed trade / `+130.00` PnL pre-fix to `4,470` setup arms / `0` confirmations / `0` closed trades / `0.00` PnL post-fix. This is expected after replacing label-derived setup probabilities with real probability-threshold gating and side arbitration.
+- P0 runtime fixes are validated by replay evidence:
+  - Setup `AI_PREDICTS_ENTRY` distributions have `binary_count=0`.
+  - Armed micro-entry `setupProb` distributions have `binary_count=0` for every symbol/side.
+  - `setup_probability_guard_counts` is `{}`, so no setup probability extraction/guard failure appeared in the clean log.
+  - `AI.ENTRY.ARBITRATION` produced `4,470` selected arms and `25,551` no-trade outcomes, with reasons `2,840` `only_long_passed`, `1,585` `only_short_passed`, `45` `best_threshold_margin`, and `25,551` `no_passing_setup_with_positive_qty`.
+- Clean setup arm split:
+
+  | Symbol | Long arms | Short arms | Total arms |
+  |---|---:|---:|---:|
+  | `NVDA` | `843` | `866` | `1,709` |
+  | `QQQ` | `448` | `106` | `554` |
+  | `SPY` | `130` | `97` | `227` |
+  | `TQQQ` | `771` | `201` | `972` |
+  | `TSLA` | `666` | `342` | `1,008` |
+  | **Total** | `2,858` | `1,612` | `4,470` |
+
+- The active blocker moved to the 5-second micro-entry layer. Sanity checks: `arm_total 4470`, `micro_pass_total 0`, `arbitration_pass 4470`, `arbitration_fail 25551`. Max micro probabilities remained below thresholds:
+
+  | Symbol | Long max / threshold / margin | Short max / threshold / margin |
+  |---|---:|---:|
+  | `NVDA` | `0.5175 / 0.6400 / -0.1225` | `0.4544 / 0.6200 / -0.1656` |
+  | `QQQ` | `0.1991 / 0.6400 / -0.4409` | `0.2270 / 0.6200 / -0.3930` |
+  | `SPY` | `0.2897 / 0.6400 / -0.3503` | `0.2734 / 0.6200 / -0.3466` |
+  | `TQQQ` | `0.5961 / 0.6400 / -0.0439` | `0.5718 / 0.6200 / -0.0482` |
+  | `TSLA` | `0.4977 / 0.6400 / -0.1423` | `0.4417 / 0.6200 / -0.1783` |
+
+- Task status after the clean replay: P0 probability extraction **PASS**, P0 real setup context **PASS**, P0 side arbitration **PASS**, micro-entry trade-volume evidence **FAIL**, promotion **NO-GO**. Next work is P1 counterfactual decision reporting and micro-entry threshold/model retuning with minimum trade-count, calibration, replay-parity, and day-dominance constraints. The route remains research-only until those gates pass together.
+
+June 28 task update — how to produce setup entries that perform better:
+
+- The zero-confirmation replay is not explained by a setup-threshold/micro-threshold wiring mix-up. `PingPongStrategy.java` confirms micro-entry uses separate route keys and properties: `longMicroEntryAi` / `shortMicroEntryAi`, `strategy.micro.longEntryThreshold`, and `strategy.micro.shortEntryThreshold`. Setup thresholds arm; micro thresholds confirm.
+- The micro thresholds were loaded. `scripts/run_databento_historical_ibkr_sim_backtest.sh` resolves `longMicroEntryAi` and `shortMicroEntryAi` thresholds from `lifecycle_micro_scorecard.csv`, and the replay log printed `micro_entry_thresholds long=0.6400 short=0.6200`. The lifecycle/micro route manifest records the same thresholds. Treat any threshold issue as model-policy staleness for the corrected arm population, not as missing runtime config.
+- The closest root cause is high-precision / low-recall micro-entry operating points after the setup probability fix. The June 24 scorecard selected `longMicroEntryAi` threshold `0.6400` (`86.14%` precision, `16.74%` recall, `2.79%` predicted-positive rate) and `shortMicroEntryAi` threshold `0.6200` (`88.42%` precision, `12.29%` recall, `1.82%` predicted-positive rate). In the post-fix replay all observed micro probabilities stayed below those thresholds.
+- A local threshold sweep over the clean replay log (`45,919` micro-entry evaluations) showed possible candidate counts at lower thresholds: `>=0.58` `5`, `>=0.57` `7`, `>=0.55` `20`, `>=0.52` `49`, `>=0.50` `91`. This proves the micro model is producing a score distribution, but it does not prove those lower-threshold candidates are profitable. They must be evaluated by future MFE/MAE/net-R before any threshold change.
+- Better setup entries should be defined as downstream-confirmable and profitable after costs. A good setup arm is not merely a 30-second setup pass; it should produce a valid 5-second micro-entry opportunity within the TTL and positive expected net R after spread, slippage, and commissions.
+- New P1 artifact: create a counterfactual setup-to-micro decision report with setup side/probability/threshold/margin, selected side, every 5-second micro probability/threshold/margin during the arm TTL, arm expiry/confirmation, future MFE/MAE/net-R, and realized trade outcome where applicable.
+- New P1 labels/targets: build `setup_downstream_confirmable_labels_v1`, including `Label_Long_Setup_DownstreamPositive`, `Label_Short_Setup_DownstreamPositive`, `Expected_Long_Setup_DownstreamNetR`, `Expected_Short_Setup_DownstreamNetR`, `Max_Future_Micro_Long_Prob`, `Max_Future_Micro_Short_Prob`, and `Best_Entry_Delay_Seconds`.
+- New training sequence: retrain setup models to rank downstream profitable micro-confirmable setups, regenerate lifecycle/micro rows from the corrected setup-arm distribution with real `f_setup_prob`, `f_setup_threshold`, and `f_setup_threshold_margin`, then retune/retrain `longMicroEntryAi` and `shortMicroEntryAi` with minimum trade-count and expected-net-R constraints.
+- Guardrail: do not lower micro thresholds solely to manufacture fills. Any new setup/micro bundle must pass replay volume, expected net R, calibration, symbol/day dominance, recorded-event/live parity, and paper/shadow drift gates. Promotion remains **NO-GO**.
+
+June 28 implementation update — first A-to-Z downstream setup-arm workflow:
+
+- New scripts added:
+  - `scripts/generate_setup_micro_counterfactual_report.py`
+  - `scripts/run_setup_micro_counterfactual_report_4week_latest.sh`
+  - `scripts/build_downstream_setup_training_rows.py`
+  - `scripts/train_downstream_setup_filter.py`
+  - `scripts/evaluate_downstream_filter_replay_policy.py`
+  - `scripts/export_downstream_setup_filter_onnx.py`
+- Tests added:
+  - `tests/test_generate_setup_micro_counterfactual_report.py`
+  - `tests/test_build_downstream_setup_training_rows.py`
+  - `tests/test_evaluate_downstream_filter_replay_policy.py`
+  - `tests/test_export_downstream_setup_filter_onnx.py`
+  - `src/test/java/com/calgary/fili/trader/bot/strategy/DownstreamSetupFilterTest.java`
+- Generated report root on this computer: `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/`.
+- Counterfactual setup-to-micro report parsed the clean local replay: `4,470` setup arms, `45,919` micro evaluations, `932,320` recorded equity bars. At `label_min_micro_prob=0.30` and `min_expected_net_r=0.0`, it produced `371` downstream-positive setup arms (`263` long, `108` short). Positives were concentrated in `TQQQ`, `NVDA`, and `TSLA`; `QQQ` and `SPY` produced no positives under this label definition.
+- Downstream labels were joined back to the enriched 30-second cache with `scripts/build_downstream_setup_training_rows.py`: `4,470 / 4,470` rows matched, `0` unmatched, stable `1` second absolute epoch delta.
+- Research-only setup-arm filters were trained with future outcome fields excluded. Current regenerated no-leakage filter bundle: long holdout AP `0.4225`, AUC `0.8975`, selected threshold `0.5000`, selected precision `0.4405`, recall `0.4933`, selected mean expected net R `+0.1498`; short holdout AP `0.3271`, AUC `0.9032`, selected threshold `0.5500`, selected precision `0.4000`, recall `0.4118`, selected mean expected net R `+0.0556` but p50 `-0.0739`.
+- Offline controlled replay-policy screen (`scripts/evaluate_downstream_filter_replay_policy.py`) applied selected setup-filter thresholds before counterfactual micro first-cross thresholds. Selected filters passed `540 / 4,470` arms. Best screened grid point was micro threshold `0.20`: `539` confirms, `312` positives, mean expected net R `+0.1833`, p50 expected net R `+1.0052`, expected net R sum `+98.05`, `6` symbol/side cohorts, and max day dominance `11.50%` on `2026-05-12`.
+- Downstream setup filters were exported from pickle-only research bundles to ONNX research artifacts under `downstream_setup_filter_onnx_research/`. Generated files include `long_downstream_setup_filter.onnx`, `short_downstream_setup_filter.onnx`, per-side feature schemas, `downstream_setup_filter_route_manifest.json`, `downstream_setup_filter_onnx_manifest.json`, and a markdown summary. Routes are `longDownstreamSetupFilterAi` (`139` features, threshold `0.5000`) and `shortDownstreamSetupFilterAi` (`135` features, threshold `0.5500`). ONNX reference-evaluator parity checks passed on `512` rows per side with max absolute probability deltas `6.74e-07` long and `4.90e-07` short. These are route-manifest-ready research artifacts, not production promotion artifacts.
+- Java controlled replay wiring was added behind disabled-by-default system properties. `DownstreamSetupFilter` loads `downstream_setup_filter_route_manifest.json`, resolves ONNX/schema files relative to the manifest, validates feature counts, rebuilds feature vectors in exact schema order, and zero-fills missing research-only fields. `PingPongStrategy` applies normal setup side arbitration first, then the downstream setup-quality threshold, then existing 5-second micro first-cross confirmation. `scripts/run_databento_historical_ibkr_sim_backtest.sh` now accepts `--downstream-setup-filter-manifest` and passes the corresponding Java properties into replay.
+- Task interpretation: the offline screen is the first positive evidence that a downstream setup-arm quality layer can transform noisy setup arms into a positive expected-R candidate population, and the Java replay path can now execute that gate sequence. It is still **research-only** because the filter is trained on replay-observed arms, Java currently zero-fills enriched research columns that normalized events do not provide, controlled lifecycle/trade outputs still need comparison to the offline screen, live/replay parity is not proven, and paper/shadow drift evidence is absent. Promotion remains **NO-GO**.
+
 ### Phase C — Training and promotion gates on the 48GB machine
 
 2. Generate cost-aware expected-net-R labels before evaluating feature lift.

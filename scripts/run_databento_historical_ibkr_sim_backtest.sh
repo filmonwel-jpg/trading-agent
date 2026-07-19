@@ -22,6 +22,7 @@ DRY_RUN="${DRY_RUN:-false}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 BACKTEST_MAX_TRADES="${BACKTEST_MAX_TRADES:-2000}"
 BACKTEST_MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-500}"
+BACKTEST_TRADE_AMOUNT="${BACKTEST_TRADE_AMOUNT:-100000}"
 BACKTEST_DATABENTO_SOURCE="${BACKTEST_DATABENTO_SOURCE:-api}"
 BACKTEST_RECORDED_EVENTS_FILE="${BACKTEST_RECORDED_EVENTS_FILE:-}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
@@ -39,6 +40,11 @@ LIFECYCLE_LONG_EXIT_THRESHOLD="${LIFECYCLE_LONG_EXIT_THRESHOLD:-${STRATEGY_LIFEC
 LIFECYCLE_SHORT_EXIT_THRESHOLD="${LIFECYCLE_SHORT_EXIT_THRESHOLD:-${STRATEGY_LIFECYCLE_SHORT_EXIT_THRESHOLD:-}}"
 MICRO_LONG_EXIT_GUARD_THRESHOLD="${MICRO_LONG_EXIT_GUARD_THRESHOLD:-${STRATEGY_MICRO_LONG_EXIT_GUARD_THRESHOLD:-}}"
 MICRO_SHORT_EXIT_GUARD_THRESHOLD="${MICRO_SHORT_EXIT_GUARD_THRESHOLD:-${STRATEGY_MICRO_SHORT_EXIT_GUARD_THRESHOLD:-}}"
+DOWNSTREAM_SETUP_FILTER_ENABLED="${DOWNSTREAM_SETUP_FILTER_ENABLED:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_ENABLED:-false}}"
+DOWNSTREAM_SETUP_FILTER_MANIFEST="${DOWNSTREAM_SETUP_FILTER_MANIFEST:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_ROUTE_MANIFEST:-}}"
+DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="${DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-}}"
+DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED="${DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED:-true}}"
+MICRO_ENTRY_RESEARCH_NO_TRADE="${MICRO_ENTRY_RESEARCH_NO_TRADE:-${STRATEGY_MICRO_ENTRY_RESEARCH_NO_TRADE:-false}}"
 
 usage() {
   cat <<'USAGE'
@@ -62,6 +68,7 @@ Options:
   --recorded-events FILE  Recorded normalized NDJSON/NDJSON.GZ file for --source ndjson. Can be comma-separated.
   --dry-run                Validate wiring without downloading Databento data.
   --timeout-seconds N      Kill the Databento stream if it has not completed after N seconds. Default: 0 (no timeout)
+  --trade-amount N         Strategy notional per setup/micro entry. Default: 100000
   --max-trades N           Strategy max trades during replay. Default: 2000
   --max-share-cap N        Simulated broker max shares per order. Default: 500
   --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
@@ -73,6 +80,10 @@ Options:
   --micro-exit-guard-threshold P   Override both long/short 5s micro-exit guard thresholds.
   --micro-long-exit-guard-threshold P   Override 5s long micro-exit guard threshold from lifecycle scorecard.
   --micro-short-exit-guard-threshold P  Override 5s short micro-exit guard threshold from lifecycle scorecard.
+  --downstream-setup-filter-manifest F   Enable controlled downstream setup-quality ONNX filter route manifest.
+  --downstream-setup-filter-features-csv F  Optional enriched setup-arm CSV sidecar for controlled replay parity.
+  --downstream-setup-filter-fail-open    Continue if downstream setup filter cannot load. Default is fail-closed.
+  --micro-entry-research-no-trade Record micro-entry confirmations but do not place orders. Research replay only.
   --disable-lifecycle-micro Disable lifecycle exit and 5s micro entry/exit guard routes.
   --previous-close PRICE  Override previous close injected into the strategy before replay bars.
   --classpath-file FILE    Maven runtime classpath cache. Default: runtime/backtests/databento_ibkr_sim_backtest_cp.txt
@@ -404,6 +415,7 @@ while [[ $# -gt 0 ]]; do
     --recorded-events=*|--input-file=*) BACKTEST_RECORDED_EVENTS_FILE="${1#*=}"; shift ;;
     --dry-run) DRY_RUN="true"; shift ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --trade-amount) BACKTEST_TRADE_AMOUNT="$2"; shift 2 ;;
     --max-trades) BACKTEST_MAX_TRADES="$2"; shift 2 ;;
     --max-share-cap) BACKTEST_MAX_SHARE_CAP="$2"; shift 2 ;;
     --lifecycle-model-dir) LIFECYCLE_MODEL_DIR="$2"; shift 2 ;;
@@ -424,6 +436,12 @@ while [[ $# -gt 0 ]]; do
     --micro-long-exit-guard-threshold=*) MICRO_LONG_EXIT_GUARD_THRESHOLD="${1#--micro-long-exit-guard-threshold=}"; shift ;;
     --micro-short-exit-guard-threshold) MICRO_SHORT_EXIT_GUARD_THRESHOLD="$2"; shift 2 ;;
     --micro-short-exit-guard-threshold=*) MICRO_SHORT_EXIT_GUARD_THRESHOLD="${1#--micro-short-exit-guard-threshold=}"; shift ;;
+    --downstream-setup-filter-manifest) DOWNSTREAM_SETUP_FILTER_ENABLED="true"; DOWNSTREAM_SETUP_FILTER_MANIFEST="$2"; shift 2 ;;
+    --downstream-setup-filter-manifest=*) DOWNSTREAM_SETUP_FILTER_ENABLED="true"; DOWNSTREAM_SETUP_FILTER_MANIFEST="${1#--downstream-setup-filter-manifest=}"; shift ;;
+    --downstream-setup-filter-features-csv) DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="$2"; shift 2 ;;
+    --downstream-setup-filter-features-csv=*) DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="${1#--downstream-setup-filter-features-csv=}"; shift ;;
+    --downstream-setup-filter-fail-open) DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED="false"; shift ;;
+    --micro-entry-research-no-trade) MICRO_ENTRY_RESEARCH_NO_TRADE="true"; shift ;;
     --disable-lifecycle-micro) LIFECYCLE_MICRO_ENABLED="false"; shift ;;
     --previous-close) BACKTEST_PREVIOUS_CLOSE="$2"; shift 2 ;;
     --previous-close=*) BACKTEST_PREVIOUS_CLOSE="${1#--previous-close=}"; shift ;;
@@ -456,6 +474,12 @@ fi
 [[ "$SYMBOLS_FILE" != /* ]] && SYMBOLS_FILE="$ROOT/$SYMBOLS_FILE"
 [[ "$LIFECYCLE_MODEL_DIR" != /* ]] && LIFECYCLE_MODEL_DIR="$ROOT/$LIFECYCLE_MODEL_DIR"
 [[ "$CLASSPATH_FILE" != /* ]] && CLASSPATH_FILE="$ROOT/$CLASSPATH_FILE"
+if [[ -n "$DOWNSTREAM_SETUP_FILTER_MANIFEST" && "$DOWNSTREAM_SETUP_FILTER_MANIFEST" != /* ]]; then
+  DOWNSTREAM_SETUP_FILTER_MANIFEST="$ROOT/$DOWNSTREAM_SETUP_FILTER_MANIFEST"
+fi
+if [[ -n "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" && "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" != /* ]]; then
+  DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="$ROOT/$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV"
+fi
 
 CLASSPATH_PARENT="$(dirname "$CLASSPATH_FILE")"
 mkdir -p "$CLASSPATH_PARENT" 2>/dev/null || true
@@ -641,6 +665,7 @@ for SYMBOL in "${symbols[@]}"; do
     "-Dbacktest.databento.optionsStypeIn=${DATABENTO_OPTIONS_STYPE_IN:-parent}"
     "-Dbacktest.databento.dryRun=$DRY_RUN"
     "-Dbacktest.databento.timeoutSeconds=$TIMEOUT_SECONDS"
+    "-Dbacktest.strategy.tradeAmount=$BACKTEST_TRADE_AMOUNT"
     "-Dbacktest.strategy.maxTrades=$BACKTEST_MAX_TRADES"
     "-Dbacktest.strategy.maxShareCap=$BACKTEST_MAX_SHARE_CAP"
     "-Dbacktest.tradeLogFile=$TRADE_LOG"
@@ -668,6 +693,14 @@ for SYMBOL in "${symbols[@]}"; do
   fi
   [[ -n "$BACKTEST_PREVIOUS_CLOSE" ]] && JAVA_PROPS+=("-Dbacktest.previousClose=$BACKTEST_PREVIOUS_CLOSE")
   [[ -n "$BACKTEST_RECORDED_EVENTS_FILE" ]] && JAVA_PROPS+=("-Dbacktest.databento.inputFile=$BACKTEST_RECORDED_EVENTS_FILE")
+  if truthy "$DOWNSTREAM_SETUP_FILTER_ENABLED"; then
+    JAVA_PROPS+=(
+      "-Dstrategy.downstreamSetupFilter.enabled=true"
+      "-Dstrategy.downstreamSetupFilter.routeManifest=$DOWNSTREAM_SETUP_FILTER_MANIFEST"
+      "-Dstrategy.downstreamSetupFilter.failClosed=$DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED"
+    )
+    [[ -n "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" ]] && JAVA_PROPS+=("-Dstrategy.downstreamSetupFilter.featuresCsv=$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV")
+  fi
   MICRO_LONG_ENTRY_THRESHOLD_RESOLVED=""
   MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED=""
   LIFECYCLE_LONG_EXIT_THRESHOLD_RESOLVED=""
@@ -690,6 +723,7 @@ for SYMBOL in "${symbols[@]}"; do
       "-Dstrategy.micro.exitGuardEnabled=true"
       "-Dstrategy.lifecycle.modelDir=$LIFECYCLE_MODEL_DIR"
       "-Dstrategy.micro.modelDir=$LIFECYCLE_MODEL_DIR"
+      "-Dstrategy.micro.entryResearchNoTrade=$MICRO_ENTRY_RESEARCH_NO_TRADE"
       "-Dstrategy.exit.lifecycle.longThreshold=$LIFECYCLE_LONG_EXIT_THRESHOLD_RESOLVED"
       "-Dstrategy.exit.lifecycle.shortThreshold=$LIFECYCLE_SHORT_EXIT_THRESHOLD_RESOLVED"
       "-Dstrategy.micro.longEntryThreshold=$MICRO_LONG_ENTRY_THRESHOLD_RESOLVED"
@@ -713,8 +747,11 @@ for SYMBOL in "${symbols[@]}"; do
 [BACKTEST] setup_thresholds_file=${SETUP_THRESHOLDS_FILE_RESOLVED:-<none>}
 [BACKTEST] lifecycle_micro_enabled=$LIFECYCLE_MICRO_ENABLED lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
 [BACKTEST] micro_entry_thresholds long=${MICRO_LONG_ENTRY_THRESHOLD_RESOLVED:-<disabled>} short=${MICRO_SHORT_ENTRY_THRESHOLD_RESOLVED:-<disabled>}
+[BACKTEST] micro_entry_research_no_trade=$MICRO_ENTRY_RESEARCH_NO_TRADE
 [BACKTEST] lifecycle_exit_thresholds long=${LIFECYCLE_LONG_EXIT_THRESHOLD_RESOLVED:-<disabled>} short=${LIFECYCLE_SHORT_EXIT_THRESHOLD_RESOLVED:-<disabled>}
 [BACKTEST] micro_exit_guard_thresholds long=${MICRO_LONG_EXIT_GUARD_THRESHOLD_RESOLVED:-<disabled>} short=${MICRO_SHORT_EXIT_GUARD_THRESHOLD_RESOLVED:-<disabled>}
+[BACKTEST] downstream_setup_filter enabled=$DOWNSTREAM_SETUP_FILTER_ENABLED manifest=${DOWNSTREAM_SETUP_FILTER_MANIFEST:-<none>} features_csv=${DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-<none>} fail_closed=$DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
+[BACKTEST] trade_amount=$BACKTEST_TRADE_AMOUNT max_trades=$BACKTEST_MAX_TRADES max_share_cap=$BACKTEST_MAX_SHARE_CAP
 [BACKTEST] trade_log=$TRADE_LOG
 [BACKTEST] order_history=$ORDER_HISTORY
 [BACKTEST] trade_lifecycle_summary=$TRADE_LIFECYCLE_SUMMARY
@@ -736,7 +773,6 @@ printf '[BACKTEST] completed=%s failed=%s requested=%s output_dir=%s\n' "$comple
 if [[ "$failures" -gt 0 ]]; then
   exit 1
 fi
-
 
 
 
