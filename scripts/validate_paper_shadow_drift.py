@@ -300,7 +300,7 @@ def compare_rows(paper_rows: list[dict[str, Any]], shadow_rows: list[dict[str, A
     if snapshot_status_mismatch_rate > args.max_snapshot_status_mismatch_rate:
         issues.append(f"snapshot_status_mismatch_rate {snapshot_status_mismatch_rate:.6f} > maximum {args.max_snapshot_status_mismatch_rate:.6f}")
     for label, metrics in (("paper", paper_snapshot_metrics), ("shadow", shadow_snapshot_metrics)):
-        if metrics["telemetry_rows"] > 0 and metrics["hit_rate"] < args.min_feature_snapshot_hit_rate:
+        if metrics["hit_rate"] < args.min_feature_snapshot_hit_rate:
             issues.append(f"{label}_feature_snapshot_hit_rate {metrics['hit_rate']:.6f} < minimum {args.min_feature_snapshot_hit_rate:.6f}")
     if paper_only or shadow_only:
         warnings.append(f"unpaired decision rows paper_only={paper_only} shadow_only={shadow_only}")
@@ -372,7 +372,16 @@ def write_reports(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]
     return json_path, md_path
 
 
-def parse_args() -> argparse.Namespace:
+def print_gate_summaries(report: dict[str, Any]) -> None:
+    for item in report["gates"]:
+        print(f"GATE {item['name']} status={item['status']} issues={len(item['issues'])} warnings={len(item['warnings'])}")
+        for issue in item.get("issues", []):
+            print(f"ISSUE {item['name']} {issue}")
+        for warning in item.get("warnings", []):
+            print(f"WARNING {item['name']} {warning}")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--paper-decisions", default="", help="Paper decision CSV. Mutually exclusive with --paper-log.")
     parser.add_argument("--shadow-decisions", default="", help="Shadow decision CSV. Mutually exclusive with --shadow-log.")
@@ -386,11 +395,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-feature-snapshot-hit-rate", type=float, default=0.95)
     parser.add_argument("--top", type=int, default=20, help="Number of largest-drift examples to include.")
     parser.add_argument("--fail-on-no-go", action="store_true", help="Exit non-zero if the drift gate is NO-GO.")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     try:
         paper_rows, paper_source = load_rows(repo_path(args.paper_decisions), repo_path(args.paper_log), "paper")
         shadow_rows, shadow_source = load_rows(repo_path(args.shadow_decisions), repo_path(args.shadow_log), "shadow")
@@ -399,7 +408,12 @@ def main() -> int:
             "paper_shadow_event_snapshot_drift",
             "NO-GO",
             "Paper/shadow drift inputs could not be loaded.",
-            metrics={},
+            metrics={
+                "paper_decisions": args.paper_decisions,
+                "shadow_decisions": args.shadow_decisions,
+                "paper_log": args.paper_log,
+                "shadow_log": args.shadow_log,
+            },
             issues=[str(exc)],
         )
         report = {
@@ -412,6 +426,7 @@ def main() -> int:
         output_dir = repo_path(args.output_dir) or (REPO_ROOT / "runtime" / "reports" / "paper_shadow_drift")
         json_path, md_path = write_reports(report, output_dir)
         print(f"PAPER_SHADOW_DRIFT status=NO-GO json={json_path} markdown={md_path}")
+        print_gate_summaries(report)
         return 1 if args.fail_on_no_go else 0
 
     drift_gate = compare_rows(paper_rows, shadow_rows, args)
@@ -425,8 +440,7 @@ def main() -> int:
     output_dir = repo_path(args.output_dir) or (REPO_ROOT / "runtime" / "reports" / "paper_shadow_drift")
     json_path, md_path = write_reports(report, output_dir)
     print(f"PAPER_SHADOW_DRIFT status={report['overall_status']} json={json_path} markdown={md_path}")
-    for item in report["gates"]:
-        print(f"GATE {item['name']} status={item['status']} issues={len(item['issues'])} warnings={len(item['warnings'])}")
+    print_gate_summaries(report)
     if args.fail_on_no_go and report["overall_status"] == "NO-GO":
         return 1
     return 0
