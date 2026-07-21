@@ -515,6 +515,25 @@ Outputs:
 
 The validator checks paired row count, probability drift, decision mismatch rate, route mismatch rate, `featureSnapshot` status mismatch rate, and per-side snapshot hit rates.
 
+If the validator reports an issue such as `runtime/paper/paper.log` or `runtime/shadow/shadow.log`, no real paper/shadow log was available at that path.  That is an input-capture blocker, not a model-drift result.  Locate existing logs first:
+
+```zsh
+find runtime -type f \( -name '*.log' -o -name '*live_trade_logs.txt' \) -print | while read -r log; do
+  count=$(grep -c 'SETUP_FILTER_PASSES' "$log" 2>/dev/null || true)
+  if [[ "$count" -gt 0 ]]; then
+    printf '%8s %s\n' "$count" "$log"
+  fi
+done
+```
+
+For a real no-order paper/shadow capture, do **not** use `--max-trades=0`: it closes the entry gate before downstream setup-filter scoring, so it will usually produce no `SETUP_FILTER_PASSES` rows.  Use the research no-trade switch instead, which still allows setup/micro decisions to be logged while suppressing entry orders:
+
+```zsh
+export TRADING_AGENT_JAVA_OPTS="-Xms32m -Xmx192m -XX:+UseSerialGC -Dspring.main.lazy-initialization=true -Dstrategy.downstreamSetupFilter.enabled=true -Dstrategy.downstreamSetupFilter.routeManifest=$MANIFEST -Dstrategy.downstreamSetupFilter.failClosed=true -Dstrategy.micro.entryResearchNoTrade=true"
+```
+
+Use separate process ports, IBKR client IDs, market-data request IDs, state files, app logs, and tee logs for any paired paper/shadow processes.  The repository currently does not provide a dedicated paper-vs-shadow launcher; `run_symbol.sh --tee=... -- ...` can be used for controlled capture once those per-process overrides are chosen.
+
 ## Promotion checklist
 
 - [ ] Event producer emits `FeatureSnapshotEpochSec` equal to the downstream setup arm epoch.
