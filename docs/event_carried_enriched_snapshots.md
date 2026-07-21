@@ -526,10 +526,20 @@ find runtime -type f \( -name '*.log' -o -name '*live_trade_logs.txt' \) -print 
 done
 ```
 
-For a real no-order paper/shadow capture, do **not** use `--max-trades=0`: it closes the entry gate before downstream setup-filter scoring, so it will usually produce no `SETUP_FILTER_PASSES` rows.  Use the research no-trade switch instead, which still allows setup/micro decisions to be logged while suppressing entry orders:
+For a real no-order paper/shadow capture, do **not** use `--max-trades=0`: it closes the entry gate before downstream setup-filter scoring, so it will usually produce no `SETUP_FILTER_PASSES` rows.  Use the research no-trade switch instead, which still allows setup/micro decisions to be logged while suppressing entry orders.
+
+The `-D...` entries are Java system properties, **not standalone zsh commands**. Do not paste them one per line at the shell prompt. Put them inside `TRADING_AGENT_JAVA_OPTS` before launching `run_symbol.sh`:
 
 ```zsh
-export TRADING_AGENT_JAVA_OPTS="-Xms32m -Xmx192m -XX:+UseSerialGC -Dspring.main.lazy-initialization=true -Dstrategy.downstreamSetupFilter.enabled=true -Dstrategy.downstreamSetupFilter.routeManifest=$MANIFEST -Dstrategy.downstreamSetupFilter.failClosed=true -Dstrategy.micro.entryResearchNoTrade=true"
+export TRADING_AGENT_JAVA_OPTS="\
+-Xms32m \
+-Xmx192m \
+-XX:+UseSerialGC \
+-Dspring.main.lazy-initialization=true \
+-Dstrategy.downstreamSetupFilter.enabled=true \
+-Dstrategy.downstreamSetupFilter.routeManifest=$MANIFEST \
+-Dstrategy.downstreamSetupFilter.failClosed=true \
+-Dstrategy.micro.entryResearchNoTrade=true"
 ```
 
 Use separate process ports, IBKR client IDs, market-data request IDs, state files, app logs, and tee logs for any paired paper/shadow processes.  The repository currently does not provide a dedicated paper-vs-shadow launcher; `run_symbol.sh --tee=... -- ...` can be used for controlled capture once those per-process overrides are chosen.
