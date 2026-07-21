@@ -290,6 +290,70 @@ Micro-confirmation comparison at threshold `0.30` remains the same known one-cou
 
 Interpretation: controlled replay now proves exact downstream setup-filter parity through the event-carried snapshot path without a Java CSV sidecar. Promotion/live status remains **NO-GO** until paper/shadow validates that the live feature producer emits the same snapshot contract with acceptable hit-rate, probability drift, and decision drift.
 
+## 2026-07-20 continuation: event-carried snapshot trade-enabled replay
+
+The trade-enabled controlled replay was rerun with the enriched NDJSON event-snapshot file and **without** `--downstream-setup-filter-features-csv` or `--micro-entry-research-no-trade`.
+
+- output: `runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/controlled_java_replay_downstream_setup_filter_catboost_core_20260720_event_snapshot_trade/`
+- summary artifacts:
+  - `trade_enabled_event_snapshot_summary_20260720.json`
+  - `trade_enabled_event_snapshot_summary_20260720.md`
+- run completion: `[BACKTEST] completed=5 failed=0 requested=5`
+
+Marker counts:
+
+| marker | count |
+|---|---:|
+| `SETUP_FILTER_PASSES=PASS` | `121` |
+| `SETUP_FILTER_PASSES=FAIL` | `3228` |
+| `featureSnapshot=hit` | `3349` |
+| `featureSnapshot=miss` | `0` |
+| `featureSidecar=disabled` | `3349` |
+| `featureSidecar=hit` | `0` |
+| `MICRO_ENTRY_CONFIRMS=PASS` | `110` |
+| `MICRO_ENTRY_CONFIRMS=FAIL` | `282` |
+
+Realized trade summary:
+
+| metric | value |
+|---|---:|
+| closed trades | `110` |
+| submitted orders | `220` |
+| filled orders | `220` |
+| total PnL | `+17662.42` |
+| sum realized R | `+97.0384` |
+| mean realized R | `+0.8822` |
+| median realized R | `+1.3610` |
+| win rate | `82.73%` |
+| avg MFE R | `+1.5021` |
+| avg MAE R | `-0.7957` |
+| max day trade share | `13.64%` (`2026-05-11`, `15` trades) |
+| max symbol trade share | `48.18%` (`TQQQ`, `53` trades) |
+
+Exit reasons:
+
+| exit reason | count |
+|---|---:|
+| `guard` | `86` |
+| `hard_stop` | `15` |
+| `lifecycle` | `9` |
+| hard-risk exits | `0` |
+| EOD exits | `0` |
+
+Distribution:
+
+| cohort | count / share |
+|---|---:|
+| long trades | `74` |
+| short trades | `36` |
+| `TQQQ` trades | `53` / `48.18%` |
+| `NVDA` trades | `35` / `31.82%` |
+| `TSLA` trades | `22` / `20.00%` |
+| `QQQ` trades | `0` |
+| `SPY` trades | `0` |
+
+Interpretation: the event-carried snapshot path reproduces the sidecar-exact trade-enabled evidence while keeping the Java CSV sidecar disabled. This closes the controlled-replay transport/parity concern for event-carried snapshots, but it is still **research-only replay evidence**. Promotion/live status remains **NO-GO** until real paper/shadow logs show the production event producer emits the same snapshot contract with acceptable hit-rate, probability drift, and decision drift.
+
 ## 2026-07-20 continuation: paper/shadow drift validator run
 
 No real local `paper`/`shadow` runtime logs with `SETUP_FILTER_PASSES` telemetry were found at validation time. The only available setup-filter telemetry logs were controlled replay outputs under `runtime/local-backtests/...`.
