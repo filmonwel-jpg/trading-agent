@@ -403,7 +403,8 @@ python3 scripts/summarize_trade_enabled_replay.py \
   --output-dir "$TRADE_OUT" \
   --log-file "$TRADE_OUT/controlled_java_replay.log" \
   --summary-json "$TRADE_OUT/trade_enabled_event_snapshot_summary_20260720.json" \
-  --summary-md "$TRADE_OUT/trade_enabled_event_snapshot_summary_20260720.md"
+  --summary-md "$TRADE_OUT/trade_enabled_event_snapshot_summary_20260720.md" \
+  --title "Trade-enabled event-carried snapshot replay summary — 2026-07-20"
 ```
 
 ### 8. CSV sidecar replay mode

@@ -17,6 +17,10 @@ MARKERS = {
     "MICRO_ENTRY_CONFIRMS_FAIL": "MICRO_ENTRY_CONFIRMS=FAIL",
     "featureSidecar_hit": "featureSidecar=hit",
     "featureSidecar_miss": "featureSidecar=miss",
+    "featureSidecar_disabled": "featureSidecar=disabled",
+    "featureSnapshot_hit": "featureSnapshot=hit",
+    "featureSnapshot_miss": "featureSnapshot=miss",
+    "featureSnapshot_disabled": "featureSnapshot=disabled",
 }
 COMPLETION_RE = re.compile(r"\[BACKTEST\] completed=(\d+) failed=(\d+) requested=(\d+)")
 
@@ -63,9 +67,9 @@ def frame_records(frame: pd.DataFrame, float_digits: int = 6) -> list[dict[str, 
     return records
 
 
-def summarize(output_dir: Path) -> dict[str, Any]:
+def summarize(output_dir: Path, log_file: Path | None = None) -> dict[str, Any]:
     output_dir = output_dir.resolve()
-    log_path = output_dir / "controlled_java_replay.log"
+    log_path = log_file.resolve() if log_file is not None else output_dir / "controlled_java_replay.log"
     if not log_path.is_file():
         raise FileNotFoundError(f"missing replay log: {log_path}")
 
@@ -188,16 +192,29 @@ def summarize(output_dir: Path) -> dict[str, Any]:
     return summary
 
 
-def markdown_report(summary: dict[str, Any]) -> str:
+def replay_classification(summary: dict[str, Any]) -> str:
+    marker_counts = summary.get("marker_counts", {})
+    if marker_counts.get("featureSnapshot_hit", 0) > 0 and marker_counts.get("featureSidecar_disabled", 0) > 0:
+        return "research-only event-carried snapshot replay evidence; not live/paper shadow drift evidence"
+    if marker_counts.get("featureSidecar_hit", 0) > 0:
+        return "research-only sidecar replay evidence; not live-feature parity evidence"
+    return "research-only replay evidence; review feature-source telemetry before promotion use"
+
+
+def markdown_report(summary: dict[str, Any], *, title: str = "Trade-enabled controlled replay summary", classification: str | None = None) -> str:
+    classification = classification or replay_classification(summary)
     lines = [
-        "# Trade-enabled sidecar replay summary — 2026-07-19",
+        f"# {title}",
         "",
         "## Status",
         "",
         f"- Output: `{summary['output_dir']}`",
         f"- Completion: `{summary['completion']['raw']}`",
         f"- Sidecar misses: `{summary['marker_counts']['featureSidecar_miss']}`",
-        "- Classification: **research-only sidecar replay evidence; not live-feature parity evidence**",
+        f"- Feature snapshot hits: `{summary['marker_counts']['featureSnapshot_hit']}`",
+        f"- Feature snapshot misses: `{summary['marker_counts']['featureSnapshot_miss']}`",
+        f"- Sidecar disabled rows: `{summary['marker_counts']['featureSidecar_disabled']}`",
+        f"- Classification: **{classification}**",
         "",
         "## Marker counts",
         "",
@@ -254,18 +271,32 @@ def markdown_report(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--write-artifacts", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--log-file", type=Path, help="Optional replay log path. Defaults to <output-dir>/controlled_java_replay.log.")
+    parser.add_argument("--summary-json", type=Path, help="Optional path for a JSON summary artifact.")
+    parser.add_argument("--summary-md", type=Path, help="Optional path for a Markdown summary artifact.")
+    parser.add_argument("--title", default="Trade-enabled controlled replay summary", help="Markdown report title.")
+    parser.add_argument("--classification", help="Optional Markdown classification override.")
+    args = parser.parse_args(argv)
 
-    summary = summarize(args.output_dir)
+    summary = summarize(args.output_dir, args.log_file)
     print(json.dumps(summary, indent=2, sort_keys=True))
+
+    output_dir = args.output_dir.resolve()
+    summary_json = args.summary_json
+    summary_md = args.summary_md
     if args.write_artifacts:
-        output_dir = args.output_dir.resolve()
-        (output_dir / "trade_enabled_sidecar_summary_20260719.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-        (output_dir / "trade_enabled_sidecar_summary_20260719.md").write_text(markdown_report(summary))
+        summary_json = summary_json or output_dir / "trade_enabled_sidecar_summary_20260719.json"
+        summary_md = summary_md or output_dir / "trade_enabled_sidecar_summary_20260719.md"
+    if summary_json is not None:
+        summary_json.parent.mkdir(parents=True, exist_ok=True)
+        summary_json.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    if summary_md is not None:
+        summary_md.parent.mkdir(parents=True, exist_ok=True)
+        summary_md.write_text(markdown_report(summary, title=args.title, classification=args.classification))
     return 0
 
 
