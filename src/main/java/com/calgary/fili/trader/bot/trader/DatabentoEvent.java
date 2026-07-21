@@ -2,8 +2,13 @@ package com.calgary.fili.trader.bot.trader;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class DatabentoEvent {
@@ -78,6 +83,41 @@ public class DatabentoEvent {
     @JsonAlias({"QualityScore", "quality_score"})
     public double qualityScore = Double.NaN;
 
+    @JsonAlias({"FeatureSnapshotEpochSec", "feature_snapshot_epoch_sec", "SetupEpochSec", "setup_epoch_sec"})
+    public long featureSnapshotEpochSec = 0L;
+    @JsonAlias({"FeatureSnapshotSchemaVersion", "feature_snapshot_schema_version"})
+    public String featureSnapshotSchemaVersion = "";
+    @JsonAlias({"FeatureSnapshotSource", "feature_snapshot_source"})
+    public String featureSnapshotSource = "";
+
+    private final Map<String, Float> enrichedNumericFields = new LinkedHashMap<>();
+
+    @JsonProperty("enriched_features")
+    @JsonAlias({"EnrichedFeatures", "feature_snapshot", "FeatureSnapshot", "featureSnapshot"})
+    public void setEnrichedFeatures(Map<String, Object> rawFeatures) {
+        if (rawFeatures == null || rawFeatures.isEmpty()) {
+            return;
+        }
+        rawFeatures.forEach(this::putNumericFeatureValue);
+    }
+
+    @JsonAnySetter
+    public void putUnknownField(String key, Object value) {
+        putNumericFeatureValue(key, value);
+    }
+
+    public Map<String, Float> getEnrichedNumericFields() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(enrichedNumericFields));
+    }
+
+    public boolean hasEnrichedNumericFields() {
+        return !enrichedNumericFields.isEmpty();
+    }
+
+    public long effectiveFeatureSnapshotEpochSec() {
+        return featureSnapshotEpochSec > 0L ? featureSnapshotEpochSec : barEpochSec;
+    }
+
     public boolean isEquityBar() {
         return "equity_bar".equalsIgnoreCase(event);
     }
@@ -150,6 +190,32 @@ public class DatabentoEvent {
 
     private static String normalizeFlag(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.US);
+    }
+
+    private void putNumericFeatureValue(String key, Object value) {
+        String normalizedKey = key == null ? "" : key.trim();
+        if (normalizedKey.isBlank() || value == null) {
+            return;
+        }
+        Float parsed = parseFiniteFloat(value);
+        if (parsed != null) {
+            enrichedNumericFields.put(normalizedKey, parsed);
+        }
+    }
+
+    private static Float parseFiniteFloat(Object value) {
+        try {
+            if (value instanceof Number number) {
+                float parsed = number.floatValue();
+                return Float.isFinite(parsed) ? parsed : null;
+            }
+            if (value instanceof String raw && !raw.isBlank()) {
+                float parsed = Float.parseFloat(raw.trim());
+                return Float.isFinite(parsed) ? parsed : null;
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return null;
     }
 }
 

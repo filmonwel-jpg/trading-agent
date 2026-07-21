@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.StringJoiner;
 
 /**
  * Research-only downstream setup-arm quality filter used by controlled Java replay.
@@ -129,6 +130,19 @@ final class DownstreamSetupFilter implements Closeable {
 		float[] features = buildFeatureVector(route.featureColumns(), featureValues);
 		double probability = route.predictor().predictProbability(features);
 		return new Decision(probability >= route.threshold(), probability, route.threshold(), features.length, route.routeName());
+	}
+
+	String featureDebug(String side, Map<String, Float> featureValues) {
+		Route route = routeBySide.get(side == null ? "" : side.toLowerCase(Locale.US));
+		if (route == null) {
+			return "route=missingRoute";
+		}
+		float[] features = buildFeatureVector(route.featureColumns(), featureValues);
+		StringJoiner joiner = new StringJoiner(",", "route=" + route.routeName() + " features=", "");
+		for (int i = 0; i < route.featureColumns().size(); i++) {
+			joiner.add(route.featureColumns().get(i) + "=" + features[i]);
+		}
+		return joiner.toString();
 	}
 
 	Path manifestPath() {

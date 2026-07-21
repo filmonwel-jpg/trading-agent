@@ -117,6 +117,8 @@ scripts/run_databento_historical_ibkr_sim_backtest.sh \
   --output-dir runtime/backtests/recorded_replay
 ```
 
+For downstream setup-filter feature replay, the same NDJSON backtester supports both the original CSV sidecar path and the production-parity event-carried `enriched_features` path. See `docs/event_carried_enriched_snapshots.md` for the copyable commands to prepare the enriched NDJSON file, run no-trade and trade-enabled file replays, validate event-snapshot drift, and run the CSV sidecar replay mode.
+
 Use `scripts/validate_lifecycle_micro_promotion.py` after the run to combine recorded-event contract checks, replay/live decision parity, PnL/day-dominance, paper/shadow drift, and label-economics evidence.
 
 Preview the resolved list without building or downloading data:

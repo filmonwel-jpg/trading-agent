@@ -578,7 +578,30 @@ def drift_report_gate(args: argparse.Namespace) -> dict[str, Any]:
             issues.append(f"Drift report not found: {path}")
         elif path.suffix.lower() == ".json":
             data = read_json(path)
-            metrics = data if isinstance(data, dict) else {"report": data}
+            if isinstance(data, dict) and isinstance(data.get("gates"), list):
+                drift_gate = next(
+                    (
+                        item for item in data.get("gates", [])
+                        if isinstance(item, dict)
+                        and str(item.get("name", "")).strip() in {"paper_shadow_drift", "paper_shadow_event_snapshot_drift"}
+                    ),
+                    {},
+                )
+                metrics = {
+                    "report_file": str(path),
+                    "report_schema_version": data.get("schema_version", ""),
+                    "report_overall_status": data.get("overall_status", ""),
+                    "drift_gate_status": drift_gate.get("status", "") if isinstance(drift_gate, dict) else "",
+                    **object_map(drift_gate.get("metrics") if isinstance(drift_gate, dict) else {}),
+                }
+                report_status = str(data.get("overall_status", "")).upper()
+                drift_status = str(drift_gate.get("status", "") if isinstance(drift_gate, dict) else "").upper()
+                if report_status == "NO-GO" or drift_status == "NO-GO":
+                    issues.append(f"Precomputed drift report is NO-GO: {path}")
+                elif report_status == "WARN" or drift_status == "WARN":
+                    warnings.append(f"Precomputed drift report is WARN: {path}")
+            else:
+                metrics = data if isinstance(data, dict) else {"report": data}
         else:
             rows = read_csv_rows(path)
             max_probability_drift = max((as_float(first_present(row, ["max_probability_drift", "probability_drift", "abs_probability_drift"]), 0.0) or 0.0 for row in rows), default=0.0)

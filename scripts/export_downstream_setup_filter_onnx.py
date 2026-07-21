@@ -160,18 +160,64 @@ def check_onnx_model(path: Path) -> dict[str, Any]:
     }
 
 
-def find_probability_output(output_names: list[str], outputs: list[Any], expected_rows: int) -> np.ndarray:
-    preferred = None
-    for name, output in zip(output_names, outputs):
-        if name == PROBABILITY_OUTPUT_NAME:
-            preferred = np.asarray(output)
-            break
-    candidates = [preferred] if preferred is not None else []
-    candidates.extend(np.asarray(output) for output in outputs)
+def class_labels(model: Any) -> list[Any]:
+    labels = list(getattr(model, "classes_", []))
+    return labels if labels else [0, 1]
+
+
+def label_lookup_candidates(label: Any) -> list[Any]:
+    candidates: list[Any] = [label, str(label)]
+    for coercer in (int, float):
+        try:
+            candidates.append(coercer(label))
+        except (TypeError, ValueError):
+            pass
+    deduped: list[Any] = []
     for candidate in candidates:
-        if candidate.ndim == 2 and candidate.shape[0] == expected_rows and candidate.shape[1] >= 2:
-            return candidate.astype(np.float64)
-    raise ValueError("Unable to locate a 2-D ONNX probability output")
+        if not any(candidate == existing and type(candidate) is type(existing) for existing in deduped):
+            deduped.append(candidate)
+    return deduped
+
+
+def probability_matrix_from_zipmap(output: Any, expected_rows: int, labels: list[Any]) -> np.ndarray | None:
+    rows = output.tolist() if isinstance(output, np.ndarray) and output.dtype == object else output
+    if not isinstance(rows, (list, tuple)) or len(rows) != expected_rows:
+        return None
+    matrix: list[list[float]] = []
+    for row in rows:
+        if not hasattr(row, "items"):
+            return None
+        values: list[float] = []
+        for label in labels:
+            value = None
+            for candidate in label_lookup_candidates(label):
+                if candidate in row:
+                    value = row[candidate]
+                    break
+            if value is None:
+                return None
+            values.append(float(value))
+        matrix.append(values)
+    return np.asarray(matrix, dtype=np.float64)
+
+
+def probability_matrix_from_output(output: Any, expected_rows: int, labels: list[Any]) -> np.ndarray | None:
+    zipmap_matrix = probability_matrix_from_zipmap(output, expected_rows=expected_rows, labels=labels)
+    if zipmap_matrix is not None:
+        return zipmap_matrix
+    candidate = np.asarray(output)
+    if candidate.ndim == 2 and candidate.shape[0] == expected_rows and candidate.shape[1] >= len(labels):
+        return candidate.astype(np.float64)
+    return None
+
+
+def find_probability_output(output_names: list[str], outputs: list[Any], expected_rows: int, labels: list[Any]) -> np.ndarray:
+    preferred_outputs = [output for name, output in zip(output_names, outputs) if name == PROBABILITY_OUTPUT_NAME]
+    for output in [*preferred_outputs, *outputs]:
+        matrix = probability_matrix_from_output(output, expected_rows=expected_rows, labels=labels)
+        if matrix is not None:
+            return matrix
+    raise ValueError("Unable to locate an ONNX probability output")
 
 
 def run_onnx_for_validation(onnx_path: Path, x: np.ndarray) -> tuple[str, list[str], list[Any]]:
@@ -214,13 +260,14 @@ def validate_onnx_runtime(
     side_df = side_df.head(max(1, sample_rows)).copy()
     matrix, _ = filter_module.build_feature_matrix(side_df, list(bundle["feature_columns"]))
     x = matrix.to_numpy(dtype=np.float32)
+    labels = class_labels(bundle["model"])
     sklearn_prob = bundle["model"].predict_proba(x)[:, positive_class_index(bundle["model"])].astype(np.float64)
 
     try:
         runtime_name, output_names, outputs = run_onnx_for_validation(onnx_path, x)
     except RuntimeError as exc:
         return {"status": "skipped_missing_onnx_runtime", "reason": str(exc)}
-    onnx_prob_matrix = find_probability_output(output_names, outputs, expected_rows=x.shape[0])
+    onnx_prob_matrix = find_probability_output(output_names, outputs, expected_rows=x.shape[0], labels=labels)
     onnx_prob = onnx_prob_matrix[:, positive_class_index(bundle["model"])]
     max_abs_delta = float(np.max(np.abs(sklearn_prob - onnx_prob))) if len(sklearn_prob) else 0.0
     passed = bool(np.allclose(sklearn_prob, onnx_prob, atol=atol, rtol=rtol))

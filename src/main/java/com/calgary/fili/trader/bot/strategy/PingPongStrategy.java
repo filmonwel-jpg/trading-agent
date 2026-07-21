@@ -20,6 +20,7 @@ import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -379,6 +380,8 @@ public class PingPongStrategy implements TradingStrategy {
     private static final String DOWNSTREAM_SETUP_FILTER_ROUTE_MANIFEST = System.getProperty("strategy.downstreamSetupFilter.routeManifest", "").trim();
     private static final String DOWNSTREAM_SETUP_FILTER_FEATURES_CSV = System.getProperty("strategy.downstreamSetupFilter.featuresCsv", "").trim();
     private static final boolean DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED = Boolean.parseBoolean(System.getProperty("strategy.downstreamSetupFilter.failClosed", "true"));
+    private static final boolean DOWNSTREAM_SETUP_FILTER_LOG_FEATURE_VECTOR = Boolean.parseBoolean(System.getProperty("strategy.downstreamSetupFilter.logFeatureVector", "false"));
+    private static final int DOWNSTREAM_SETUP_FILTER_EVENT_SNAPSHOT_CACHE_ROWS = Math.max(32, Integer.getInteger("strategy.downstreamSetupFilter.eventSnapshotCacheRows", 2048));
     private static final String LIFECYCLE_MODEL_DIR = System.getProperty("strategy.lifecycle.modelDir", "").trim();
     private static final String MICRO_MODEL_DIR = System.getProperty("strategy.micro.modelDir", "").trim();
     private static final double LIFECYCLE_LONG_EXIT_THRESHOLD = Double.parseDouble(System.getProperty("strategy.exit.lifecycle.longThreshold", "0.60"));
@@ -859,6 +862,7 @@ public class PingPongStrategy implements TradingStrategy {
     private final Deque<Double> training30sVolumeWindow20 = new ArrayDeque<>();
     private final Deque<Double> training30sOptionFlowWindow20 = new ArrayDeque<>();
     private Map<String, Float> lastTraining30sFeatureValues = new HashMap<>();
+    private final Map<Long, Map<String, Float>> eventCarriedDownstreamFeatureSnapshots = new LinkedHashMap<>();
     private double lastTraining30sClose = 0.0;
     private long lastTraining30sEpoch = 0L;
     private double lastFinalized30sWap = 0.0;
@@ -1891,6 +1895,8 @@ public class PingPongStrategy implements TradingStrategy {
                     handleQuoteSnapshot(e.bidPrice, e.askPrice, e.bidSize, e.askSize, e.shortableShares);
                 } else if (event instanceof StrategyEvent.OrderFlowSnapshotEvent e) {
                     handleOrderFlowSnapshot(e.atBidVolume, e.atAskVolume);
+                } else if (event instanceof StrategyEvent.EnrichedFeatureSnapshotEvent e) {
+                    handleEnrichedFeatureSnapshot(e.epoch, e.features, e.schemaVersion, e.source);
                 } else if (event instanceof StrategyEvent.OrderSubmittedEvent e) {
                     handleOrderSubmitted(e.orderId, e.action, e.quantity);
                 } else if (event instanceof StrategyEvent.OrderProgressEvent e) {
@@ -2247,6 +2253,45 @@ public class PingPongStrategy implements TradingStrategy {
             tradeCoverage, quoteUpdateCoverage, quoteStateCoverage, syntheticCoverage,
             quoteAgeMsMean, quoteAgeMsMax, validSpreadCoverage, lockedCrossedSeconds, qualityScore
         ));
+    }
+
+    @Override
+    public void onEnrichedFeatureSnapshot(long epoch, Map<String, Float> features, String schemaVersion, String source) {
+        if (epoch <= 0L || features == null || features.isEmpty()) {
+            return;
+        }
+        eventQueue.offer(new StrategyEvent.EnrichedFeatureSnapshotEvent(epoch, features, schemaVersion, source));
+    }
+
+    private void handleEnrichedFeatureSnapshot(long epoch, Map<String, Float> rawFeatures, String schemaVersion, String source) {
+        if (epoch <= 0L || rawFeatures == null || rawFeatures.isEmpty()) {
+            return;
+        }
+        Map<String, Float> cleaned = new LinkedHashMap<>();
+        rawFeatures.forEach((key, value) -> {
+            String normalizedKey = key == null ? "" : key.trim();
+            if (!normalizedKey.isBlank() && value != null && Float.isFinite(value)) {
+                cleaned.put(normalizedKey, value);
+            }
+        });
+        if (cleaned.isEmpty()) {
+            return;
+        }
+        eventCarriedDownstreamFeatureSnapshots.put(epoch, Collections.unmodifiableMap(new LinkedHashMap<>(cleaned)));
+        while (eventCarriedDownstreamFeatureSnapshots.size() > DOWNSTREAM_SETUP_FILTER_EVENT_SNAPSHOT_CACHE_ROWS) {
+            Long oldestEpoch = eventCarriedDownstreamFeatureSnapshots.keySet().iterator().next();
+            eventCarriedDownstreamFeatureSnapshots.remove(oldestEpoch);
+        }
+        flowData(
+            "AI.DOWNSTREAM_SETUP_FILTER.SNAPSHOT",
+            "symbol=" + symbol
+                + " epoch=" + epoch
+                + " featureCount=" + cleaned.size()
+                + " schemaVersion=" + (schemaVersion == null || schemaVersion.isBlank() ? "<none>" : schemaVersion)
+                + " source=" + (source == null || source.isBlank() ? "event" : source)
+                + " cacheRows=" + eventCarriedDownstreamFeatureSnapshots.size()
+                + " status=research_to_live_parity"
+        );
     }
 
     public void on5SecondBar(long time, double open, double high, double low, double close, long volume, double wap) {
@@ -3718,12 +3763,14 @@ public class PingPongStrategy implements TradingStrategy {
         }
         if (downstreamSetupFilterScorer == null) {
             boolean passWithoutLoadedFilter = !DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED;
+            long armEpoch = currentMicroArmEpoch();
             flowCondition(
                 "AI.DOWNSTREAM_SETUP_FILTER",
                 "SETUP_FILTER_PASSES",
                 passWithoutLoadedFilter,
                 "symbol=" + symbol
                     + " side=" + selectedEntry.side()
+                    + " armEpoch=" + armEpoch
                     + " reason=filter_not_loaded"
                     + " failClosed=" + DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
                     + " status=research_only_no_go"
@@ -3731,8 +3778,10 @@ public class PingPongStrategy implements TradingStrategy {
             return passWithoutLoadedFilter;
         }
         Map<String, Float> downstreamFeatures = downstreamSetupFilterFeatureValues(selectedEntry, liveFeatureValues);
+        long armEpoch = currentMicroArmEpoch();
+        boolean featureSnapshotHit = !eventCarriedFeatureSnapshotValues(armEpoch).isEmpty();
         boolean featureSidecarHit = downstreamSetupFeatureStore != null
-            && !downstreamSetupFeatureStore.lookup(symbol, selectedEntry.side(), currentMicroArmEpoch()).isEmpty();
+            && !downstreamSetupFeatureStore.lookup(symbol, selectedEntry.side(), armEpoch).isEmpty();
         try {
             DownstreamSetupFilter.Decision decision = downstreamSetupFilterScorer.apply(selectedEntry.side(), downstreamFeatures);
             boolean pass = decision != null && decision.passed();
@@ -3746,12 +3795,23 @@ public class PingPongStrategy implements TradingStrategy {
                     + " prob=" + formatProb(decision == null ? 0.0 : decision.probability())
                     + " threshold=" + formatProb(decision == null ? 1.0 : decision.threshold())
                     + " featureCount=" + (decision == null ? 0 : decision.featureCount())
+                    + " armEpoch=" + armEpoch
                     + " setupProb=" + formatProb(selectedEntry.probability())
                     + " setupThreshold=" + formatProb(selectedEntry.threshold())
                     + " arbitrationReason=" + selectedEntry.arbitrationReason()
+                    + " featureSnapshot=" + (eventCarriedDownstreamFeatureSnapshots.isEmpty() ? "disabled" : (featureSnapshotHit ? "hit" : "miss"))
                     + " featureSidecar=" + (downstreamSetupFeatureStore == null ? "disabled" : (featureSidecarHit ? "hit" : "miss"))
                     + " status=research_only_no_go"
             );
+            if (DOWNSTREAM_SETUP_FILTER_LOG_FEATURE_VECTOR && downstreamSetupFilter != null) {
+                flowData(
+                    "AI.DOWNSTREAM_SETUP_FILTER.FEATURES",
+                    "symbol=" + symbol
+                        + " side=" + selectedEntry.side()
+                        + " armEpoch=" + armEpoch
+                        + " " + downstreamSetupFilter.featureDebug(selectedEntry.side(), downstreamFeatures)
+                );
+            }
             return pass;
         } catch (Exception exception) {
             boolean passOnError = !DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED;
@@ -3761,6 +3821,7 @@ public class PingPongStrategy implements TradingStrategy {
                 passOnError,
                 "symbol=" + symbol
                     + " side=" + selectedEntry.side()
+                    + " armEpoch=" + armEpoch
                     + " reason=score_exception"
                     + " error=" + exception.getMessage()
                     + " failClosed=" + DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
@@ -3957,6 +4018,11 @@ public class PingPongStrategy implements TradingStrategy {
         putFinite(values, "OpraTcbboOptionVolumeImbalance30s", optionTotal > 0.0 ? (callDelta - putDelta) / optionTotal : 0.0);
         putFinite(values, "OpraTcbboPutCallVolumeRatio30s", putDelta / (callDelta + 1.0));
 
+        Map<String, Float> eventSnapshotValues = eventCarriedFeatureSnapshotValues(currentMicroArmEpoch());
+        if (!eventSnapshotValues.isEmpty()) {
+            values.putAll(eventSnapshotValues);
+        }
+
         if (downstreamSetupFeatureStore != null) {
             Map<String, Float> sidecarValues = downstreamSetupFeatureStore.lookup(symbol, selectedEntry.side(), currentMicroArmEpoch());
             if (!sidecarValues.isEmpty()) {
@@ -3970,6 +4036,14 @@ public class PingPongStrategy implements TradingStrategy {
         }
         values.put("SessionBucket_" + sessionBucket(), 1.0f);
         return values;
+    }
+
+    private Map<String, Float> eventCarriedFeatureSnapshotValues(long armEpoch) {
+        if (armEpoch <= 0L || eventCarriedDownstreamFeatureSnapshots.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Float> values = eventCarriedDownstreamFeatureSnapshots.get(armEpoch);
+        return values == null ? Map.of() : values;
     }
 
     private void putFinite(Map<String, Float> values, String key, double rawValue) {

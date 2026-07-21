@@ -439,6 +439,68 @@ class PingPongStrategyFeatureSchemaTest {
         }
     }
 
+    @Test
+    void downstreamSetupFilterFeatureValuesUseEventCarriedEnrichedSnapshotAtArmEpoch() {
+        PingPongStrategy strategy = newStrategy();
+        try {
+            seedFeatureState(strategy);
+            @SuppressWarnings("unchecked")
+            Map<String, Float> liveFeatureValues = ReflectionTestUtils.invokeMethod(strategy, "constructFeatureValueMap", 55.0);
+            Map<String, Float> training30sValues = new LinkedHashMap<>();
+            training30sValues.put("f_30s_option_put_delta", 7.0f);
+            training30sValues.put("f_30s_option_call_delta", 11.0f);
+            ReflectionTestUtils.setField(strategy, "lastTraining30sFeatureValues", training30sValues);
+            ReflectionTestUtils.setField(strategy, "current30sAiDecisionEpoch", 1_778_767_050L);
+            ReflectionTestUtils.invokeMethod(
+                strategy,
+                "handleEnrichedFeatureSnapshot",
+                1_778_767_050L,
+                Map.of(
+                    "ImbalanceStd5s", 177_024.84f,
+                    "AskSizeLast", 1_975.0f,
+                    "BidSizeLast", 300.0f,
+                    "CallVolDelta5s", 300.0f,
+                    "PutVolDelta5s", 62.0f
+                ),
+                "downstream_setup_filter_onnx_research_v1",
+                "silver_30s"
+            );
+
+            Object selectedEntry = ReflectionTestUtils.invokeMethod(
+                strategy,
+                "chooseEntrySignal",
+                false,
+                0.61d,
+                0.68d,
+                0,
+                100.05d,
+                true,
+                0.74d,
+                0.63d,
+                321,
+                99.95d
+            );
+
+            @SuppressWarnings("unchecked")
+            Map<String, Float> downstreamValues = ReflectionTestUtils.invokeMethod(
+                strategy,
+                "downstreamSetupFilterFeatureValues",
+                selectedEntry,
+                liveFeatureValues
+            );
+
+            assertEquals(177_024.84f, downstreamValues.get("ImbalanceStd5s"), 1.0e-3f);
+            assertEquals(1_975.0f, downstreamValues.get("AskSizeLast"), 1.0e-6f);
+            assertEquals(300.0f, downstreamValues.get("BidSizeLast"), 1.0e-6f);
+            assertEquals(300.0f, downstreamValues.get("CallVolDelta5s"), 1.0e-6f);
+            assertEquals(62.0f, downstreamValues.get("PutVolDelta5s"), 1.0e-6f);
+            assertEquals(1.0f, downstreamValues.get("Symbol_AAPL"), 1.0e-6f);
+            assertEquals(1.0f, downstreamValues.get("SetupArbitrationReason_only_short_passed"), 1.0e-6f);
+        } finally {
+            strategy.stop();
+        }
+    }
+
     private static PingPongStrategy newStrategy() {
         return new PingPongStrategy(
             mock(IBKRTrader.class),

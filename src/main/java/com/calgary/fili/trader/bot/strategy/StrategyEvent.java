@@ -1,6 +1,9 @@
 package com.calgary.fili.trader.bot.strategy;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
 public abstract class StrategyEvent {
@@ -130,6 +133,20 @@ public abstract class StrategyEvent {
         public OrderFlowSnapshotEvent(long atBidVolume, long atAskVolume) {
             this.atBidVolume = atBidVolume;
             this.atAskVolume = atAskVolume;
+        }
+    }
+
+    public static class EnrichedFeatureSnapshotEvent extends StrategyEvent {
+        public final long epoch;
+        public final Map<String, Float> features;
+        public final String schemaVersion;
+        public final String source;
+
+        public EnrichedFeatureSnapshotEvent(long epoch, Map<String, Float> features, String schemaVersion, String source) {
+            this.epoch = epoch;
+            this.features = features == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(features));
+            this.schemaVersion = schemaVersion == null ? "" : schemaVersion.trim();
+            this.source = source == null ? "" : source.trim();
         }
     }
 

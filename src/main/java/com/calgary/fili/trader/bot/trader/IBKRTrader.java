@@ -1853,6 +1853,14 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         boolean canForward = shopStrategy != null && positionSyncComplete;
         flowConditionDebug("DATABENTO->AI.BAR", "FORWARD_BAR_TO_STRATEGY", canForward, "positionSyncComplete=" + positionSyncComplete + " strategyReady=" + (shopStrategy != null));
         if (canForward) {
+            if (event.hasEnrichedNumericFields()) {
+                shopStrategy.onEnrichedFeatureSnapshot(
+                    event.effectiveFeatureSnapshotEpochSec(),
+                    event.getEnrichedNumericFields(),
+                    event.featureSnapshotSchemaVersion,
+                    event.featureSnapshotSource
+                );
+            }
             shopStrategy.onTickForExitsOnly(event.close);
             shopStrategy.onSourceBar(
                 event.barEpochSec, event.open, event.high, event.low, event.close, event.volume,

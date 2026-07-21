@@ -70,11 +70,26 @@ python3 scripts/validate_lifecycle_micro_promotion.py \
 
 ## 4. Paper/shadow drift
 
+For event-carried enriched downstream setup snapshots, first run the dedicated paper/shadow validator. It can compare either Java logs with `SETUP_FILTER_PASSES`/`featureSnapshot=hit|miss|disabled` telemetry or paired decision CSVs:
+
+```bash
+python3 scripts/validate_paper_shadow_drift.py \
+  --paper-log runtime/paper/paper.log \
+  --shadow-log runtime/shadow/shadow.log \
+  --output-dir runtime/reports/paper_shadow_drift \
+  --max-probability-drift 0.02 \
+  --max-decision-mismatch-rate 0.01 \
+  --min-feature-snapshot-hit-rate 0.95 \
+  --fail-on-no-go
+```
+
+See `docs/event_carried_enriched_snapshots.md` for the event contract, feature precedence, and validator details.
+
 Pass either a precomputed drift report:
 
 ```bash
 python3 scripts/validate_lifecycle_micro_promotion.py \
-  --drift-report runtime/reports/paper_shadow_drift.json
+  --drift-report runtime/reports/paper_shadow_drift/paper_shadow_drift_report.json
 ```
 
 or paired decision CSVs:

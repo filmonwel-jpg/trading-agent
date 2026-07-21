@@ -36,6 +36,16 @@ class TestExportDownstreamSetupFilterOnnx(unittest.TestCase):
 
         self.assertEqual(exporter.positive_class_index(Model()), 1)
 
+    def test_find_probability_output_accepts_catboost_zipmap_dicts(self):
+        matrix = exporter.find_probability_output(
+            ["label", "probabilities"],
+            [np.array([1, 0]), [{0: 0.25, 1: 0.75}, {0: 0.90, 1: 0.10}]],
+            expected_rows=2,
+            labels=[0, 1],
+        )
+
+        np.testing.assert_allclose(matrix, np.array([[0.25, 0.75], [0.90, 0.10]], dtype=np.float64))
+
     @unittest.skipIf(importlib.util.find_spec("skl2onnx") is None, "skl2onnx not installed")
     def test_export_writes_onnx_feature_schemas_and_route_manifest(self):
         from sklearn.ensemble import RandomForestClassifier

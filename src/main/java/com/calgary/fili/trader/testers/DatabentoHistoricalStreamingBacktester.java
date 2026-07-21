@@ -307,6 +307,14 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         if (event.atBidVol > 0L || event.atAskVol > 0L) {
             strategy.onOrderFlowSnapshot(event.atBidVol, event.atAskVol);
         }
+        if (event.hasEnrichedNumericFields()) {
+            strategy.onEnrichedFeatureSnapshot(
+                event.effectiveFeatureSnapshotEpochSec(),
+                event.getEnrichedNumericFields(),
+                event.featureSnapshotSchemaVersion,
+                event.featureSnapshotSource
+            );
+        }
         strategy.onTickForExitsOnly(event.close);
         strategy.onSourceBar(
             event.barEpochSec, event.open, event.high, event.low, event.close, event.volume,
