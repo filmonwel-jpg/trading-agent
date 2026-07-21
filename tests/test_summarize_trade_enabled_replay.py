@@ -41,7 +41,7 @@ class TestSummarizeTradeEnabledReplay(unittest.TestCase):
             )
             (output_dir / "TEST-trade-lifecycle-summary.csv").write_text(
                 "ClosedTradeIndex,TradePnL,RealizedR,MfeR,MaeR,Quantity,SetupToFillSeconds,EntryTime,ExitReason,TradeSide,Symbol,ArmsTotal,ArmConfirmations,ArmExpirations,GuardEvaluations,GuardFires,LifecycleExits,HardRiskExits,EodExits,ExitReasonDistribution\n"
-                "1,12.50,1.25,1.80,-0.40,1,5,2026-05-01T14:30:00Z,guard,long,TEST,1,1,0,2,1,0,0,0,guard:1\n",
+                "1,12.50,1.25,1.80,-0.40,1,5,2026-05-01T14:30:00Z,guard,long,TEST,1,1,0,2,1,0,0,0,lifecycle=0|guard=1\n",
                 encoding="utf-8",
             )
             summary_json = output_dir / "trade_enabled_event_snapshot_summary_20260720.json"
@@ -76,6 +76,7 @@ class TestSummarizeTradeEnabledReplay(unittest.TestCase):
             report = summary_md.read_text(encoding="utf-8")
             self.assertIn("Trade-enabled event-carried snapshot replay summary", report)
             self.assertIn("research-only event-carried snapshot replay evidence", report)
+            self.assertIn("lifecycle=0\\|guard=1", report)
 
 
 if __name__ == "__main__":

@@ -203,6 +203,12 @@ def replay_classification(summary: dict[str, Any]) -> str:
 
 def markdown_report(summary: dict[str, Any], *, title: str = "Trade-enabled controlled replay summary", classification: str | None = None) -> str:
     classification = classification or replay_classification(summary)
+
+    def markdown_cell(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).replace("\n", "<br>").replace("|", "\\|")
+
     lines = [
         f"# {title}",
         "",
@@ -261,7 +267,7 @@ def markdown_report(summary: dict[str, Any], *, title: str = "Trade-enabled cont
         lines.append("| " + " | ".join(columns) + " |")
         lines.append("|" + "|".join(["---"] * len(columns)) + "|")
         for record in records:
-            lines.append("| " + " | ".join(str(record.get(column, "")) for column in columns) + " |")
+            lines.append("| " + " | ".join(markdown_cell(record.get(column, "")) for column in columns) + " |")
 
     add_table("By symbol", summary["by_symbol"], ["Symbol", "trades", "pnl", "sum_r", "trade_share"])
     add_table("By symbol and side", summary["by_symbol_side"], ["Symbol", "TradeSide", "trades", "pnl", "sum_r", "mean_r", "wins", "win_rate"])
