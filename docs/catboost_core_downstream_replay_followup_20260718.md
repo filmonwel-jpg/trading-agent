@@ -373,6 +373,14 @@ Controlled self-check (`event-snapshot replay log` vs itself, strict zero-drift 
 | paper/shadow snapshot hit rate | `1.0 / 1.0` |
 | snapshot misses | `0 / 0` |
 
+Controlled two-run proxy (`event-snapshot no-trade` vs `event-snapshot no-trade rerun`) was also run through `scripts/validate_paper_shadow_drift.py` with strict thresholds:
+
+- paper log: `controlled_java_replay_downstream_setup_filter_catboost_core_20260720_event_snapshot_notrade/controlled_java_replay.log`
+- shadow log: `controlled_java_replay_downstream_setup_filter_catboost_core_20260720_event_snapshot_notrade_rerun/controlled_java_replay.log`
+- output: `runtime/reports/paper_shadow_drift_controlled_proxy/`
+- thresholds: max probability drift `0.0001`, decision mismatch rate `0.0`, snapshot-status mismatch rate `0.0`, feature-snapshot hit rate `1.0`
+- result: `PAPER_SHADOW_DRIFT status=PASS`; `GATE paper_shadow_event_snapshot_drift status=PASS issues=0 warnings=0`
+
 Controlled reference proxy (`event-snapshot replay log` vs prior sidecar-exact replay log):
 
 | metric | value |
@@ -386,4 +394,4 @@ Controlled reference proxy (`event-snapshot replay log` vs prior sidecar-exact r
 | shadow snapshot telemetry rows | `0` |
 | snapshot-status mismatch rate | `1.0` expected because the sidecar reference log predates `featureSnapshot=...` telemetry |
 
-Interpretation: controlled paper/shadow-style drift validation is **PASS** for the replay artifacts. True live/paper shadow drift validation is still **not complete** because no real paired paper/shadow logs were available locally. Promotion/live status remains **NO-GO** until a real paper/shadow session is captured and passes `scripts/validate_paper_shadow_drift.py` with both sides using event-carried snapshots and CSV sidecar disabled.
+Interpretation: controlled paper/shadow-style drift validation is **PASS** for the replay artifacts and the validator itself is working against event-carried replay logs. True live/paper shadow drift validation is still **not complete** because no real paired paper/shadow logs were available locally. Promotion/live status remains **NO-GO** until a real paper/shadow session is captured and passes `scripts/validate_paper_shadow_drift.py` with both sides using event-carried snapshots and CSV sidecar disabled.
