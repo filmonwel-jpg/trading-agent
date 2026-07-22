@@ -1,0 +1,378 @@
+# Event-carried whole-range Databento backtest runbook
+
+Date: 2026-07-22
+
+This runbook documents the one-command workflow for building a continuous Databento Core-5 replay range, generating the matching downstream setup sidecar for that same range, injecting event-carried feature snapshots, validating no-sidecar replay behavior, running the trade-enabled replay, and producing PnL summaries by day, week, month, symbol, symbol/period, and all symbols.
+
+The workflow is implemented by:
+
+```text
+scripts/run_event_carried_whole_range.sh
+scripts/summarize_trade_lifecycle_periods.py
+```
+
+## What this workflow does
+
+`run_event_carried_whole_range.sh` runs these steps in order:
+
+1. Build a continuous sliced replay with daily `previous_close` events.
+2. Validate slice coverage and `previous_close` ordering.
+3. Run a normal replay on the slice to generate setup/micro log markers.
+4. Generate `setup_downstream_confirmable_labels_v1.csv` from that replay.
+5. Join labels to the enriched 30s cache and create `setup_downstream_training_rows_v1.csv`.
+6. Inject those rows into the replay as event-carried snapshots.
+7. Optionally run no-trade event-carried validation with sidecar disabled.
+8. Optionally run trade-enabled event-carried replay.
+9. Summarize trade lifecycle PnL by all/symbol/day/week/month and symbol-period combinations.
+
+This is intentionally different from the older split four-week process: it runs one continuous range, so state can carry through the full selected interval.
+
+## Pull the required scripts on the other Mac
+
+Run this on the other computer:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+git fetch origin ai-training-dynamic-upgrade-20260612
+git checkout ai-training-dynamic-upgrade-20260612
+git pull --ff-only origin ai-training-dynamic-upgrade-20260612
+```
+
+Verify the two workflow scripts are present and executable:
+
+```zsh
+ls -lh scripts/run_event_carried_whole_range.sh
+ls -lh scripts/summarize_trade_lifecycle_periods.py
+```
+
+## Required local inputs
+
+The command expects these paths to exist on the other Mac unless overridden:
+
+```text
+runtime/replay/databento-20260523-core5.ndjson.gz
+runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv
+```
+
+Check them first:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+ls -lh runtime/replay/databento-20260523-core5.ndjson.gz
+ls -lh runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+ls -ld runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+ls -ld runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
+ls -lh /Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv
+```
+
+If the 30s cache path moved, search the mounted external disk:
+
+```zsh
+find /Volumes -path '*broader_213d_six_source_enriched_30s_20260619_065347*combined_30s.csv' -print 2>/dev/null
+find /Volumes -name combined_30s.csv -path '*model_training_sets*' -print 2>/dev/null
+```
+
+## Recommended continuous run: earlier + recent windows together
+
+This covers the two windows already investigated as one continuous run:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried
+mkdir -p "$BASE"
+
+nohup env \
+  START=2026-03-27 \
+  END=2026-05-22 \
+  INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
+  RUN_NOTRADE=1 \
+  RUN_TRADE=1 \
+  bash scripts/run_event_carried_whole_range.sh \
+  > "$BASE/whole_range_batch.log" 2>&1 &
+
+echo "PID=$!"
+```
+
+Monitor it:
+
+```zsh
+tail -f runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried/whole_range_batch.log
+```
+
+If the terminal closes, open a new terminal and keep monitoring the same log:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+tail -f runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried/whole_range_batch.log
+```
+
+The run is complete when the log prints:
+
+```text
+[WHOLE_RANGE] DONE
+```
+
+## Full available range mode
+
+Use this if you want the script to discover the source replay range automatically. It chooses the second detected session as `START` so the slice builder can observe a prior close before the first traded session.
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-auto-event-carried
+mkdir -p "$BASE"
+
+nohup env \
+  START=auto \
+  END=auto \
+  BASE="$BASE" \
+  INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
+  RUN_NOTRADE=1 \
+  RUN_TRADE=1 \
+  bash scripts/run_event_carried_whole_range.sh \
+  > "$BASE/whole_range_batch.log" 2>&1 &
+
+echo "PID=$!"
+```
+
+Monitor:
+
+```zsh
+tail -f runtime/local-backtests/databento-core5-whole-auto-event-carried/whole_range_batch.log
+```
+
+## Exact eight-month mode
+
+If the source replay contains an exact eight-month interval, set explicit dates:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+START=2025-09-22
+END=2026-05-22
+START_TAG=$(printf '%s' "$START" | tr -d '-')
+END_TAG=$(printf '%s' "$END" | tr -d '-')
+BASE=runtime/local-backtests/databento-core5-whole-${START_TAG}-${END_TAG}-event-carried
+mkdir -p "$BASE"
+
+nohup env \
+  START="$START" \
+  END="$END" \
+  BASE="$BASE" \
+  INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
+  RUN_NOTRADE=1 \
+  RUN_TRADE=1 \
+  bash scripts/run_event_carried_whole_range.sh \
+  > "$BASE/whole_range_batch.log" 2>&1 &
+
+echo "PID=$!"
+```
+
+If the requested start/end are outside the source replay coverage, the slice build or validation step will fail. In that case use `START=auto END=auto`, or inspect available sessions with:
+
+```zsh
+python3 - <<'PY'
+import gzip
+import re
+from datetime import date
+
+path = 'runtime/replay/databento-20260523-core5.ndjson.gz'
+day_re = re.compile(r'\bday=(\d{8})\b')
+days = set()
+with gzip.open(path, 'rt', encoding='utf-8', errors='ignore') as stream:
+    for line in stream:
+        match = day_re.search(line)
+        if match:
+            raw = match.group(1)
+            days.add(date(int(raw[:4]), int(raw[4:6]), int(raw[6:8])))
+ordered = sorted(days)
+print('session_count =', len(ordered))
+print('first_session =', ordered[0] if ordered else None)
+print('second_session =', ordered[1] if len(ordered) > 1 else None)
+print('last_session =', ordered[-1] if ordered else None)
+PY
+```
+
+## Output layout
+
+For `START=2026-03-27 END=2026-05-22`, outputs are written under:
+
+```text
+runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried/
+```
+
+Important files and folders:
+
+```text
+build_slice.log
+validate_slice.log
+inject_event_snapshots.log
+run/databento-core5-whole-20260327-20260522-<RUN_TS>.log
+setup_micro_counterfactual_<RUN_TS>/setup_downstream_confirmable_labels_v1.csv
+setup_micro_counterfactual_<RUN_TS>/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv
+databento-20260327-20260522-core5-whole-daily-prevclose.ndjson.gz
+databento-20260327-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core.ndjson.gz
+controlled_java_replay_downstream_setup_filter_event_snapshot_notrade/controlled_java_replay.log
+controlled_java_replay_downstream_setup_filter_event_snapshot_notrade/event_snapshot_replay_drift/event_snapshot_replay_drift_report.md
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/controlled_java_replay.log
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522.md
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522.json
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_all.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_symbol.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_day.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_week.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_month.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_symbol_day.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_symbol_week.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_symbol_month.csv
+controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl/pnl_period_summary_20260327_20260522_by_symbol_side.csv
+```
+
+## Inspect completion, event-carried telemetry, and PnL summaries
+
+After the batch finishes:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried
+NO_TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_notrade
+TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl
+SUMMARY_PREFIX=$TRADE_OUT/pnl_period_summary_20260327_20260522
+
+grep '\[BACKTEST\] completed' "$NO_TRADE_OUT/controlled_java_replay.log" | tail -5
+grep '\[BACKTEST\] completed' "$TRADE_OUT/controlled_java_replay.log" | tail -5
+
+echo '--- no-trade event-carried validation ---'
+printf 'SETUP PASS '; grep -c 'SETUP_FILTER_PASSES=PASS' "$NO_TRADE_OUT/controlled_java_replay.log"
+printf 'SETUP FAIL '; grep -c 'SETUP_FILTER_PASSES=FAIL' "$NO_TRADE_OUT/controlled_java_replay.log"
+printf 'SNAPSHOT HIT '; grep -c 'featureSnapshot=hit' "$NO_TRADE_OUT/controlled_java_replay.log"
+printf 'SNAPSHOT MISS '; grep -c 'featureSnapshot=miss' "$NO_TRADE_OUT/controlled_java_replay.log"
+printf 'SIDECAR DISABLED '; grep -c 'featureSidecar=disabled' "$NO_TRADE_OUT/controlled_java_replay.log"
+printf 'SIDECAR HIT '; grep -c 'featureSidecar=hit' "$NO_TRADE_OUT/controlled_java_replay.log"
+printf 'ERRORS '; grep -Ec 'Exception|ERROR' "$NO_TRADE_OUT/controlled_java_replay.log"
+
+echo '--- trade-enabled event-carried replay ---'
+printf 'SETUP PASS '; grep -c 'SETUP_FILTER_PASSES=PASS' "$TRADE_OUT/controlled_java_replay.log"
+printf 'SETUP FAIL '; grep -c 'SETUP_FILTER_PASSES=FAIL' "$TRADE_OUT/controlled_java_replay.log"
+printf 'SNAPSHOT HIT '; grep -c 'featureSnapshot=hit' "$TRADE_OUT/controlled_java_replay.log"
+printf 'SNAPSHOT MISS '; grep -c 'featureSnapshot=miss' "$TRADE_OUT/controlled_java_replay.log"
+printf 'SIDECAR DISABLED '; grep -c 'featureSidecar=disabled' "$TRADE_OUT/controlled_java_replay.log"
+printf 'SIDECAR HIT '; grep -c 'featureSidecar=hit' "$TRADE_OUT/controlled_java_replay.log"
+printf 'ERRORS '; grep -Ec 'Exception|ERROR' "$TRADE_OUT/controlled_java_replay.log"
+
+echo '--- PnL summaries ---'
+cat "${SUMMARY_PREFIX}_all.csv"
+cat "${SUMMARY_PREFIX}_by_symbol.csv"
+cat "${SUMMARY_PREFIX}_by_month.csv"
+cat "${SUMMARY_PREFIX}_by_week.csv"
+cat "${SUMMARY_PREFIX}_by_day.csv"
+```
+
+Open the Markdown report for a human-readable summary:
+
+```zsh
+cat "$SUMMARY_PREFIX.md"
+```
+
+## Re-run only the summarizer
+
+If the trade-enabled replay already completed and you only want to regenerate summaries:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried
+TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl
+
+python3 scripts/summarize_trade_lifecycle_periods.py \
+  --output-dir "$TRADE_OUT" \
+  --log-file "$TRADE_OUT/controlled_java_replay.log" \
+  --out-prefix "$TRADE_OUT/pnl_period_summary_20260327_20260522" \
+  --title "Whole-range event-carried trade PnL 2026-03-27 to 2026-05-22"
+```
+
+## Useful toggles
+
+Set these environment variables before running the workflow when needed:
+
+| Variable | Default | Use |
+|---|---:|---|
+| `START` | `auto` | First session date, or `auto`. |
+| `END` | `auto` | Last session date, or `auto`. |
+| `BASE` | derived from date tags | Override the output directory. |
+| `SOURCE_EVENTS` | `runtime/replay/databento-20260523-core5.ndjson.gz` | Source recorded NDJSON/NDJSON.GZ replay. |
+| `INPUT_30S_CSV` | required | Enriched 30s cache CSV or directory of `*_30s_training.csv` files. |
+| `ROUTE_MANIFEST` | recent CatBoost route manifest | Downstream setup filter model/schema manifest. |
+| `SETUP_MODEL_DIR` | current setup model dir | Normal replay setup model directory. |
+| `LIFECYCLE_MODEL_DIR` | current lifecycle model exports | Normal replay lifecycle model directory. |
+| `RUN_NOTRADE` | `1` | Run no-trade event-carried validation. |
+| `RUN_TRADE` | `1` | Run trade-enabled event-carried replay and summaries. |
+| `REBUILD_EXISTING` | `0` | Set to `1` to rebuild slice/sidecar/enriched events even if files exist. |
+| `PYTHON_BIN` | `python3` | Python executable. |
+
+Example: rebuild existing artifacts from scratch:
+
+```zsh
+nohup env \
+  START=2026-03-27 \
+  END=2026-05-22 \
+  REBUILD_EXISTING=1 \
+  INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
+  RUN_NOTRADE=1 \
+  RUN_TRADE=1 \
+  bash scripts/run_event_carried_whole_range.sh \
+  > runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried/whole_range_batch_rebuild.log 2>&1 &
+```
+
+## Expected validation shape
+
+For a clean event-carried/no-sidecar validation, expect:
+
+```text
+featureSnapshot=hit > 0
+featureSnapshot=miss 0
+featureSidecar=disabled equals featureSnapshot=hit
+featureSidecar=hit 0
+EVENT_SNAPSHOT_REPLAY_DRIFT status=PASS
+```
+
+If `featureSnapshot=miss` is non-zero, inspect:
+
+```zsh
+cat "$BASE/inject_event_snapshots.log"
+cat "$BASE/validate_slice.log"
+cat "$NO_TRADE_OUT/event_snapshot_replay_drift/event_snapshot_replay_drift_report.md"
+```
+
+## Current split-window reference results
+
+These are prior reference results from the two separate four-week-style runs, useful for comparison only. The whole-range continuous run can differ because state is not reset between the earlier and recent intervals.
+
+| Range | Mode | Closed trades | Total PnL | Realized R | Notes |
+|---|---|---:|---:|---:|---|
+| `2026-03-27`..`2026-04-24` | event-carried trade-enabled | 19 | `-224.79` | `-3.6055` | 3 watchdog warnings. |
+| `2026-04-27`..`2026-05-22` | event-carried trade-enabled | 110 | `+17662.42` | `+97.0384` | Reproduced recent enriched result. |
+| split-window combined | arithmetic sum only | 129 | `+17437.63` | `+93.4329` | Not the same as a continuous whole-range run. |
+
+## What not to commit
+
+Generated runtime artifacts should stay local unless explicitly needed for a report:
+
+```text
+runtime/local-backtests/databento-core5-whole-*/
+runtime/local-backtests/databento-core5-4week-*/run/
+*.ndjson.gz
+*.summary.json
+*-trade-lifecycle-summary.csv
+```
+
+Only source scripts and runbook documentation need to be committed for another checkout to run the workflow.
+
