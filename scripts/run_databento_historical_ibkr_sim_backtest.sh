@@ -392,6 +392,7 @@ LIST_SYMBOLS_ONLY="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    "") shift ;;
     --symbol) append_symbol "$2"; shift 2 ;;
     --symbol=*) append_symbol "${1#--symbol=}"; shift ;;
     --symbols) parse_symbols_csv_into "$2"; shift 2 ;;
