@@ -165,7 +165,7 @@ def main() -> int:
         writer = csv.DictWriter(handle, fieldnames=OUTPUT_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
-    summary_path = args.output_labels.with_suffix(".summary.json")
+    summary_path = Path(str(args.output_labels) + ".summary.json")
     summary = {
         "generated_at_utc": utc_now(),
         "event_log": str(args.event_log),

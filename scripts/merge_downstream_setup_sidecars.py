@@ -109,7 +109,7 @@ def main() -> int:
         writer.writeheader()
         for row in rows:
             writer.writerow({header: row.get(header, "") for header in headers})
-    summary_path = args.output.with_suffix(".summary.json")
+    summary_path = Path(str(args.output) + ".summary.json")
     summary = {"generated_at_utc": utc_now(), "output": str(args.output), **stats}
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
