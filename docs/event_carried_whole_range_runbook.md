@@ -461,6 +461,64 @@ echo "PID=$!"
 tail -f "$TRADE_OUT/controlled_java_replay.log"
 ```
 
+## If strict drift is `NO-GO` because of extra `featureSnapshot=miss` rows
+
+For long whole-range runs, the strict drift report may show that every original sidecar row was hit, but the no-trade replay generated extra setup-filter candidates not present in the sidecar, for example:
+
+```text
+feature_snapshot_counts = {'hit': 48914, 'miss': 229}
+missing_expected_rows = 0
+extra_event_rows = 229
+```
+
+This means the existing enriched replay covered the generated sidecar, but not the extra setup candidates found only during the event-carried validation replay. Recover by extracting those miss keys, joining them to the 30s cache, appending them to the sidecar, re-injecting, and rerunning validation/trade.
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-20250722-20260522-event-carried
+RUN_TS=20260722_100315
+NO_TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_notrade
+
+ORIG_SLICE=$BASE/databento-20250722-20260522-core5-whole-daily-prevclose.ndjson.gz
+ORIG_SIDECAR=$BASE/setup_micro_counterfactual_$RUN_TS/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv
+RECOVERY_DIR=$BASE/setup_micro_counterfactual_$RUN_TS/event_snapshot_miss_recovery
+MISS_LABELS=$RECOVERY_DIR/event_snapshot_miss_labels.csv
+MISS_ROWS_DIR=$RECOVERY_DIR/downstream_setup_training_rows
+MISS_SIDECAR=$MISS_ROWS_DIR/setup_downstream_training_rows_v1.csv
+MERGED_SIDECAR=$RECOVERY_DIR/setup_downstream_training_rows_v1.with_event_snapshot_miss_recovery.csv
+ENRICHED_RECOVERED=$BASE/databento-20250722-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core-recovered.ndjson.gz
+ROUTE_MANIFEST=runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv
+
+mkdir -p "$RECOVERY_DIR"
+
+python3 scripts/extract_event_snapshot_miss_labels.py \
+  --event-log "$NO_TRADE_OUT/controlled_java_replay.log" \
+  --existing-sidecar "$ORIG_SIDECAR" \
+  --output-labels "$MISS_LABELS"
+
+python3 -u scripts/build_downstream_setup_training_rows.py \
+  --input-30s-csv "$INPUT_30S_CSV" \
+  --labels-csv "$MISS_LABELS" \
+  --output-dir "$MISS_ROWS_DIR" \
+  --join-tolerance-seconds 31
+
+python3 scripts/merge_downstream_setup_sidecars.py \
+  --input "$ORIG_SIDECAR" \
+  --input "$MISS_SIDECAR" \
+  --output "$MERGED_SIDECAR"
+
+python3 scripts/inject_downstream_setup_features_into_ndjson.py \
+  --input-events "$ORIG_SLICE" \
+  --sidecar-csv "$MERGED_SIDECAR" \
+  --manifest "$ROUTE_MANIFEST" \
+  --output-events "$ENRICHED_RECOVERED" \
+  --snapshot-source setup_downstream_training_rows_v1_with_event_snapshot_miss_recovery
+```
+
+Then rerun no-trade validation against `ENRICHED_RECOVERED`. If snapshot misses are zero, use `ENRICHED_RECOVERED` for the trade-enabled replay.
+
 ## Current split-window reference results
 
 These are prior reference results from the two separate four-week-style runs, useful for comparison only. The whole-range continuous run can differ because state is not reset between the earlier and recent intervals.
