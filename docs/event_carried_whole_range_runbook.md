@@ -123,6 +123,8 @@ The run is complete when the log prints:
 
 Use this if you want the script to discover the source replay range automatically. It chooses the second detected session as `START` so the slice builder can observe a prior close before the first traded session.
 
+For long full-range runs, set `RUN_DRIFT=0`. The strict drift comparison scans the full no-trade Java log and can take much longer than the replay itself on very large logs. You can still validate event-carried coverage afterward with the one-pass telemetry commands below.
+
 ```zsh
 cd /Users/filmonghezehey/trading-agent/worktrees/databento
 
@@ -135,6 +137,7 @@ nohup env \
   BASE="$BASE" \
   INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
   RUN_NOTRADE=1 \
+  RUN_DRIFT=0 \
   RUN_TRADE=1 \
   bash scripts/run_event_carried_whole_range.sh \
   > "$BASE/whole_range_batch.log" 2>&1 &
@@ -168,6 +171,7 @@ nohup env \
   BASE="$BASE" \
   INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
   RUN_NOTRADE=1 \
+  RUN_DRIFT=0 \
   RUN_TRADE=1 \
   bash scripts/run_event_carried_whole_range.sh \
   > "$BASE/whole_range_batch.log" 2>&1 &
@@ -198,6 +202,40 @@ print('first_session =', ordered[0] if ordered else None)
 print('second_session =', ordered[1] if len(ordered) > 1 else None)
 print('last_session =', ordered[-1] if ordered else None)
 PY
+```
+
+## Full discovered source range as of 2026-07-23
+
+The source replay inspected on the other Mac contained sessions from `2025-07-21` through `2026-05-22`. Use `2025-07-22` as the first traded session so the builder can use `2025-07-21` as the prior-close source:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+START=2025-07-22
+END=2026-05-22
+START_TAG=$(printf '%s' "$START" | tr -d '-')
+END_TAG=$(printf '%s' "$END" | tr -d '-')
+BASE=runtime/local-backtests/databento-core5-whole-${START_TAG}-${END_TAG}-event-carried
+mkdir -p "$BASE"
+
+nohup env \
+  START="$START" \
+  END="$END" \
+  BASE="$BASE" \
+  INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
+  RUN_NOTRADE=1 \
+  RUN_DRIFT=0 \
+  RUN_TRADE=1 \
+  bash scripts/run_event_carried_whole_range.sh \
+  > "$BASE/whole_range_batch.log" 2>&1 &
+
+echo "PID=$!"
+```
+
+Monitor:
+
+```zsh
+tail -f runtime/local-backtests/databento-core5-whole-20250722-20260522-event-carried/whole_range_batch.log
 ```
 
 ## Output layout
@@ -314,6 +352,7 @@ Set these environment variables before running the workflow when needed:
 | `SETUP_MODEL_DIR` | current setup model dir | Normal replay setup model directory. |
 | `LIFECYCLE_MODEL_DIR` | current lifecycle model exports | Normal replay lifecycle model directory. |
 | `RUN_NOTRADE` | `1` | Run no-trade event-carried validation. |
+| `RUN_DRIFT` | `1` | Run strict no-trade key drift comparison. Use `0` for long full-range runs if the log scan is too slow. |
 | `RUN_TRADE` | `1` | Run trade-enabled event-carried replay and summaries. |
 | `REBUILD_EXISTING` | `0` | Set to `1` to rebuild slice/sidecar/enriched events even if files exist. |
 | `PYTHON_BIN` | `python3` | Python executable. |
@@ -327,6 +366,7 @@ nohup env \
   REBUILD_EXISTING=1 \
   INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv \
   RUN_NOTRADE=1 \
+  RUN_DRIFT=0 \
   RUN_TRADE=1 \
   bash scripts/run_event_carried_whole_range.sh \
   > runtime/local-backtests/databento-core5-whole-20260327-20260522-event-carried/whole_range_batch_rebuild.log 2>&1 &
@@ -344,12 +384,81 @@ featureSidecar=hit 0
 EVENT_SNAPSHOT_REPLAY_DRIFT status=PASS
 ```
 
+For long runs with `RUN_DRIFT=0`, replace the strict drift report with a one-pass telemetry scan of the no-trade log and require the same shape except for the `EVENT_SNAPSHOT_REPLAY_DRIFT` line.
+
 If `featureSnapshot=miss` is non-zero, inspect:
 
 ```zsh
 cat "$BASE/inject_event_snapshots.log"
 cat "$BASE/validate_slice.log"
 cat "$NO_TRADE_OUT/event_snapshot_replay_drift/event_snapshot_replay_drift_report.md"
+```
+
+## If the batch appears stuck after no-trade `BACKTEST_RC=0`
+
+If the parent batch log stops after:
+
+```text
+[WHOLE_RANGE] running no-trade event-carried validation
+BACKTEST_RC=0
+```
+
+then the script is usually scanning the full no-trade log in `compare_event_snapshot_replay_drift.py`. For a 213-session run, it is safe to stop only that drift step and run the trade-enabled replay manually because the no-trade backtest has already completed successfully.
+
+Stop watching the log with `Ctrl-C`, then inspect active processes:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-20250722-20260522-event-carried
+NO_TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_notrade
+TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl
+
+ps -axo pid,ppid,etime,pcpu,pmem,command | egrep 'run_event_carried_whole_range|compare_event_snapshot|DatabentoHistorical|java|python3' | grep -v egrep
+ls -lh "$BASE/whole_range_batch.log" "$NO_TRADE_OUT/controlled_java_replay.log" "$NO_TRADE_OUT/event_snapshot_replay_drift.log" 2>/dev/null
+```
+
+If `compare_event_snapshot_replay_drift.py` is the only active child, stop it:
+
+```zsh
+pkill -f 'scripts/compare_event_snapshot_replay_drift.py.*databento-core5-whole-20250722-20260522'
+sleep 3
+pgrep -fl 'compare_event_snapshot_replay_drift.py|run_event_carried_whole_range.sh'
+```
+
+Then launch the trade-enabled replay using the already-built enriched replay:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-core5-whole-20250722-20260522-event-carried
+ENRICHED_EVENTS=$BASE/databento-20250722-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core.ndjson.gz
+TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_trade_pnl
+ROUTE_MANIFEST=runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+
+rm -rf "$TRADE_OUT"
+mkdir -p "$TRADE_OUT"
+
+export JAVA_TOOL_OPTIONS='-Dbacktest.strategy.tradeAmount=60000 -Dtrading.trade-amount=60000 -Dtrading.risk.max-order-notional=70000 -Dbacktest.strategy.maxOrderNotional=70000'
+
+./mvnw -q -DskipTests package
+./mvnw -q dependency:build-classpath -Dmdep.outputFile=runtime/backtests/databento_ibkr_sim_backtest_cp.txt
+
+nohup env PYTHON_BIN=python3 SKIP_BUILD=true \
+  scripts/run_databento_historical_ibkr_sim_backtest.sh \
+  --symbols NVDA,QQQ,SPY,TQQQ,TSLA \
+  --source ndjson \
+  --recorded-events "$ENRICHED_EVENTS" \
+  --output-dir "$TRADE_OUT" \
+  --downstream-setup-filter-manifest "$ROUTE_MANIFEST" \
+  --micro-long-entry-threshold 0.30 \
+  --micro-short-entry-threshold 0.30 \
+  --timeout-seconds 0 \
+  --max-trades 2000 \
+  > "$TRADE_OUT/controlled_java_replay.log" 2>&1 &
+
+echo "PID=$!"
+tail -f "$TRADE_OUT/controlled_java_replay.log"
 ```
 
 ## Current split-window reference results

@@ -17,6 +17,7 @@ LIFECYCLE_MODEL_DIR="${LIFECYCLE_MODEL_DIR:-runtime/research_runs/lifecycle_micr
 OUT_ROOT="${OUT_ROOT:-runtime/local-backtests}"
 RUN_NOTRADE="${RUN_NOTRADE:-1}"
 RUN_TRADE="${RUN_TRADE:-1}"
+RUN_DRIFT="${RUN_DRIFT:-1}"
 REBUILD_EXISTING="${REBUILD_EXISTING:-0}"
 
 for required in "$SOURCE_EVENTS" "$INPUT_30S_CSV" "$ROUTE_MANIFEST" "$SETUP_MODEL_DIR" "$LIFECYCLE_MODEL_DIR"; do
@@ -208,15 +209,21 @@ if [[ "$RUN_NOTRADE" == "1" ]]; then
     --micro-entry-research-no-trade \
     --timeout-seconds 0
 
-  "$PYTHON_BIN" scripts/compare_event_snapshot_replay_drift.py \
-    --event-log "$NO_TRADE_OUT/controlled_java_replay.log" \
-    --sidecar-csv "$SIDECAR" \
-    --output-dir "$NO_TRADE_OUT/event_snapshot_replay_drift" \
-    --strict-no-trade \
-    --require-sidecar-disabled \
-    --min-feature-snapshot-hit-rate 1.0 \
-    --fail-on-no-go \
-    > "$NO_TRADE_OUT/event_snapshot_replay_drift.log" 2>&1
+  if [[ "$RUN_DRIFT" == "1" ]]; then
+    echo "[WHOLE_RANGE] comparing event snapshot replay drift"
+    "$PYTHON_BIN" scripts/compare_event_snapshot_replay_drift.py \
+      --event-log "$NO_TRADE_OUT/controlled_java_replay.log" \
+      --sidecar-csv "$SIDECAR" \
+      --output-dir "$NO_TRADE_OUT/event_snapshot_replay_drift" \
+      --strict-no-trade \
+      --require-sidecar-disabled \
+      --min-feature-snapshot-hit-rate 1.0 \
+      --fail-on-no-go \
+      > "$NO_TRADE_OUT/event_snapshot_replay_drift.log" 2>&1
+    echo "[WHOLE_RANGE] event snapshot replay drift complete: $NO_TRADE_OUT/event_snapshot_replay_drift.log"
+  else
+    echo "[WHOLE_RANGE] skipping event snapshot replay drift compare because RUN_DRIFT=$RUN_DRIFT"
+  fi
 fi
 
 if [[ "$RUN_TRADE" == "1" ]]; then

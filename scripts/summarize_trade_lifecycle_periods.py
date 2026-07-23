@@ -127,29 +127,59 @@ def summarize_group(closed: pd.DataFrame, group_cols: list[str], scope: str) -> 
 def scan_log(log_file: Path) -> dict[str, Any]:
     if not log_file.is_file():
         return {"completion": {"raw": "<missing>", "completed": None, "failed": None, "requested": None}, "markers": {}, "errors": 0, "watchdogs": {}}
-    text = log_file.read_text(encoding="utf-8", errors="ignore")
-    match = COMPLETION_RE.search(text)
     completion = {"raw": "<missing>", "completed": None, "failed": None, "requested": None}
-    if match:
-        completion = {
-            "raw": match.group(0),
-            "completed": int(match.group(1)),
-            "failed": int(match.group(2)),
-            "requested": int(match.group(3)),
-        }
+    marker_counts = {name: 0 for name in MARKERS}
+    errors = 0
     watchdogs: dict[str, int] = {}
-    for line in text.splitlines():
-        if "WATCHDOG" not in line:
-            continue
-        symbol_match = re.search(r"symbol=([A-Z0-9_.-]+)", line)
-        symbol = symbol_match.group(1) if symbol_match else "UNKNOWN"
-        watchdogs[symbol] = watchdogs.get(symbol, 0) + 1
+    with log_file.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            match = COMPLETION_RE.search(line)
+            if match:
+                completion = {
+                    "raw": match.group(0),
+                    "completed": int(match.group(1)),
+                    "failed": int(match.group(2)),
+                    "requested": int(match.group(3)),
+                }
+            for name, marker in MARKERS.items():
+                marker_counts[name] += line.count(marker)
+            errors += len(re.findall(r"Exception|ERROR", line))
+            if "WATCHDOG" not in line:
+                continue
+            symbol_match = re.search(r"symbol=([A-Z0-9_.-]+)", line)
+            symbol = symbol_match.group(1) if symbol_match else "UNKNOWN"
+            watchdogs[symbol] = watchdogs.get(symbol, 0) + 1
     return {
         "completion": completion,
-        "markers": {name: text.count(marker) for name, marker in MARKERS.items()},
-        "errors": len(re.findall(r"Exception|ERROR", text)),
+        "markers": marker_counts,
+        "errors": errors,
         "watchdogs": watchdogs,
     }
+
+
+def markdown_value(value: Any) -> str:
+    if pd.isna(value) if not isinstance(value, (dict, list, tuple, str)) else False:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    if hasattr(value, "item"):
+        value = value.item()
+        if isinstance(value, float):
+            return f"{value:.4f}"
+    return str(value).replace("|", r"\|").replace("\n", " ")
+
+
+def frame_to_markdown(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return "No rows."
+    columns = [str(column) for column in frame.columns]
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    for _, row in frame.iterrows():
+        lines.append("| " + " | ".join(markdown_value(row[column]) for column in frame.columns) + " |")
+    return "\n".join(lines)
 
 
 def write_markdown(path: Path, title: str, report: dict[str, Any], tables: dict[str, pd.DataFrame]) -> None:
@@ -166,7 +196,7 @@ def write_markdown(path: Path, title: str, report: dict[str, Any], tables: dict[
     ])
     overall = tables["all"]
     if not overall.empty:
-        lines.append(overall.to_markdown(index=False, floatfmt=".4f"))
+        lines.append(frame_to_markdown(overall))
     else:
         lines.append("No closed trades with TradePnL found.")
     for name in ["by_symbol", "by_month", "by_week", "by_day", "by_symbol_month", "by_symbol_week", "by_symbol_day", "by_symbol_side"]:
@@ -175,7 +205,7 @@ def write_markdown(path: Path, title: str, report: dict[str, Any], tables: dict[
         if frame.empty:
             lines.append("No rows.")
         else:
-            lines.append(frame.to_markdown(index=False, floatfmt=".4f"))
+            lines.append(frame_to_markdown(frame))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
