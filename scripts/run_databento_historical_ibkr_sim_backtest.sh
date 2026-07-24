@@ -21,8 +21,9 @@ BRIDGE_DATABENTO_ENV_FILE="databento_ibkr_bridge/.env"
 DRY_RUN="${DRY_RUN:-false}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-0}"
 BACKTEST_MAX_TRADES="${BACKTEST_MAX_TRADES:-2000}"
-BACKTEST_MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-500}"
-BACKTEST_TRADE_AMOUNT="${BACKTEST_TRADE_AMOUNT:-100000}"
+BACKTEST_MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-2000}"
+BACKTEST_TRADE_AMOUNT="${BACKTEST_TRADE_AMOUNT:-500000}"
+BACKTEST_MAX_ORDER_NOTIONAL="${BACKTEST_MAX_ORDER_NOTIONAL:-500000}"
 BACKTEST_DATABENTO_SOURCE="${BACKTEST_DATABENTO_SOURCE:-api}"
 BACKTEST_RECORDED_EVENTS_FILE="${BACKTEST_RECORDED_EVENTS_FILE:-}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
@@ -68,9 +69,10 @@ Options:
   --recorded-events FILE  Recorded normalized NDJSON/NDJSON.GZ file for --source ndjson. Can be comma-separated.
   --dry-run                Validate wiring without downloading Databento data.
   --timeout-seconds N      Kill the Databento stream if it has not completed after N seconds. Default: 0 (no timeout)
-  --trade-amount N         Strategy notional per setup/micro entry. Default: 100000
+  --trade-amount N         Strategy notional per setup/micro entry. Default: 500000
+  --max-order-notional N   Simulated/order risk notional cap. Default: 500000
   --max-trades N           Strategy max trades during replay. Default: 2000
-  --max-share-cap N        Simulated broker max shares per order. Default: 500
+  --max-share-cap N        Simulated broker max shares per order. Default: 2000
   --lifecycle-model-dir D  Lifecycle/micro ONNX bundle. Default: runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
   --micro-long-entry-threshold P   Override 5s long micro-entry threshold from lifecycle scorecard.
   --micro-short-entry-threshold P  Override 5s short micro-entry threshold from lifecycle scorecard.
@@ -417,6 +419,8 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN="true"; shift ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
     --trade-amount) BACKTEST_TRADE_AMOUNT="$2"; shift 2 ;;
+    --max-order-notional) BACKTEST_MAX_ORDER_NOTIONAL="$2"; shift 2 ;;
+    --max-order-notional=*) BACKTEST_MAX_ORDER_NOTIONAL="${1#--max-order-notional=}"; shift ;;
     --max-trades) BACKTEST_MAX_TRADES="$2"; shift 2 ;;
     --max-share-cap) BACKTEST_MAX_SHARE_CAP="$2"; shift 2 ;;
     --lifecycle-model-dir) LIFECYCLE_MODEL_DIR="$2"; shift 2 ;;
@@ -667,6 +671,8 @@ for SYMBOL in "${symbols[@]}"; do
     "-Dbacktest.databento.dryRun=$DRY_RUN"
     "-Dbacktest.databento.timeoutSeconds=$TIMEOUT_SECONDS"
     "-Dbacktest.strategy.tradeAmount=$BACKTEST_TRADE_AMOUNT"
+    "-Dbacktest.strategy.maxOrderNotional=$BACKTEST_MAX_ORDER_NOTIONAL"
+    "-Dtrading.risk.max-order-notional=$BACKTEST_MAX_ORDER_NOTIONAL"
     "-Dbacktest.strategy.maxTrades=$BACKTEST_MAX_TRADES"
     "-Dbacktest.strategy.maxShareCap=$BACKTEST_MAX_SHARE_CAP"
     "-Dbacktest.tradeLogFile=$TRADE_LOG"
@@ -752,7 +758,7 @@ for SYMBOL in "${symbols[@]}"; do
 [BACKTEST] lifecycle_exit_thresholds long=${LIFECYCLE_LONG_EXIT_THRESHOLD_RESOLVED:-<disabled>} short=${LIFECYCLE_SHORT_EXIT_THRESHOLD_RESOLVED:-<disabled>}
 [BACKTEST] micro_exit_guard_thresholds long=${MICRO_LONG_EXIT_GUARD_THRESHOLD_RESOLVED:-<disabled>} short=${MICRO_SHORT_EXIT_GUARD_THRESHOLD_RESOLVED:-<disabled>}
 [BACKTEST] downstream_setup_filter enabled=$DOWNSTREAM_SETUP_FILTER_ENABLED manifest=${DOWNSTREAM_SETUP_FILTER_MANIFEST:-<none>} features_csv=${DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-<none>} fail_closed=$DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
-[BACKTEST] trade_amount=$BACKTEST_TRADE_AMOUNT max_trades=$BACKTEST_MAX_TRADES max_share_cap=$BACKTEST_MAX_SHARE_CAP
+[BACKTEST] trade_amount=$BACKTEST_TRADE_AMOUNT max_order_notional=$BACKTEST_MAX_ORDER_NOTIONAL max_trades=$BACKTEST_MAX_TRADES max_share_cap=$BACKTEST_MAX_SHARE_CAP
 [BACKTEST] trade_log=$TRADE_LOG
 [BACKTEST] order_history=$ORDER_HISTORY
 [BACKTEST] trade_lifecycle_summary=$TRADE_LIFECYCLE_SUMMARY
