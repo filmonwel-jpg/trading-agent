@@ -75,18 +75,22 @@ def read_lifecycle(trade_output_dir: Path) -> pd.DataFrame:
     trades["Win"] = trades["TradePnL"] > 0
     trades["Loss"] = trades["TradePnL"] < 0
     trades["Symbol"] = trades["Symbol"].astype(str).str.upper().str.strip()
+    side = trades["TradeSide"] if "TradeSide" in trades.columns else pd.Series("", index=trades.index)
+    trades["TradeSideNorm"] = side.astype(str).str.lower().str.strip()
     return trades
 
 
 def summarize_daily_lifecycle(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty:
         return pd.DataFrame(columns=[
-            "Date", "Trades", "Wins", "Losses", "WinRate", "PnL", "RealizedR",
+            "Date", "Trades", "LongTrades", "ShortTrades", "Wins", "Losses", "WinRate", "PnL", "RealizedR",
             "AvgPnLPerTrade", "SymbolsTraded", "SymbolTradeCounts", "SymbolPnL",
         ])
     rows: list[dict[str, Any]] = []
     for date, group in trades.groupby("Date", sort=True):
         trades_count = int(len(group))
+        long_trades = int(group["TradeSideNorm"].str.startswith("long").sum()) if "TradeSideNorm" in group else 0
+        short_trades = int(group["TradeSideNorm"].str.startswith("short").sum()) if "TradeSideNorm" in group else 0
         wins = int(group["Win"].sum())
         losses = int(group["Loss"].sum())
         symbol_trade_counts = {symbol: int(len(sg)) for symbol, sg in group.groupby("Symbol")}
@@ -96,6 +100,8 @@ def summarize_daily_lifecycle(trades: pd.DataFrame) -> pd.DataFrame:
         rows.append({
             "Date": date,
             "Trades": trades_count,
+            "LongTrades": long_trades,
+            "ShortTrades": short_trades,
             "Wins": wins,
             "Losses": losses,
             "WinRate": wins / trades_count if trades_count else 0.0,
@@ -191,7 +197,7 @@ def frame_to_markdown(frame: pd.DataFrame, columns: list[str]) -> str:
 
 def write_markdown(path: Path, title: str, report: pd.DataFrame, args: argparse.Namespace) -> None:
     columns = [
-        "Date", "Trades", "PnL", "WinRate", "SymbolsTraded", "SymbolTradeCounts", "SymbolPnL",
+        "Date", "Trades", "LongTrades", "ShortTrades", "PnL", "WinRate", "SymbolsTraded", "SymbolTradeCounts", "SymbolPnL",
         "RegimeTradeCounts", "RegimePnL", "AvgSymbolReturnPct", "AvgSymbolRangePct",
         "AvgTrendEfficiency", "MovementLabelCounts",
     ]
