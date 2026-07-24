@@ -1088,7 +1088,7 @@ if truthy_env "$lifecycle_micro_enabled"; then
   printf '[RUN] micro_exit_guard_thresholds long=%s short=%s\n' "$micro_long_exit_guard_threshold_resolved" "$micro_short_exit_guard_threshold_resolved"
 fi
 printf '[RUN] server_port=%s client_id=%s market_data_request_id=%s\n' "$server_port" "$client_id" "$market_data_request_id"
-printf '[RUN] trade_amount=%s max_order_notional=%s max_share_cap=%s\n' "$trade_amount" "$max_notional" "${max_share_cap:-500}"
+printf '[RUN] trade_amount=%s max_order_notional=%s max_share_cap=%s\n' "$trade_amount" "$max_notional" "${max_share_cap:-2000}"
 printf '[RUN] ibkr_host=%s ibkr_port=%s\n' "$ib_host" "$ib_port"
 printf '[RUN] ai_thresholds longEntry=%s shortEntry=%s longExit=%s shortExit=%s regime=%s\n' \
   "${ai_long_entry_threshold:-default}" \

@@ -158,7 +158,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
             this,
             backtestSymbol,
             Double.parseDouble(System.getProperty("backtest.strategy.gapPercentage", "0.0025")),
-            Integer.parseInt(System.getProperty("backtest.strategy.tradeAmount", "100000")),
+            Integer.parseInt(System.getProperty("backtest.strategy.tradeAmount", "500000")),
             Integer.parseInt(System.getProperty("backtest.strategy.maxTrades", "2000")),
             true,
             Integer.parseInt(System.getProperty("backtest.strategy.regimeWindowTicks", "300")),
@@ -374,7 +374,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
 
     @Override
     protected int getMaxShareCap() {
-        return Integer.parseInt(System.getProperty("backtest.strategy.maxShareCap", "500"));
+        return Integer.parseInt(System.getProperty("backtest.strategy.maxShareCap", "2000"));
     }
 
     @Override

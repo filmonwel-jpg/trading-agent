@@ -153,9 +153,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.ai.regime.volatile.long-exit-threshold:}") private String aiVolatileLongExitThresholdRaw;
     @Value("${trading.ai.regime.volatile.short-exit-threshold:}") private String aiVolatileShortExitThresholdRaw;
     @Value("${trading.market-data-request-id:1001}") private int marketDataRequestId;
-    @Value("${trading.risk.max-order-notional:25000}") private double maxOrderNotional;
+    @Value("${trading.risk.max-order-notional:500000}") private double maxOrderNotional;
     @Value("${trading.risk.max-daily-orders:40}") private int maxDailyOrders;
-    @Value("${trading.risk.max-share-cap:10,000}") private int maxShareCap = 10000;
+    @Value("${trading.risk.max-share-cap:2000}") private int maxShareCap = 2000;
     @Value("${trading.shared-capital.enabled:false}") private boolean sharedCapitalEnabled;
     @Value("${trading.shared-capital.file:runtime/shared-capital.properties}") private String sharedCapitalFile;
     @Value("${trading.shared-capital.total-notional:0}") private double sharedCapitalTotalNotional;
