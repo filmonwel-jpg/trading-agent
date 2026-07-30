@@ -241,12 +241,9 @@ def main() -> int:
         "closed_trade_rows": int(len(closed)),
         "log": scan_log(log_file),
         "csv_outputs": csv_paths,
-        "all": tables["all"].to_dict("records"),
-        "by_symbol": tables["by_symbol"].to_dict("records"),
-        "by_day": tables["by_day"].to_dict("records"),
-        "by_week": tables["by_week"].to_dict("records"),
-        "by_month": tables["by_month"].to_dict("records"),
     }
+    for name, frame in tables.items():
+        report[name] = frame.to_dict("records")
     json_path = out_prefix.with_suffix(".json")
     md_path = out_prefix.with_suffix(".md")
     json_path.write_text(json.dumps(json_safe(report), indent=2, sort_keys=True), encoding="utf-8")
