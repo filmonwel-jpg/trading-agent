@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./start_all_databento_bots.sh [--start] [--symbols=CSV] [--exclude=CSV] [--max-trades=N] [--max-share-cap=N] [--trade-amount=N] [--max-order-notional=N] [--per-trade-notional=N] [--tee] [--tee-db] [--stagger-seconds=N] [--ibkr-client-cap=N] [--allow-over-ibkr-client-cap] [--ensure-ibkr] [--skip-ibkr-preflight] [--skip-local-data-preflight] [--ibkr-shared-gateway] [--no-ibkr-shared-gateway] [--ibkr-shared-gateway-host=HOST] [--ibkr-shared-gateway-port=PORT] [--ibkr-shared-gateway-skip-direct-connection] [--ibkr-shared-gateway-allow-direct-fallback] [--startup-history-seconds=N] [--startup-history-schema=SCHEMA] [--list] [-- <extra run_symbol args...>]
+  ./start_all_databento_bots.sh [--start] [--symbols=CSV] [--exclude=CSV] [--max-trades=N] [--max-share-cap=N] [--trade-amount=N] [--max-order-notional=N] [--per-trade-notional=N] [--downstream-setup-filter-manifest=PATH] [--emit-live-feature-snapshots] [--tee] [--tee-db] [--stagger-seconds=N] [--ibkr-client-cap=N] [--allow-over-ibkr-client-cap] [--ensure-ibkr] [--skip-ibkr-preflight] [--skip-local-data-preflight] [--ibkr-shared-gateway] [--no-ibkr-shared-gateway] [--ibkr-shared-gateway-host=HOST] [--ibkr-shared-gateway-port=PORT] [--ibkr-shared-gateway-skip-direct-connection] [--ibkr-shared-gateway-allow-direct-fallback] [--startup-history-seconds=N] [--startup-history-schema=SCHEMA] [--list] [-- <extra run_symbol args...>]
 
 Behavior:
   - Discovers Databento bot configs from runtime/databento/bots/trading-*.properties.
@@ -60,6 +60,9 @@ max_trades_override=""
 trade_amount_override=""
 max_notional_override=""
 max_share_cap_override=""
+downstream_setup_filter_manifest_override=""
+downstream_setup_filter_fail_closed_override=""
+live_feature_snapshots_enabled=0
 stagger_seconds="0"
 startup_history_seconds_override=""
 startup_history_schema_override=""
@@ -319,6 +322,15 @@ build_symbol_cmd() {
   if [[ -n "$max_share_cap_override" ]]; then
     cmd+=("--max-share-cap=$max_share_cap_override")
   fi
+  if [[ -n "$downstream_setup_filter_manifest_override" ]]; then
+    cmd+=("--downstream-setup-filter-manifest=$downstream_setup_filter_manifest_override")
+  fi
+  if [[ -n "$downstream_setup_filter_fail_closed_override" ]]; then
+    cmd+=("--downstream-setup-filter-fail-closed=$downstream_setup_filter_fail_closed_override")
+  fi
+  if [[ $live_feature_snapshots_enabled -eq 1 ]]; then
+    cmd+=(--emit-live-feature-snapshots)
+  fi
   if [[ $tee_mode -eq 1 ]]; then
     cmd+=(--tee)
   fi
@@ -460,6 +472,15 @@ while [[ $# -gt 0 ]]; do
     --per-trade-notional=*|--trade-notional=*)
       trade_amount_override="${1#*=}"
       max_notional_override="${1#*=}"
+      ;;
+    --downstream-setup-filter-manifest=*)
+      downstream_setup_filter_manifest_override="${1#--downstream-setup-filter-manifest=}"
+      ;;
+    --downstream-setup-filter-fail-closed=*)
+      downstream_setup_filter_fail_closed_override="${1#--downstream-setup-filter-fail-closed=}"
+      ;;
+    --emit-live-feature-snapshots)
+      live_feature_snapshots_enabled=1
       ;;
     --stagger-seconds=*)
       stagger_seconds="${1#--stagger-seconds=}"

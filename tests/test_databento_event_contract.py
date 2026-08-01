@@ -12,7 +12,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from databento_event_contract import EVENT_SCHEMA_VERSION, decorate_equity_bar, decorate_option_bar
+from databento_event_contract import EVENT_SCHEMA_VERSION, attach_feature_snapshot, decorate_equity_bar, decorate_option_bar
 from databento_historical_streamer import equity_events_from_frame
 
 
@@ -80,6 +80,20 @@ class DatabentoEventContractTest(unittest.TestCase):
         self.assertEqual("none", payload["DataQualityFlags"])
         self.assertEqual(1.0, payload["QualityScore"])
         self.assertEqual(EVENT_SCHEMA_VERSION, payload["EventSchemaVersion"])
+
+    def test_attach_feature_snapshot_keeps_only_numeric_features(self) -> None:
+        payload = attach_feature_snapshot(
+            {"event": "equity_bar", "symbol": "TSLA", "barEpochSec": 100},
+            epoch_sec=120,
+            source="unit_source",
+            schema_version="unit_schema_v1",
+            features={"Good": 1.25, "StringNumber": "2.5", "Bad": "nan", "": 4.0, "Text": "nope"},
+        )
+
+        self.assertEqual(120, payload["FeatureSnapshotEpochSec"])
+        self.assertEqual("unit_source", payload["FeatureSnapshotSource"])
+        self.assertEqual("unit_schema_v1", payload["FeatureSnapshotSchemaVersion"])
+        self.assertEqual({"Good": 1.25, "StringNumber": 2.5}, payload["enriched_features"])
 
     def test_historical_quote_only_tbbo_bar_remains_trade_absent(self) -> None:
         frame = pd.DataFrame({

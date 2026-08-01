@@ -386,6 +386,14 @@ class SharedFeedRelay:
         live_gateway = str(getattr(self.args, "live_gateway", "") or "").strip()
         if live_gateway:
             command.extend(["--live-gateway", live_gateway])
+        if bool(getattr(self.args, "emit_live_feature_snapshots", False)):
+            command.append("--emit-live-feature-snapshots")
+        feature_snapshot_source = str(getattr(self.args, "feature_snapshot_source", "") or "").strip()
+        if feature_snapshot_source:
+            command.extend(["--feature-snapshot-source", feature_snapshot_source])
+        feature_snapshot_schema_version = str(getattr(self.args, "feature_snapshot_schema_version", "") or "").strip()
+        if feature_snapshot_schema_version:
+            command.extend(["--feature-snapshot-schema-version", feature_snapshot_schema_version])
         return command
 
     def start_normalizer(self) -> None:
@@ -656,6 +664,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--equity-flush-lag-ms", type=float, default=250.0)
     parser.add_argument("--heartbeat-seconds", type=int, default=15)
     parser.add_argument("--startup-delay-seconds", type=float, default=0.0)
+    parser.add_argument("--emit-live-feature-snapshots", action="store_true", default=os.environ.get("DATABENTO_EMIT_LIVE_FEATURE_SNAPSHOTS", "").strip().lower() in {"1", "true", "yes", "on"})
+    parser.add_argument("--feature-snapshot-source", default=os.environ.get("DATABENTO_FEATURE_SNAPSHOT_SOURCE", "live_normalizer_30s_v1"))
+    parser.add_argument("--feature-snapshot-schema-version", default=os.environ.get("DATABENTO_FEATURE_SNAPSHOT_SCHEMA_VERSION", "live_normalizer_30s_v1"))
     parser.add_argument("--expected-client-count", type=int, default=1)
     parser.add_argument("--wait-for-clients-timeout-seconds", type=float, default=15.0)
     parser.add_argument("--client-registration-timeout-seconds", type=float, default=5.0)

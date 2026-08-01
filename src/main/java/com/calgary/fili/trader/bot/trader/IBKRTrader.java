@@ -177,6 +177,9 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.databento.auto-restart.enabled:true}") private boolean databentoAutoRestartEnabled;
     @Value("${trading.databento.restart-delay-ms:2000}") private long databentoRestartDelayMs;
     @Value("${trading.databento.max-silence-ms:120000}") private long databentoMaxSilenceMs;
+    @Value("${trading.databento.feature-snapshots.enabled:false}") private boolean databentoFeatureSnapshotsEnabled;
+    @Value("${trading.databento.feature-snapshots.source:live_normalizer_30s_v1}") private String databentoFeatureSnapshotSource;
+    @Value("${trading.databento.feature-snapshots.schema-version:live_normalizer_30s_v1}") private String databentoFeatureSnapshotSchemaVersion;
     @Value("${trading.databento.quote-stale-threshold-ms:5000}") private long databentoQuoteStaleThresholdMs;
     @Value("${trading.databento.sanity.expected-event-schema-version:databento_ndjson_v2}") private String databentoExpectedEventSchemaVersion;
     @Value("${trading.databento.sanity.min-quality-score:0.50}") private double databentoMinQualityScore;
@@ -266,6 +269,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
                 "databento sharedFeedEnabled=" + databentoSharedFeedEnabled
                     + " relayHost=" + databentoSharedFeedHost
                     + " relayPort=" + databentoSharedFeedPort
+                    + " featureSnapshotsEnabled=" + databentoFeatureSnapshotsEnabled
                     + " liveGateway=" + (databentoLiveGatewayOverride == null || databentoLiveGatewayOverride.isBlank() ? "<default>" : databentoLiveGatewayOverride.trim())
                     + " startIfMissing=" + databentoSharedFeedStartIfMissing
             );
@@ -1779,6 +1783,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             command.add("--live-gateway");
             command.add(databentoLiveGatewayOverride.trim());
         }
+        appendDatabentoFeatureSnapshotArgs(command);
 
         databentoLiveGateway = new DatabentoLiveGateway(
             command,
@@ -2341,6 +2346,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         relayCommand.add(String.valueOf(Math.max(1, databentoHeartbeatSeconds)));
         relayCommand.add("--startup-delay-seconds");
         relayCommand.add(String.format(Locale.US, "%.3f", Math.max(0.0, databentoStartupDelaySeconds)));
+        appendDatabentoFeatureSnapshotArgs(relayCommand);
         relayCommand.add("--expected-client-count");
         relayCommand.add(String.valueOf(Math.max(1, databentoSharedFeedExpectedClientCount)));
         relayCommand.add("--wait-for-clients-timeout-seconds");
@@ -2365,6 +2371,23 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
 
     private double effectiveSharedRelayStartupHistorySeconds() {
         return Math.max(0.0, databentoSharedFeedStartupHistorySeconds);
+    }
+
+    private void appendDatabentoFeatureSnapshotArgs(List<String> command) {
+        if (!databentoFeatureSnapshotsEnabled) {
+            return;
+        }
+        command.add("--emit-live-feature-snapshots");
+        String source = databentoFeatureSnapshotSource == null ? "" : databentoFeatureSnapshotSource.trim();
+        if (!source.isBlank()) {
+            command.add("--feature-snapshot-source");
+            command.add(source);
+        }
+        String schemaVersion = databentoFeatureSnapshotSchemaVersion == null ? "" : databentoFeatureSnapshotSchemaVersion.trim();
+        if (!schemaVersion.isBlank()) {
+            command.add("--feature-snapshot-schema-version");
+            command.add(schemaVersion);
+        }
     }
 
     private boolean waitForSharedDatabentoRelay(long timeoutMs) {

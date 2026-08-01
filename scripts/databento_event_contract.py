@@ -32,6 +32,50 @@ def _safe_int(value: Any, fallback: int = 0) -> int:
 		return fallback
 
 
+def _finite_feature_map(features: dict[str, Any] | None) -> dict[str, float]:
+	cleaned: dict[str, float] = {}
+	if not features:
+		return cleaned
+	for raw_key, raw_value in features.items():
+		key = str(raw_key or "").strip()
+		if not key:
+			continue
+		try:
+			value = float(raw_value)
+		except (TypeError, ValueError):
+			continue
+		if math.isfinite(value):
+			cleaned[key] = value
+	return cleaned
+
+
+def attach_feature_snapshot(
+	payload: dict[str, Any],
+	*,
+	epoch_sec: int,
+	features: dict[str, Any] | None,
+	source: str = "",
+	schema_version: str = "",
+) -> dict[str, Any]:
+	"""Attach an event-carried downstream feature snapshot in-place.
+
+	Java accepts the numeric map from ``enriched_features`` and caches it by
+	``FeatureSnapshotEpochSec`` before processing the carrier source bar.  This
+	helper intentionally skips empty/non-numeric maps so callers do not create a
+	misleading ``featureSnapshot=hit`` with no usable values.
+	"""
+	cleaned = _finite_feature_map(features)
+	if not cleaned or int(epoch_sec or 0) <= 0:
+		return payload
+	payload["FeatureSnapshotEpochSec"] = int(epoch_sec)
+	if schema_version:
+		payload["FeatureSnapshotSchemaVersion"] = str(schema_version)
+	if source:
+		payload["FeatureSnapshotSource"] = str(source)
+	payload["enriched_features"] = cleaned
+	return payload
+
+
 def _quality_score(
 	trade_coverage: float,
 	quote_state_coverage: float,

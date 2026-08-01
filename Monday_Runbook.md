@@ -2,6 +2,8 @@
 
 This runbook is for starting the live symbol bots with the symbol-specific runtime property files and filesystem-backed ONNX bundles already prepared under `runtime/models/<SYMBOL>`.
 
+For the July 2026 recovered event-carried validation path and the matching Databento paper/live startup commands with lifecycle/micro `0.30/0.30`, downstream setup-filter manifest wiring, `60000` trade amount, and `500000` shared notional cap, see [`docs/databento_paper_live_startup_post_recovered_event_20260731.md`](docs/databento_paper_live_startup_post_recovered_event_20260731.md).
+
 ## 1. Pre-open checklist
 
 Before launching any symbol process:

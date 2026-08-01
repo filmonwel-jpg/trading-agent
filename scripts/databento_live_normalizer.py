@@ -17,6 +17,11 @@ import databento as db
 import databento_dbn as dbn
 
 from databento_event_contract import EVENT_SCHEMA_VERSION, decorate_equity_bar, decorate_option_bar
+from live_feature_snapshots import (
+    DEFAULT_LIVE_FEATURE_SNAPSHOT_SCHEMA_VERSION,
+    DEFAULT_LIVE_FEATURE_SNAPSHOT_SOURCE,
+    LiveEquityFeatureSnapshotEmitter,
+)
 
 PRICE_SCALE = 1_000_000_000.0
 OPRA_SYMBOL_RE = re.compile(r'^([A-Z]+)\s+(\d{6,8})([CP])\d+$')
@@ -172,6 +177,11 @@ class DatabentoNormalizer:
         self.failure_lock = threading.Lock()
         self.failure_exit_code = 0
         self.failure_reason = ''
+        self.feature_snapshot_emitter = LiveEquityFeatureSnapshotEmitter(
+            enabled=bool(getattr(self.args, 'emit_live_feature_snapshots', False)),
+            source=str(getattr(self.args, 'feature_snapshot_source', DEFAULT_LIVE_FEATURE_SNAPSHOT_SOURCE) or DEFAULT_LIVE_FEATURE_SNAPSHOT_SOURCE),
+            schema_version=str(getattr(self.args, 'feature_snapshot_schema_version', DEFAULT_LIVE_FEATURE_SNAPSHOT_SCHEMA_VERSION) or DEFAULT_LIVE_FEATURE_SNAPSHOT_SCHEMA_VERSION),
+        )
 
     def _live_gateway(self) -> str:
         return str(getattr(self.args, 'live_gateway', '') or '').strip()
@@ -223,14 +233,18 @@ class DatabentoNormalizer:
                     bars.pop(symbol, None)
 
         for symbol, bar in ready:
-            self.writer.emit(bar.to_payload(
-                symbol,
-                event_source='live',
-                dataset=self.args.equity_dataset,
-                schema=self.args.equity_schema,
-                stype_in='raw_symbol',
-            ))
+            self._emit_equity_bar(symbol, bar, event_source='live')
         return len(ready)
+
+    def _emit_equity_bar(self, symbol: str, bar: EquitySecondBar, *, event_source: str) -> None:
+        payload = bar.to_payload(
+            symbol,
+            event_source=event_source,
+            dataset=self.args.equity_dataset,
+            schema=self.args.equity_schema,
+            stype_in='raw_symbol',
+        )
+        self.writer.emit(self.feature_snapshot_emitter.decorate_payload(payload))
 
     def run(self) -> int:
         if self.args.dry_run:
@@ -245,6 +259,9 @@ class DatabentoNormalizer:
                 'liveGateway': self._live_gateway(),
                 'startupHistorySeconds': self.args.startup_history_seconds,
                 'startupHistorySchema': self.args.startup_history_schema,
+                'emitLiveFeatureSnapshots': bool(self.args.emit_live_feature_snapshots),
+                'featureSnapshotSource': self.args.feature_snapshot_source,
+                'featureSnapshotSchemaVersion': self.args.feature_snapshot_schema_version,
                 'optionsDataset': self.args.options_dataset,
                 'optionsSchema': self.args.options_schema,
             })
@@ -349,13 +366,7 @@ class DatabentoNormalizer:
                     current.update_trade(trade_price, trade_size, str(getattr(record, 'side', '') or ''))
 
                 if ready_bar is not None:
-                    self.writer.emit(ready_bar.to_payload(
-                        symbol,
-                        event_source='live',
-                        dataset=self.args.equity_dataset,
-                        schema=self.args.equity_schema,
-                        stype_in='raw_symbol',
-                    ))
+                    self._emit_equity_bar(symbol, ready_bar, event_source='live')
 
                 # Timer-based flushing does not synthesize silent seconds; it only releases already-seen bars
                 # once their second is definitely closed.
@@ -564,7 +575,7 @@ class DatabentoNormalizer:
             'atAskVol': 0,
             'historical': True,
         }
-        return decorate_equity_bar(
+        payload = decorate_equity_bar(
             payload,
             event_source='startup_history',
             dataset=self.args.equity_dataset,
@@ -572,6 +583,7 @@ class DatabentoNormalizer:
             stype_in='raw_symbol',
             ts_event_ns=payload['tsEventNs'],
         )
+        return self.feature_snapshot_emitter.decorate_payload(payload)
 
     def _safe_float(self, raw_value: object) -> float:
         try:
@@ -760,6 +772,13 @@ def _split_csv(values: str | Iterable[str]) -> list[str]:
     return out
 
 
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Normalize live Databento TBBO + OPRA OHLCV-1s into NDJSON for the Java trader.')
@@ -775,6 +794,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--equity-flush-lag-ms', type=float, default=float(DEFAULT_EQUITY_FLUSH_LAG_MS))
     parser.add_argument('--heartbeat-seconds', type=int, default=15)
     parser.add_argument('--startup-delay-seconds', type=float, default=0.0)
+    parser.add_argument('--emit-live-feature-snapshots', action='store_true', default=_env_truthy('DATABENTO_EMIT_LIVE_FEATURE_SNAPSHOTS'), help='Attach live-computed 30s enriched feature snapshots to equity_bar events for Java downstream setup-filter parity telemetry.')
+    parser.add_argument('--feature-snapshot-source', type=str, default=os.environ.get('DATABENTO_FEATURE_SNAPSHOT_SOURCE', DEFAULT_LIVE_FEATURE_SNAPSHOT_SOURCE))
+    parser.add_argument('--feature-snapshot-schema-version', type=str, default=os.environ.get('DATABENTO_FEATURE_SNAPSHOT_SCHEMA_VERSION', DEFAULT_LIVE_FEATURE_SNAPSHOT_SCHEMA_VERSION))
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     args.symbols = _split_csv(args.symbols)

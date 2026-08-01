@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_symbol.sh <SYMBOL> [--start] [--max-trades=N] [--max-share-cap=N] [--trade-amount=N] [--max-order-notional=N] [--per-trade-notional=N] [--tee[=FILE]] [--tee-db] [--skip-ibkr-preflight] [--require-prebuilt-jar] [-- <extra java args...>]
+  ./run_symbol.sh <SYMBOL> [--start] [--max-trades=N] [--max-share-cap=N] [--trade-amount=N] [--max-order-notional=N] [--per-trade-notional=N] [--downstream-setup-filter-manifest=PATH] [--emit-live-feature-snapshots] [--tee[=FILE]] [--tee-db] [--skip-ibkr-preflight] [--require-prebuilt-jar] [-- <extra java args...>]
 
 Examples:
   ./run_symbol.sh TSLA
@@ -28,6 +28,8 @@ Behavior:
   - Use --trade-amount=N to set the dollar amount used by the strategy to calculate share quantity.
   - Use --max-order-notional=N to set the risk cap checked before opening orders.
   - Use --per-trade-notional=N to set both --trade-amount and --max-order-notional to the same value.
+  - Use --downstream-setup-filter-manifest=PATH to enable the downstream setup-quality route manifest for live/paper.
+  - Use --emit-live-feature-snapshots to make the Databento normalizer attach live-computed 30s feature snapshots.
   - Use --tee or --tee=FILE to append combined output to a log file.
   - Use --tee-db to persist the combined live process log stream to PostgreSQL.
 EOF
@@ -53,6 +55,9 @@ max_trades_override=""
 trade_amount_cli_override=""
 max_notional_cli_override=""
 max_share_cap_cli_override=""
+downstream_setup_filter_manifest_cli_override=""
+downstream_setup_filter_fail_closed_cli_override=""
+live_feature_snapshots_enabled_override=""
 skip_ibkr_preflight=0
 require_prebuilt_jar=0
 extra_args=()
@@ -97,6 +102,18 @@ while [[ $# -gt 0 ]]; do
     --per-trade-notional=*|--trade-notional=*)
       trade_amount_cli_override="${1#*=}"
       max_notional_cli_override="${1#*=}"
+      ;;
+    --downstream-setup-filter-manifest=*)
+      downstream_setup_filter_manifest_cli_override="${1#--downstream-setup-filter-manifest=}"
+      ;;
+    --downstream-setup-filter-fail-closed=*)
+      downstream_setup_filter_fail_closed_cli_override="${1#--downstream-setup-filter-fail-closed=}"
+      ;;
+    --disable-downstream-setup-filter)
+      downstream_setup_filter_manifest_cli_override="none"
+      ;;
+    --emit-live-feature-snapshots)
+      live_feature_snapshots_enabled_override="true"
       ;;
     --skip-ibkr-preflight|--no-ensure-ibkr)
       skip_ibkr_preflight=1
@@ -319,6 +336,12 @@ extra_arg_is_managed_override() {
     --trading.ai.regime.volatile.short-entry-threshold=*|\
     --trading.micro.long-entry-threshold=*|\
     --trading.micro.short-entry-threshold=*|\
+    --strategy.downstreamSetupFilter.enabled=*|\
+    --strategy.downstreamSetupFilter.routeManifest=*|\
+    --strategy.downstreamSetupFilter.featuresCsv=*|\
+    --strategy.downstreamSetupFilter.failClosed=*|\
+    --strategy.downstreamSetupFilter.logFeatureVector=*|\
+    --strategy.downstreamSetupFilter.eventSnapshotCacheRows=*|\
     --trading.shared-capital.enabled=*|\
     --trading.shared-capital.file=*|\
     --trading.shared-capital.total-notional=*|\
@@ -549,6 +572,12 @@ micro_long_entry_threshold="$(get_prop trading.micro.long-entry-threshold)"
 micro_short_entry_threshold="$(get_prop trading.micro.short-entry-threshold)"
 micro_long_entry_threshold_source=""
 micro_short_entry_threshold_source=""
+downstream_setup_filter_enabled="${TRADING_DOWNSTREAM_SETUP_FILTER_ENABLED:-$(get_prop strategy.downstreamSetupFilter.enabled)}"
+downstream_setup_filter_manifest="${TRADING_DOWNSTREAM_SETUP_FILTER_MANIFEST:-$(get_prop strategy.downstreamSetupFilter.routeManifest)}"
+downstream_setup_filter_features_csv="${TRADING_DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-$(get_prop strategy.downstreamSetupFilter.featuresCsv)}"
+downstream_setup_filter_fail_closed="${TRADING_DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED:-$(get_prop strategy.downstreamSetupFilter.failClosed)}"
+downstream_setup_filter_log_feature_vector="${TRADING_DOWNSTREAM_SETUP_FILTER_LOG_FEATURE_VECTOR:-$(get_prop strategy.downstreamSetupFilter.logFeatureVector)}"
+downstream_setup_filter_event_snapshot_cache_rows="${TRADING_DOWNSTREAM_SETUP_FILTER_EVENT_SNAPSHOT_CACHE_ROWS:-$(get_prop strategy.downstreamSetupFilter.eventSnapshotCacheRows)}"
 if [[ -n "$micro_long_entry_threshold" ]]; then
   micro_long_entry_threshold_source="properties:$properties_file"
 fi
@@ -695,6 +724,12 @@ ai_volatile_long_entry_threshold_override="$(resolve_extra_arg_override trading.
 ai_volatile_short_entry_threshold_override="$(resolve_extra_arg_override trading.ai.regime.volatile.short-entry-threshold)"
 micro_long_entry_threshold_override="$(resolve_extra_arg_override trading.micro.long-entry-threshold)"
 micro_short_entry_threshold_override="$(resolve_extra_arg_override trading.micro.short-entry-threshold)"
+downstream_setup_filter_enabled_override="$(resolve_extra_arg_override strategy.downstreamSetupFilter.enabled)"
+downstream_setup_filter_manifest_override="$(resolve_extra_arg_override strategy.downstreamSetupFilter.routeManifest)"
+downstream_setup_filter_features_csv_override="$(resolve_extra_arg_override strategy.downstreamSetupFilter.featuresCsv)"
+downstream_setup_filter_fail_closed_override="$(resolve_extra_arg_override strategy.downstreamSetupFilter.failClosed)"
+downstream_setup_filter_log_feature_vector_override="$(resolve_extra_arg_override strategy.downstreamSetupFilter.logFeatureVector)"
+downstream_setup_filter_event_snapshot_cache_rows_override="$(resolve_extra_arg_override strategy.downstreamSetupFilter.eventSnapshotCacheRows)"
 shared_capital_enabled_override="$(resolve_extra_arg_override trading.shared-capital.enabled)"
 shared_capital_file_override="$(resolve_extra_arg_override trading.shared-capital.file)"
 shared_capital_total_notional_override="$(resolve_extra_arg_override trading.shared-capital.total-notional)"
@@ -810,6 +845,42 @@ if [[ -z "$micro_short_entry_threshold" ]]; then
     micro_short_entry_threshold_source="csv:$calibrated_micro_thresholds_file"
   fi
 fi
+if [[ -n "$downstream_setup_filter_manifest_cli_override" ]]; then
+  downstream_setup_filter_manifest="$downstream_setup_filter_manifest_cli_override"
+fi
+if [[ -n "$downstream_setup_filter_fail_closed_cli_override" ]]; then
+  downstream_setup_filter_fail_closed="$downstream_setup_filter_fail_closed_cli_override"
+fi
+if [[ -n "$downstream_setup_filter_enabled_override" ]]; then
+  downstream_setup_filter_enabled="$downstream_setup_filter_enabled_override"
+fi
+if [[ -n "$downstream_setup_filter_manifest_override" ]]; then
+  downstream_setup_filter_manifest="$downstream_setup_filter_manifest_override"
+fi
+if [[ -n "$downstream_setup_filter_features_csv_override" ]]; then
+  downstream_setup_filter_features_csv="$downstream_setup_filter_features_csv_override"
+fi
+if [[ -n "$downstream_setup_filter_fail_closed_override" ]]; then
+  downstream_setup_filter_fail_closed="$downstream_setup_filter_fail_closed_override"
+fi
+if [[ -n "$downstream_setup_filter_log_feature_vector_override" ]]; then
+  downstream_setup_filter_log_feature_vector="$downstream_setup_filter_log_feature_vector_override"
+fi
+if [[ -n "$downstream_setup_filter_event_snapshot_cache_rows_override" ]]; then
+  downstream_setup_filter_event_snapshot_cache_rows="$downstream_setup_filter_event_snapshot_cache_rows_override"
+fi
+downstream_setup_filter_manifest_lower="$(printf '%s' "$downstream_setup_filter_manifest" | tr '[:upper:]' '[:lower:]')"
+if [[ "$downstream_setup_filter_manifest_lower" == "none" ]]; then
+  downstream_setup_filter_manifest=""
+  downstream_setup_filter_enabled="false"
+elif [[ -n "$downstream_setup_filter_manifest" ]]; then
+  downstream_setup_filter_enabled="${downstream_setup_filter_enabled:-true}"
+  [[ "$downstream_setup_filter_manifest" != /* ]] && downstream_setup_filter_manifest="$repo_root/$downstream_setup_filter_manifest"
+fi
+if [[ -n "$downstream_setup_filter_features_csv" ]]; then
+  [[ "$downstream_setup_filter_features_csv" != /* ]] && downstream_setup_filter_features_csv="$repo_root/$downstream_setup_filter_features_csv"
+fi
+downstream_setup_filter_fail_closed="${downstream_setup_filter_fail_closed:-true}"
 if [[ -n "$shared_capital_enabled_override" ]]; then
   shared_capital_enabled="$shared_capital_enabled_override"
 fi
@@ -883,6 +954,12 @@ if truthy_env "$lifecycle_micro_enabled"; then
     require_file "$lifecycle_model_dir/$required_lifecycle_model" "lifecycle/micro artifact $required_lifecycle_model"
   done
 fi
+if truthy_env "$downstream_setup_filter_enabled"; then
+  require_file "$downstream_setup_filter_manifest" "downstream setup-filter route manifest"
+  if [[ -n "$downstream_setup_filter_features_csv" ]]; then
+    require_file "$downstream_setup_filter_features_csv" "downstream setup-filter features CSV"
+  fi
+fi
 
 java_opts_raw="${TRADING_AGENT_JAVA_OPTS:-}"
 if [[ -z "$java_opts_raw" ]]; then
@@ -921,6 +998,22 @@ if truthy_env "$lifecycle_micro_enabled"; then
     "-Dstrategy.micro.longExitGuardThreshold=$micro_long_exit_guard_threshold_resolved"
     "-Dstrategy.micro.shortExitGuardThreshold=$micro_short_exit_guard_threshold_resolved"
   )
+fi
+if truthy_env "$downstream_setup_filter_enabled"; then
+  java_opts+=(
+    -Dstrategy.downstreamSetupFilter.enabled=true
+    "-Dstrategy.downstreamSetupFilter.routeManifest=$downstream_setup_filter_manifest"
+    "-Dstrategy.downstreamSetupFilter.failClosed=$downstream_setup_filter_fail_closed"
+  )
+  if [[ -n "$downstream_setup_filter_features_csv" ]]; then
+    java_opts+=("-Dstrategy.downstreamSetupFilter.featuresCsv=$downstream_setup_filter_features_csv")
+  fi
+  if [[ -n "$downstream_setup_filter_log_feature_vector" ]]; then
+    java_opts+=("-Dstrategy.downstreamSetupFilter.logFeatureVector=$downstream_setup_filter_log_feature_vector")
+  fi
+  if [[ -n "$downstream_setup_filter_event_snapshot_cache_rows" ]]; then
+    java_opts+=("-Dstrategy.downstreamSetupFilter.eventSnapshotCacheRows=$downstream_setup_filter_event_snapshot_cache_rows")
+  fi
 fi
 
 onnx_count="$(find "$model_dir" -maxdepth 1 -type f -name '*.onnx' | wc -l | tr -d ' ')"
@@ -1053,6 +1146,9 @@ fi
 if [[ -n "$max_trades_override" ]]; then
   cmd+=("--trading.max-trades=$max_trades_override")
 fi
+if [[ -n "$live_feature_snapshots_enabled_override" ]]; then
+  cmd+=("--trading.databento.feature-snapshots.enabled=$live_feature_snapshots_enabled_override")
+fi
 
 if [[ ${#extra_args[@]} -gt 0 ]]; then
   filtered_extra_args=()
@@ -1087,6 +1183,12 @@ if truthy_env "$lifecycle_micro_enabled"; then
     "$micro_short_entry_threshold_source"
   printf '[RUN] micro_exit_guard_thresholds long=%s short=%s\n' "$micro_long_exit_guard_threshold_resolved" "$micro_short_exit_guard_threshold_resolved"
 fi
+printf '[RUN] downstream_setup_filter enabled=%s manifest=%s features_csv=%s fail_closed=%s\n' \
+  "${downstream_setup_filter_enabled:-false}" \
+  "${downstream_setup_filter_manifest:-<none>}" \
+  "${downstream_setup_filter_features_csv:-<none>}" \
+  "$downstream_setup_filter_fail_closed"
+printf '[RUN] live_feature_snapshots enabled=%s\n' "${live_feature_snapshots_enabled_override:-properties/default}"
 printf '[RUN] server_port=%s client_id=%s market_data_request_id=%s\n' "$server_port" "$client_id" "$market_data_request_id"
 printf '[RUN] trade_amount=%s max_order_notional=%s max_share_cap=%s\n' "$trade_amount" "$max_notional" "${max_share_cap:-2000}"
 printf '[RUN] ibkr_host=%s ibkr_port=%s\n' "$ib_host" "$ib_port"
