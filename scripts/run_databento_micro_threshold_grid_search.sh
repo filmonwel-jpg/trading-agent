@@ -13,14 +13,22 @@ MODEL_DIR="${MODEL_DIR:-model_exports/20260524_022652}"
 LIFECYCLE_MODEL_DIR="${TRADING_LIFECYCLE_MODEL_DIR:-model_exports/lifecycle_micro_20260523}"
 PYTHON_BIN="${PYTHON_BIN:-${DATABENTO_PYTHON_BIN:-/tmp/trading-agent-databento-venv/bin/python3}}"
 DATABENTO_ENV_FILE="${BACKTEST_DATABENTO_ENV_FILE:-${TRADING_DATABENTO_ENV_FILE:-}}"
+SOURCE="${BACKTEST_DATABENTO_SOURCE:-api}"
+RECORDED_EVENTS="${BACKTEST_RECORDED_EVENTS_FILE:-}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-3600}"
 PREVIOUS_CLOSE_LOOKBACK_DAYS="${DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS:-14}"
 MAX_TRADES="${BACKTEST_MAX_TRADES:-2000}"
-MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-500}"
+MAX_SHARE_CAP="${BACKTEST_MAX_SHARE_CAP:-2000}"
+TRADE_AMOUNT="${BACKTEST_TRADE_AMOUNT:-}"
+MAX_ORDER_NOTIONAL="${BACKTEST_MAX_ORDER_NOTIONAL:-}"
 LIFECYCLE_LONG_EXIT_THRESHOLD=""
 LIFECYCLE_SHORT_EXIT_THRESHOLD=""
 MICRO_LONG_EXIT_GUARD_THRESHOLD=""
 MICRO_SHORT_EXIT_GUARD_THRESHOLD=""
+DOWNSTREAM_SETUP_FILTER_MANIFEST="${DOWNSTREAM_SETUP_FILTER_MANIFEST:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_ROUTE_MANIFEST:-}}"
+DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="${DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-}}"
+DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED="${DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED:-${STRATEGY_DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED:-true}}"
+MICRO_ENTRY_RESEARCH_NO_TRADE="${MICRO_ENTRY_RESEARCH_NO_TRADE:-${STRATEGY_MICRO_ENTRY_RESEARCH_NO_TRADE:-false}}"
 LONG_THRESHOLDS="0.32 0.35 0.38 0.40 0.42 0.45"
 SHORT_THRESHOLDS="0.32 0.35 0.38 0.40 0.42 0.45"
 DRY_RUN="false"
@@ -44,6 +52,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   scripts/run_databento_micro_threshold_grid_search.sh --symbol SYMBOL --start YYYY-MM-DD --end YYYY-MM-DD [options]
+  scripts/run_databento_micro_threshold_grid_search.sh --symbol SYMBOL --source ndjson --recorded-events FILE [options]
 
 Runs a one-symbol Databento historical IBKR simulation grid search for lifecycle/micro
 entry thresholds, ranks all long/short threshold pairs, and optionally scales the best
@@ -53,9 +62,28 @@ Default grid:
   long:  0.32 0.35 0.38 0.40 0.42 0.45
   short: 0.32 0.35 0.38 0.40 0.42 0.45
 
-Required unless already exported:
+Required for --source api unless already exported:
   --start YYYY-MM-DD              First replay day. Also reads START_DATE or CAL_START.
   --end YYYY-MM-DD                Last replay day. Also reads END_DATE or CAL_END.
+
+File replay / recorded-events mode:
+  --source api|ndjson             Stream source. Default: api. Use ndjson for recorded file replay.
+  --recorded-events FILE          Required for --source ndjson. NDJSON/NDJSON.GZ file; comma-separated is allowed.
+  --start/--end YYYY-MM-DD        Optional in ndjson mode. When omitted, the full recorded file is replayed.
+  Procedure:
+    1. Prepare or choose a normalized recorded-events NDJSON/NDJSON.GZ file.
+       The stream should contain status, previous_close, equity_bar, and optionally option_bar events.
+    2. Validate the file with scripts/databento_historical_streamer.py --source ndjson before grid search.
+    3. For downstream setup-filter parity, inject sidecar rows into event-carried enriched snapshots first.
+    4. Pass --downstream-setup-filter-manifest when testing the controlled setup-quality gate.
+    5. Omit --downstream-setup-filter-features-csv for event-carried parity; unset any sidecar env vars.
+    6. Set trade sizing explicitly, e.g. --trade-amount 60000 --max-order-notional 500000.
+    7. Inspect grid_results.csv, top_thresholds.tsv, per-combo logs, and snapshot/sidecar telemetry.
+  References:
+    docs/pilot_core_symbol_onboarding_runbook.md section 11.4
+    docs/recorded_event_replay_from_training_bars.md
+    docs/event_carried_enriched_snapshots.md
+
 
 Core options:
   --symbol SYMBOL                 Pilot symbol. Default: TSLA or BACKTEST_SYMBOL.
@@ -68,7 +96,15 @@ Core options:
   --timeout-seconds N             Per-run Databento timeout. Default: 3600
   --previous-close-lookback-days N Export DATABENTO_PREVIOUS_CLOSE_LOOKBACK_DAYS. Default: 14
   --max-trades N                  Strategy max trades during replay. Default: 2000
-  --max-share-cap N               Simulated broker max shares per order. Default: 500
+  --max-share-cap N               Simulated broker max shares per order. Default: 2000
+  --trade-amount N                Strategy notional per setup/micro entry. Default: launcher default.
+  --max-order-notional N          Simulated/order risk notional cap. Default: launcher default.
+
+Controlled setup-filter options:
+  --downstream-setup-filter-manifest F    Enable downstream setup-quality route manifest.
+  --downstream-setup-filter-features-csv F Optional sidecar CSV. Usually omit for event-carried file replay.
+  --downstream-setup-filter-fail-open     Continue if the downstream setup filter cannot load. Default: fail-closed.
+  --micro-entry-research-no-trade         Record micro-entry confirmations but do not place orders.
 
 Grid options:
   --long-thresholds "LIST"         Space/comma-separated long thresholds.
@@ -112,6 +148,27 @@ Examples:
     --scale-if-profitable \
     --scale-symbols-file runtime/symbols_100.txt \
     --skip-build
+
+  # Recovered/event-carried file replay grid. This avoids Databento API download
+  # variance and exercises the same no-sidecar snapshot path used by the July 2026
+  # recovered replay validation.
+  BASE=runtime/local-backtests/databento-core5-whole-20250722-20260522-event-carried
+  EVENTS="$BASE/databento-20250722-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core-recovered.ndjson.gz"
+  MANIFEST=runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+  unset DOWNSTREAM_SETUP_FILTER_FEATURES_CSV STRATEGY_DOWNSTREAM_SETUP_FILTER_FEATURES_CSV
+  scripts/run_databento_micro_threshold_grid_search.sh \
+    --symbol TSLA \
+    --source ndjson \
+    --recorded-events "$EVENTS" \
+    --output-base "$BASE/micro_threshold_grid_TSLA_file_replay_$(date +%Y%m%d_%H%M%S)" \
+    --thresholds "0.20 0.25 0.30" \
+    --trade-amount 60000 \
+    --max-order-notional 500000 \
+    --max-share-cap 2000 \
+    --max-trades 2000 \
+    --timeout-seconds 0 \
+    --downstream-setup-filter-manifest "$MANIFEST" \
+    --skip-build
 USAGE
 }
 
@@ -129,6 +186,30 @@ truthy() {
 
 normalize_list() {
   printf '%s' "$1" | tr ',' ' '
+}
+
+trim_spaces() {
+  printf '%s' "$1" | awk '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); print}'
+}
+
+resolve_csv_files() {
+  local raw="$1" out="" part resolved
+  local -a parts=()
+  IFS=',' read -r -a parts <<< "$raw"
+  for part in "${parts[@]}"; do
+    part="$(trim_spaces "$part")"
+    [[ -n "$part" ]] || continue
+    resolved="$part"
+    [[ "$resolved" != /* ]] && resolved="$ROOT/$resolved"
+    [[ -f "$resolved" ]] || die "file not found: $resolved"
+    if [[ -n "$out" ]]; then
+      out+=",$resolved"
+    else
+      out="$resolved"
+    fi
+  done
+  [[ -n "$out" ]] || die "no files resolved from: $raw"
+  printf '%s' "$out"
 }
 
 threshold_slug() {
@@ -164,6 +245,10 @@ while [[ $# -gt 0 ]]; do
     --python-bin=*) PYTHON_BIN="${1#--python-bin=}"; shift ;;
     --databento-env-file) DATABENTO_ENV_FILE="$2"; shift 2 ;;
     --databento-env-file=*) DATABENTO_ENV_FILE="${1#--databento-env-file=}"; shift ;;
+    --source) SOURCE="$2"; shift 2 ;;
+    --source=*) SOURCE="${1#--source=}"; shift ;;
+    --recorded-events|--input-file) RECORDED_EVENTS="$2"; shift 2 ;;
+    --recorded-events=*|--input-file=*) RECORDED_EVENTS="${1#*=}"; shift ;;
     --classpath-file) CLASSPATH_FILE="$2"; shift 2 ;;
     --classpath-file=*) CLASSPATH_FILE="${1#--classpath-file=}"; shift ;;
     --timeout-seconds) TIMEOUT_SECONDS="$2"; shift 2 ;;
@@ -174,6 +259,10 @@ while [[ $# -gt 0 ]]; do
     --max-trades=*) MAX_TRADES="${1#--max-trades=}"; shift ;;
     --max-share-cap) MAX_SHARE_CAP="$2"; shift 2 ;;
     --max-share-cap=*) MAX_SHARE_CAP="${1#--max-share-cap=}"; shift ;;
+    --trade-amount) TRADE_AMOUNT="$2"; shift 2 ;;
+    --trade-amount=*) TRADE_AMOUNT="${1#--trade-amount=}"; shift ;;
+    --max-order-notional) MAX_ORDER_NOTIONAL="$2"; shift 2 ;;
+    --max-order-notional=*) MAX_ORDER_NOTIONAL="${1#--max-order-notional=}"; shift ;;
     --long-thresholds) LONG_THRESHOLDS="$(normalize_list "$2")"; shift 2 ;;
     --long-thresholds=*) LONG_THRESHOLDS="$(normalize_list "${1#--long-thresholds=}")"; shift ;;
     --short-thresholds) SHORT_THRESHOLDS="$(normalize_list "$2")"; shift 2 ;;
@@ -192,6 +281,12 @@ while [[ $# -gt 0 ]]; do
     --micro-long-exit-guard-threshold=*) MICRO_LONG_EXIT_GUARD_THRESHOLD="${1#--micro-long-exit-guard-threshold=}"; shift ;;
     --micro-short-exit-guard-threshold) MICRO_SHORT_EXIT_GUARD_THRESHOLD="$2"; shift 2 ;;
     --micro-short-exit-guard-threshold=*) MICRO_SHORT_EXIT_GUARD_THRESHOLD="${1#--micro-short-exit-guard-threshold=}"; shift ;;
+    --downstream-setup-filter-manifest) DOWNSTREAM_SETUP_FILTER_MANIFEST="$2"; shift 2 ;;
+    --downstream-setup-filter-manifest=*) DOWNSTREAM_SETUP_FILTER_MANIFEST="${1#--downstream-setup-filter-manifest=}"; shift ;;
+    --downstream-setup-filter-features-csv) DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="$2"; shift 2 ;;
+    --downstream-setup-filter-features-csv=*) DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="${1#--downstream-setup-filter-features-csv=}"; shift ;;
+    --downstream-setup-filter-fail-open) DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED="false"; shift ;;
+    --micro-entry-research-no-trade) MICRO_ENTRY_RESEARCH_NO_TRADE="true"; shift ;;
     --dry-run) DRY_RUN="true"; shift ;;
     --skip-build) SKIP_BUILD="true"; shift ;;
     --resume) RESUME="true"; shift ;;
@@ -222,11 +317,34 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$SYMBOL" ]] || die "--symbol is required"
-[[ -n "$START_DATE" ]] || die "--start is required, or export START_DATE/CAL_START"
-[[ -n "$END_DATE" ]] || die "--end is required, or export END_DATE/CAL_END"
 [[ -n "$LONG_THRESHOLDS" ]] || die "at least one long threshold is required"
 [[ -n "$SHORT_THRESHOLDS" ]] || die "at least one short threshold is required"
 
+SOURCE="$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')"
+[[ "$SOURCE" == "api" || "$SOURCE" == "ndjson" ]] || die "--source must be api or ndjson"
+if [[ "$SOURCE" == "api" ]]; then
+  [[ -n "$START_DATE" ]] || die "--start is required for --source api, or export START_DATE/CAL_START"
+  [[ -n "$END_DATE" ]] || die "--end is required for --source api, or export END_DATE/CAL_END"
+else
+  [[ -n "$RECORDED_EVENTS" ]] || die "--source ndjson requires --recorded-events"
+  RECORDED_EVENTS="$(resolve_csv_files "$RECORDED_EVENTS")"
+  if [[ -n "$START_DATE" || -n "$END_DATE" ]]; then
+    [[ -n "$START_DATE" && -n "$END_DATE" ]] || die "--start and --end must be supplied together when filtering ndjson replay"
+  fi
+  if truthy "$SCALE_IF_PROFITABLE"; then
+    die "--scale-if-profitable is API batch workflow only; for ndjson/file replay, inspect grid_results.csv and run per-symbol file replay grids explicitly"
+  fi
+fi
+if [[ -n "$DOWNSTREAM_SETUP_FILTER_MANIFEST" ]]; then
+  [[ "$DOWNSTREAM_SETUP_FILTER_MANIFEST" != /* ]] && DOWNSTREAM_SETUP_FILTER_MANIFEST="$ROOT/$DOWNSTREAM_SETUP_FILTER_MANIFEST"
+  [[ -f "$DOWNSTREAM_SETUP_FILTER_MANIFEST" ]] || die "downstream setup-filter manifest not found: $DOWNSTREAM_SETUP_FILTER_MANIFEST"
+fi
+if [[ -n "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" ]]; then
+  [[ "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" != /* ]] && DOWNSTREAM_SETUP_FILTER_FEATURES_CSV="$ROOT/$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV"
+  [[ -f "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" ]] || die "downstream setup-filter features CSV not found: $DOWNSTREAM_SETUP_FILTER_FEATURES_CSV"
+fi
+
+if [[ -n "$START_DATE" || -n "$END_DATE" ]]; then
 python3 - "$START_DATE" "$END_DATE" "$MIN_PNL_TO_SCALE" "$MIN_TRADES_TO_SCALE" <<'PY'
 import datetime as dt
 import sys
@@ -245,6 +363,17 @@ except ValueError as exc:
 weekdays = sum(1 for i in range((end - start).days + 1) if (start + dt.timedelta(days=i)).weekday() < 5)
 print(f"[GRID] date_window={start}..{end} weekdays={weekdays}")
 PY
+else
+  python3 - "$MIN_PNL_TO_SCALE" "$MIN_TRADES_TO_SCALE" <<'PY'
+import sys
+try:
+    float(sys.argv[1])
+    int(sys.argv[2])
+except ValueError as exc:
+    raise SystemExit(f"[GRID][ERROR] invalid scale gate: {exc}")
+print("[GRID] date_window=<recorded-events-full-file>")
+PY
+fi
 
 SYMBOL="$(printf '%s' "$SYMBOL" | tr '[:lower:]' '[:upper:]')"
 [[ "$OUTPUT_BASE" != /* ]] && OUTPUT_BASE="$ROOT/$OUTPUT_BASE"
@@ -265,13 +394,20 @@ LONG_COUNT="$(wc -w <<< "$LONG_THRESHOLDS" | tr -d ' ')"
 SHORT_COUNT="$(wc -w <<< "$SHORT_THRESHOLDS" | tr -d ' ')"
 TOTAL_COMBOS=$((LONG_COUNT * SHORT_COUNT))
 SAFE_SYMBOL="$(safe_symbol "$SYMBOL")"
+START_LABEL="${START_DATE:-recorded}"
+END_LABEL="${END_DATE:-recorded}"
+SAFE_WINDOW="$(printf '%s-to-%s' "$START_LABEL" "$END_LABEL" | tr -cs '[:alnum:].-' '_')"
 
 cat <<SUMMARY
-[GRID] symbol=$SYMBOL start=$START_DATE end=$END_DATE dry_run=$DRY_RUN
+[GRID] symbol=$SYMBOL start=${START_DATE:-<recorded>} end=${END_DATE:-<recorded>} dry_run=$DRY_RUN source=$SOURCE
+[GRID] recorded_events=${RECORDED_EVENTS:-<none>}
 [GRID] output_base=$OUTPUT_BASE
 [GRID] model_dir=$MODEL_DIR
 [GRID] lifecycle_model_dir=$LIFECYCLE_MODEL_DIR
 [GRID] python_bin=$PYTHON_BIN
+[GRID] trade_amount=${TRADE_AMOUNT:-<launcher/default>} max_order_notional=${MAX_ORDER_NOTIONAL:-<launcher/default>} max_trades=$MAX_TRADES max_share_cap=$MAX_SHARE_CAP
+[GRID] downstream_setup_filter manifest=${DOWNSTREAM_SETUP_FILTER_MANIFEST:-<none>} features_csv=${DOWNSTREAM_SETUP_FILTER_FEATURES_CSV:-<none>} fail_closed=$DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED
+[GRID] micro_entry_research_no_trade=$MICRO_ENTRY_RESEARCH_NO_TRADE
 [GRID] thresholds long=[$LONG_THRESHOLDS] short=[$SHORT_THRESHOLDS] combos=$TOTAL_COMBOS
 [GRID] fixed_lifecycle_exit_thresholds long=${LIFECYCLE_LONG_EXIT_THRESHOLD:-<scorecard/default>} short=${LIFECYCLE_SHORT_EXIT_THRESHOLD:-<scorecard/default>}
 [GRID] fixed_micro_exit_guard_thresholds long=${MICRO_LONG_EXIT_GUARD_THRESHOLD:-<scorecard/default>} short=${MICRO_SHORT_EXIT_GUARD_THRESHOLD:-<scorecard/default>}
@@ -285,7 +421,7 @@ else
   echo "[GRID] skip_build=true; launcher will reuse target/classes and classpath when possible"
 fi
 
-FILTER='\[BACKTEST\] symbol=|historical-api-symbol-begin|historical-api-symbol-complete|databento_api_key_source|model_dir=|micro_entry_thresholds|lifecycle_exit_thresholds|micro_exit_guard_thresholds|YESTERDAY_CLOSE_AVAILABLE=FAIL|YESTERDAY_CLOSE_AVAILABLE=PASS|PREVIOUS_CLOSE_AVAILABLE=FAIL|PREVIOUS_CLOSE_AVAILABLE=PASS|AI_PREDICTS_ENTRY=PASS|Armed long micro-entry|Armed short micro-entry|MICRO_ENTRY_CONFIRMS=PASS|MICRO_ENTRY_CONFIRMS=FAIL|reason=expired|simulated orderId|submitted orderId|Total trades|Total PnL|arms_total|arm_confirmations|arm_expirations|BACKTEST.NO_TRADE_DIAG|closest_setup rank=1|completed=|failed=|model directory not found|Traceback|401|CERTIFICATE_VERIFY_FAILED|ERROR|timed out'
+FILTER='\[BACKTEST\] symbol=|\[BACKTEST\] source=|\[BACKTEST\] downstream_setup_filter|\[BACKTEST\] trade_amount=|historical-api-symbol-begin|historical-api-symbol-complete|databento_api_key_source|model_dir=|micro_entry_thresholds|lifecycle_exit_thresholds|micro_exit_guard_thresholds|YESTERDAY_CLOSE_AVAILABLE=FAIL|YESTERDAY_CLOSE_AVAILABLE=PASS|PREVIOUS_CLOSE_AVAILABLE=FAIL|PREVIOUS_CLOSE_AVAILABLE=PASS|AI_PREDICTS_ENTRY=PASS|Armed long micro-entry|Armed short micro-entry|MICRO_ENTRY_CONFIRMS=PASS|MICRO_ENTRY_CONFIRMS=FAIL|reason=expired|simulated orderId|submitted orderId|Total trades|Total PnL|arms_total|arm_confirmations|arm_expirations|BACKTEST.NO_TRADE_DIAG|closest_setup rank=1|completed=|failed=|model directory not found|Traceback|401|CERTIFICATE_VERIFY_FAILED|ERROR|timed out'
 
 run_launcher() {
   local label="$1" long_threshold="$2" short_threshold="$3" mode="$4" out_dir="$5" log="$6" status
@@ -293,8 +429,6 @@ run_launcher() {
 
   local launcher_args=(
     --symbol "$SYMBOL"
-    --start "$START_DATE"
-    --end "$END_DATE"
     --timeout-seconds "$TIMEOUT_SECONDS"
     --python-bin "$PYTHON_BIN"
     --model-dir "$MODEL_DIR"
@@ -305,7 +439,17 @@ run_launcher() {
     --max-share-cap "$MAX_SHARE_CAP"
     --skip-build
   )
+  [[ -n "$START_DATE" ]] && launcher_args+=(--start "$START_DATE")
+  [[ -n "$END_DATE" ]] && launcher_args+=(--end "$END_DATE")
+  launcher_args+=(--source "$SOURCE")
+  [[ "$SOURCE" == "ndjson" ]] && launcher_args+=(--recorded-events "$RECORDED_EVENTS")
   [[ -n "$DATABENTO_ENV_FILE" ]] && launcher_args+=(--databento-env-file "$DATABENTO_ENV_FILE")
+  [[ -n "$TRADE_AMOUNT" ]] && launcher_args+=(--trade-amount "$TRADE_AMOUNT")
+  [[ -n "$MAX_ORDER_NOTIONAL" ]] && launcher_args+=(--max-order-notional "$MAX_ORDER_NOTIONAL")
+  [[ -n "$DOWNSTREAM_SETUP_FILTER_MANIFEST" ]] && launcher_args+=(--downstream-setup-filter-manifest "$DOWNSTREAM_SETUP_FILTER_MANIFEST")
+  [[ -n "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV" ]] && launcher_args+=(--downstream-setup-filter-features-csv "$DOWNSTREAM_SETUP_FILTER_FEATURES_CSV")
+  truthy "$DOWNSTREAM_SETUP_FILTER_FAIL_CLOSED" || launcher_args+=(--downstream-setup-filter-fail-open)
+  truthy "$MICRO_ENTRY_RESEARCH_NO_TRADE" && launcher_args+=(--micro-entry-research-no-trade)
   truthy "$DRY_RUN" && launcher_args+=(--dry-run)
   if [[ "$mode" == "disabled" ]]; then
     launcher_args+=(--disable-lifecycle-micro)
@@ -342,7 +486,7 @@ if truthy "$RUN_DISABLED_BASELINE"; then
   if truthy "$RESUME" && completed_successfully "$BASE_DIR"; then
     echo "[GRID] resume=true; skipping completed baseline-disabled"
   else
-    run_launcher "baseline-disabled" "" "" "disabled" "$BASE_DIR" "$BASE_DIR/${SAFE_SYMBOL}-${START_DATE}-to-${END_DATE}-baseline-disabled-${RUN_STAMP}.log"
+    run_launcher "baseline-disabled" "" "" "disabled" "$BASE_DIR" "$BASE_DIR/${SAFE_SYMBOL}-${SAFE_WINDOW}-baseline-disabled-${RUN_STAMP}.log"
   fi
 fi
 
@@ -351,7 +495,7 @@ if truthy "$RUN_DEFAULT_BASELINE"; then
   if truthy "$RESUME" && completed_successfully "$BASE_DIR"; then
     echo "[GRID] resume=true; skipping completed baseline-default"
   else
-    run_launcher "baseline-default" "" "" "default" "$BASE_DIR" "$BASE_DIR/${SAFE_SYMBOL}-${START_DATE}-to-${END_DATE}-baseline-default-${RUN_STAMP}.log"
+    run_launcher "baseline-default" "" "" "default" "$BASE_DIR" "$BASE_DIR/${SAFE_SYMBOL}-${SAFE_WINDOW}-baseline-default-${RUN_STAMP}.log"
   fi
 fi
 
@@ -366,7 +510,7 @@ for L in $LONG_THRESHOLDS; do
       echo "[GRID] resume=true; skipping completed combo=$combo_index/$TOTAL_COMBOS long=$L short=$S"
       continue
     fi
-    run_launcher "combo-$combo_index-of-$TOTAL_COMBOS" "$L" "$S" "enabled" "$COMBO_DIR" "$COMBO_DIR/${SAFE_SYMBOL}-${START_DATE}-to-${END_DATE}-L${L_SLUG}-S${S_SLUG}-${RUN_STAMP}.log"
+    run_launcher "combo-$combo_index-of-$TOTAL_COMBOS" "$L" "$S" "enabled" "$COMBO_DIR" "$COMBO_DIR/${SAFE_SYMBOL}-${SAFE_WINDOW}-L${L_SLUG}-S${S_SLUG}-${RUN_STAMP}.log"
   done
 done
 
@@ -663,6 +807,29 @@ if truthy "$SCALE_IF_PROFITABLE"; then
   fi
 else
   if [[ -n "${BEST_LONG_THRESHOLD:-}" && -n "${BEST_SHORT_THRESHOLD:-}" ]]; then
+    if [[ "$SOURCE" == "ndjson" ]]; then
+      printf '%s\n' \
+        '[GRID] scale not requested. File-replay grids do not call the API batch scale-up workflow automatically.' \
+        '' \
+        'Inspect:' \
+        "  $OUTPUT_BASE/grid_results.csv" \
+        "  $OUTPUT_BASE/top_thresholds.tsv" \
+        '' \
+        'To rerun or expand the best file-replay pair, keep the same recorded-events,' \
+        'sizing, model, and downstream setup-filter options from this run and set:' \
+        '' \
+        'scripts/run_databento_micro_threshold_grid_search.sh \' \
+        "  --symbol \"$SYMBOL\" \\" \
+        '  --source ndjson \' \
+        "  --recorded-events \"$RECORDED_EVENTS\" \\" \
+        "  --output-base \"$OUTPUT_BASE/best-file-replay\" \\" \
+        "  --model-dir \"$MODEL_DIR\" \\" \
+        "  --lifecycle-model-dir \"$LIFECYCLE_MODEL_DIR\" \\" \
+        "  --long-thresholds \"${BEST_LONG_THRESHOLD:-}\" \\" \
+        "  --short-thresholds \"${BEST_SHORT_THRESHOLD:-}\" \\" \
+        "  --timeout-seconds \"$TIMEOUT_SECONDS\" \\" \
+        '  --skip-build'
+    else
     cat <<NEXT
 [GRID] scale not requested. If the top row looks sane, scale it manually, for example:
 
@@ -684,6 +851,7 @@ scripts/run_databento_calibration_batches.sh \\
   --timeout-seconds "$TIMEOUT_SECONDS" \\
   --skip-build
 NEXT
+    fi
   else
     echo "[GRID] scale not requested and no successful best threshold is available yet. Fix failed runs, then rerun with --resume."
   fi
