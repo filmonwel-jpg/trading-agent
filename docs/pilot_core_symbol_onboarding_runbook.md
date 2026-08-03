@@ -1345,6 +1345,587 @@ python3 scripts/databento_historical_streamer.py \
 
 Use this only to verify ingestion/model-load plumbing. For actual robustness scoring, use the event-carried whole-range fixture above.
 
+#### 11.5.10 Progress snapshot — expanded raw-DBN event-carried transfer run, 2026-08-03
+
+This snapshot records the concrete progress from the first expanded raw-DBN transfer run on the trading Mac. Treat it as reproducibility evidence and as the known-good artifact map for the next `AMD`/`MU` transfer tests.
+
+Working root on the trading Mac:
+
+```text
+/Users/filmonghezehey/trading-agent/worktrees/databento
+```
+
+Raw Databento inputs:
+
+```text
+/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9
+/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD
+```
+
+Commands/scripts used to produce the passing artifacts are listed below. Run them from the trading Mac worktree, not from the FXG laptop path.
+
+First, make interactive `zsh` comments safe before pasting commands with `#` lines:
+
+```zsh
+setopt interactivecomments
+```
+
+Build the expanded normalized recorded-events NDJSON.GZ from the raw DBN directories:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+PYTHON_BIN=/Users/filmonghezehey/miniforge3/bin/python3
+EQUS_DIR=/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9
+OPRA_DIR=/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD
+SYMBOLS_ALL=AMD,MU,TSLA,AMZN,SMCI,MSTR,COIN,NVDA,SPY,TQQQ,QQQ,GOOGL,PLTR,AAPL
+
+RAW_BUILD=runtime/local-backtests/databento-expanded-raw-dbn-build-20260802_101205
+SOURCE_EVENTS=runtime/replay/databento-expanded-raw-dbn-recorded-events.ndjson.gz
+BUILD_LOG=$RAW_BUILD/build_source_events.log
+STATUS_LOG=$RAW_BUILD/source_events_status.log
+
+mkdir -p "$RAW_BUILD" runtime/replay
+
+cat > "$RAW_BUILD/build_source_events.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${PYTHON_BIN:?}"
+: "${EQUS_DIR:?}"
+: "${OPRA_DIR:?}"
+: "${SYMBOLS_ALL:?}"
+: "${SOURCE_EVENTS:?}"
+: "${STATUS_LOG:?}"
+
+mkdir -p "$(dirname "$SOURCE_EVENTS")"
+rm -f "$SOURCE_EVENTS" "$STATUS_LOG"
+
+"$PYTHON_BIN" scripts/databento_historical_streamer.py \
+  --source dbn \
+  --symbols "$SYMBOLS_ALL" \
+  --equity-dir "$EQUS_DIR" \
+  --options-dir "$OPRA_DIR" \
+  | tee >(grep --line-buffered '"event":"status"' > "$STATUS_LOG" || true) \
+  | gzip -c > "$SOURCE_EVENTS"
+SH
+
+chmod +x "$RAW_BUILD/build_source_events.sh"
+
+nohup env \
+  PYTHON_BIN="$PYTHON_BIN" \
+  EQUS_DIR="$EQUS_DIR" \
+  OPRA_DIR="$OPRA_DIR" \
+  SYMBOLS_ALL="$SYMBOLS_ALL" \
+  SOURCE_EVENTS="$SOURCE_EVENTS" \
+  STATUS_LOG="$STATUS_LOG" \
+  "$RAW_BUILD/build_source_events.sh" \
+  > "$BUILD_LOG" 2>&1 &
+
+printf 'PID=%s\n' "$!"
+printf 'SOURCE_EVENTS=%s\n' "$SOURCE_EVENTS"
+printf 'BUILD_LOG=%s\n' "$BUILD_LOG"
+printf 'STATUS_LOG=%s\n' "$STATUS_LOG"
+```
+
+Validate the recorded-events file after the build exits:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+SOURCE_EVENTS=runtime/replay/databento-expanded-raw-dbn-recorded-events.ndjson.gz
+
+gzip -t "$SOURCE_EVENTS" && echo "GZIP_OK"
+ls -lh "$SOURCE_EVENTS"
+
+python3 - "$SOURCE_EVENTS" <<'PY'
+import gzip
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+path = Path(sys.argv[1])
+targets = {"AMD", "MU", "TSLA", "AMZN", "SMCI", "MSTR", "COIN", "NVDA", "SPY", "TQQQ", "QQQ", "GOOGL", "PLTR", "AAPL"}
+counts = Counter()
+events = Counter()
+days = set()
+
+with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as f:
+    for line in f:
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        msg = str(payload.get("message", ""))
+        if "historical-day-begin day=" in msg:
+            days.add(msg.rsplit("day=", 1)[-1].strip())
+        symbol = str(payload.get("symbol") or payload.get("Symbol") or payload.get("underlying") or "").upper()
+        event = str(payload.get("event") or payload.get("EventType") or "").lower()
+        if symbol in targets:
+            counts[symbol] += 1
+            events[(symbol, event)] += 1
+
+print("days", len(days), sorted(days)[:3], "...", sorted(days)[-3:] if days else [])
+for symbol in sorted(targets):
+    print(symbol, counts[symbol])
+missing = [symbol for symbol in sorted(targets) if counts[symbol] == 0]
+if missing:
+    raise SystemExit(f"NO-GO missing symbols: {missing}")
+print("PASS recorded-events contains all requested symbols")
+PY
+```
+
+Build the matching expanded raw-DBN 1s/5s/30s CSVs. The old six-source enriched 30s CSV was rejected because it had zero rows for the expanded symbols, so the whole-range run must use this new `combined_30s.csv`:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+PYTHON_BIN=/Users/filmonghezehey/miniforge3/bin/python3
+EQUS_DIR=/Users/filmonghezehey/Downloads/EQUS-20260523-6J9KE98BJ9
+OPRA_DIR=/Users/filmonghezehey/Downloads/OPRA-20260523-MSV68VKVKD
+SYMBOLS_ALL=AMD,MU,TSLA,AMZN,SMCI,MSTR,COIN,NVDA,SPY,TQQQ,QQQ,GOOGL,PLTR,AAPL
+
+BARS_BUILD=/Volumes/DatabentoVault/trading-agent-offload/databento/raw-dbn-bars-builds/databento-expanded-raw-dbn-bars-build-20260802_151311
+BARS_1S_DIR=$BARS_BUILD/1s_by_symbol
+BARS_5S_DIR=$BARS_BUILD/5s_by_symbol
+BARS_30S_DIR=$BARS_BUILD/30s_by_symbol
+COMBINED_1S=$BARS_BUILD/combined_1s.csv
+COMBINED_5S=$BARS_BUILD/combined_5s.csv
+INPUT_30S_CSV=$BARS_BUILD/combined_30s.csv
+ASSESSMENT=$BARS_BUILD/symbol_model_plan.csv
+CSV_LOG=$BARS_BUILD/build_1s_5s_30s_csv.log
+
+mkdir -p "$BARS_BUILD" "$BARS_1S_DIR" "$BARS_5S_DIR" "$BARS_30S_DIR"
+
+nohup "$PYTHON_BIN" -u build_30s_from_5s_csv.py \
+  --dbeq-dir "$EQUS_DIR" \
+  --opra-dir "$OPRA_DIR" \
+  --symbols "$SYMBOLS_ALL" \
+  --output-dir "$BARS_30S_DIR" \
+  --output-dir-5s "$BARS_5S_DIR" \
+  --output-dir-1s "$BARS_1S_DIR" \
+  --combined-output-csv "$INPUT_30S_CSV" \
+  --combined-output-csv-5s "$COMBINED_5S" \
+  --combined-output-csv-1s "$COMBINED_1S" \
+  --assessment-report "$ASSESSMENT" \
+  > "$CSV_LOG" 2>&1 &
+
+printf 'PID=%s\n' "$!"
+printf 'BARS_BUILD=%s\n' "$BARS_BUILD"
+printf 'INPUT_30S_CSV=%s\n' "$INPUT_30S_CSV"
+printf 'CSV_LOG=%s\n' "$CSV_LOG"
+```
+
+Validate the expanded 30s CSV before running event-carried injection:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/raw-dbn-bars-builds/databento-expanded-raw-dbn-bars-build-20260802_151311/combined_30s.csv
+SYMBOLS_REPLAY=AMD,MU,AMZN,SMCI,MSTR,COIN,GOOGL,PLTR,AAPL
+
+python3 - "$INPUT_30S_CSV" "$SYMBOLS_REPLAY" <<'PY'
+import csv
+import sys
+from collections import Counter
+from pathlib import Path
+
+path = Path(sys.argv[1])
+targets = {s.strip().upper() for s in sys.argv[2].split(",") if s.strip()}
+counts = Counter()
+with path.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+    reader = csv.DictReader(f)
+    symbol_col = next((c for c in (reader.fieldnames or []) if c.lower() == "symbol"), None)
+    if not symbol_col:
+        raise SystemExit(f"NO-GO no symbol column in {path}")
+    for row in reader:
+        symbol = str(row.get(symbol_col, "")).upper()
+        if symbol in targets:
+            counts[symbol] += 1
+for symbol in sorted(targets):
+    print(symbol, counts[symbol])
+missing = [symbol for symbol in sorted(targets) if counts[symbol] == 0]
+if missing:
+    raise SystemExit(f"NO-GO missing symbols in INPUT_30S_CSV: {missing}")
+print("PASS 30s CSV contains all requested symbols")
+PY
+```
+
+Run the full nine-symbol whole-range event-carried no-trade validation. This command builds the slice, runs the normal replay for labels, builds the downstream setup sidecar, injects event-carried snapshots, and runs no-trade validation:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+PYTHON_BIN=/Users/filmonghezehey/miniforge3/bin/python3
+
+START=2025-07-22
+END=2026-05-22
+START_TAG=$(printf %s "$START" | tr -d '-')
+END_TAG=$(printf %s "$END" | tr -d '-')
+
+SYMBOLS=AMD,MU,AMZN,SMCI,MSTR,COIN,GOOGL,PLTR,AAPL
+SLICE_SYMBOLS=$SYMBOLS
+
+SOURCE_EVENTS=runtime/replay/databento-expanded-raw-dbn-recorded-events.ndjson.gz
+INPUT_30S_CSV=/Volumes/DatabentoVault/trading-agent-offload/databento/raw-dbn-bars-builds/databento-expanded-raw-dbn-bars-build-20260802_151311/combined_30s.csv
+ROUTE_MANIFEST=runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+SETUP_MODEL_DIR=runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+LIFECYCLE_MODEL_DIR=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
+
+BASE=runtime/local-backtests/databento-expanded-transfer-${START_TAG}-${END_TAG}-event-carried
+mkdir -p "$BASE"
+
+nohup env \
+  PYTHON_BIN="$PYTHON_BIN" \
+  SOURCE_EVENTS="$SOURCE_EVENTS" \
+  SYMBOLS="$SYMBOLS" \
+  SLICE_SYMBOLS="$SLICE_SYMBOLS" \
+  START="$START" \
+  END="$END" \
+  BASE="$BASE" \
+  INPUT_30S_CSV="$INPUT_30S_CSV" \
+  ROUTE_MANIFEST="$ROUTE_MANIFEST" \
+  SETUP_MODEL_DIR="$SETUP_MODEL_DIR" \
+  LIFECYCLE_MODEL_DIR="$LIFECYCLE_MODEL_DIR" \
+  RUN_NOTRADE=1 \
+  RUN_DRIFT=0 \
+  RUN_TRADE=0 \
+  REBUILD_EXISTING=1 \
+  bash scripts/run_event_carried_whole_range.sh \
+  > "$BASE/whole_range_batch_notrade.log" 2>&1 &
+
+printf 'PID=%s\n' "$!"
+printf 'BASE=%s\n' "$BASE"
+printf 'LOG=%s\n' "$BASE/whole_range_batch_notrade.log"
+tail -f "$BASE/whole_range_batch_notrade.log"
+```
+
+Use a single-pass scanner for the large no-trade log instead of repeatedly grepping a multi-GB file:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried
+NO_TRADE_OUT=$BASE/controlled_java_replay_downstream_setup_filter_event_snapshot_notrade
+LOG=$NO_TRADE_OUT/controlled_java_replay.log
+
+python3 - "$LOG" <<'PY'
+import re
+import sys
+from collections import Counter, defaultdict
+from pathlib import Path
+
+path = Path(sys.argv[1])
+patterns = {
+    "backtest_completed": re.compile(r"\[BACKTEST\] completed="),
+    "backtest_rc": re.compile(r"BACKTEST_RC="),
+    "setup_pass": re.compile(r"SETUP_FILTER_PASSES=PASS"),
+    "setup_fail": re.compile(r"SETUP_FILTER_PASSES=FAIL"),
+    "micro_pass": re.compile(r"MICRO_ENTRY_CONFIRMS=PASS"),
+    "micro_fail": re.compile(r"MICRO_ENTRY_CONFIRMS=FAIL"),
+    "snapshot_hit": re.compile(r"featureSnapshot=hit"),
+    "snapshot_miss": re.compile(r"featureSnapshot=miss"),
+    "sidecar_disabled": re.compile(r"featureSidecar=disabled"),
+    "sidecar_hit": re.compile(r"featureSidecar=hit"),
+    "exception_error": re.compile(r"Exception|ERROR|WATCHDOG|Order hung|OutOfMemory|No space", re.I),
+}
+symbol_re = re.compile(r"\bsymbol=([A-Z0-9._-]+)\b")
+counts = Counter()
+symbols = defaultdict(Counter)
+completed_lines = []
+with path.open("r", encoding="utf-8", errors="ignore") as f:
+    for line in f:
+        for name, pat in patterns.items():
+            if pat.search(line):
+                counts[name] += 1
+                match = symbol_re.search(line)
+                if match:
+                    symbols[match.group(1)][name] += 1
+                if name == "backtest_completed":
+                    completed_lines.append(line.strip())
+print("COUNTS")
+for key in sorted(patterns):
+    print(key, counts[key])
+print("COMPLETED_LINES")
+for line in completed_lines[-20:]:
+    print(line)
+print("SYMBOL_TELEMETRY")
+for symbol in sorted(symbols):
+    print(symbol, dict(symbols[symbol]))
+bad = counts["snapshot_miss"] > 0 or counts["sidecar_hit"] > 0 or counts["exception_error"] > 0
+print("VERDICT", "NO-GO_CHECK_DETAILS" if bad else "PASS_BASIC_EVENT_CARRIED_TELEMETRY")
+PY
+```
+
+Validate injection parity from the event snapshot summary JSON:
+
+```zsh
+ENRICHED_EVENTS=runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/databento-20250722-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core.ndjson.gz
+
+python3 - "$ENRICHED_EVENTS.summary.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary = json.loads(Path(sys.argv[1]).read_text())
+injection = summary.get("injection", {})
+carrier = summary.get("carrier_assignment", {})
+expected = injection.get("snapshot_rows_expected")
+injected = injection.get("snapshot_rows_injected")
+unmatched = injection.get("snapshot_rows_unmatched")
+hit_rate = injection.get("snapshot_hit_rate_vs_sidecar")
+multi = carrier.get("multi_snapshot_carrier_events")
+print("snapshot_rows_expected", expected)
+print("snapshot_rows_injected", injected)
+print("snapshot_rows_unmatched", unmatched)
+print("snapshot_hit_rate_vs_sidecar", hit_rate)
+print("multi_snapshot_carrier_events", multi)
+ok = expected == injected and unmatched == 0 and float(hit_rate or 0) == 1.0 and multi == 0
+print("VERDICT", "PASS_INJECTION_PARITY" if ok else "NO-GO_INJECTION_PARITY")
+PY
+```
+
+Compress the huge no-trade log after extracting the telemetry:
+
+```zsh
+LOG=runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/controlled_java_replay_downstream_setup_filter_event_snapshot_notrade/controlled_java_replay.log
+
+gzip -9 "$LOG"
+gzip -t "$LOG.gz" && echo "GZIP_OK"
+ls -lh "$LOG.gz"
+```
+
+Run the first trade-enabled `AMD`/`MU` baseline on the validated event-carried fixture with controlled micro thresholds `0.30/0.30`:
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+
+BASE=runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried
+ENRICHED_EVENTS=$BASE/databento-20250722-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core.ndjson.gz
+ROUTE_MANIFEST=runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+SETUP_MODEL_DIR=runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+LIFECYCLE_MODEL_DIR=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
+
+OUT=$BASE/parallel_file_replay_amd_mu_trade_micro_0p30_0p30_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$OUT"
+
+unset DOWNSTREAM_SETUP_FILTER_FEATURES_CSV
+unset STRATEGY_DOWNSTREAM_SETUP_FILTER_FEATURES_CSV
+
+PYTHON_BIN=/Users/filmonghezehey/miniforge3/bin/python3 \
+python3 scripts/run_parallel_databento_file_backtest.py \
+  --recorded-events "$ENRICHED_EVENTS" \
+  --symbols AMD,MU \
+  --jobs 2 \
+  --output-dir "$OUT" \
+  --trade-amount 60000 \
+  --max-order-notional 70000 \
+  --max-share-cap 2000 \
+  --max-trades 2000 \
+  --model-dir "$SETUP_MODEL_DIR" \
+  --setup-thresholds-file "$SETUP_MODEL_DIR/setup_runtime_thresholds.properties" \
+  --lifecycle-model-dir "$LIFECYCLE_MODEL_DIR" \
+  --downstream-setup-filter-manifest "$ROUTE_MANIFEST" \
+  --timeout-seconds 0 \
+  --title "AMD/MU expanded event-carried transfer micro 0.30/0.30" \
+  -- \
+  --micro-long-entry-threshold 0.30 \
+  --micro-short-entry-threshold 0.30
+```
+
+At-a-glance result summary from the commands above:
+
+| Step | Result |
+|---|---|
+| Expanded recorded-events raw DBN build | `GZIP_OK`; 213 sessions; all 14 requested symbols present. |
+| Expanded raw DBN 30s CSV | Built under `/Volumes/DatabentoVault/trading-agent-offload/databento/raw-dbn-bars-builds/databento-expanded-raw-dbn-bars-build-20260802_151311/`. |
+| Old broader 213d six-source 30s CSV | Rejected for this expanded run; zero rows for `AAPL,AMD,AMZN,COIN,GOOGL,MSTR,MU,PLTR,SMCI`. |
+| Nine-symbol no-trade whole-range event-carried replay | `[BACKTEST] completed=9 failed=0 requested=9`; `BACKTEST_RC=0`. |
+| No-trade event-carried telemetry | `snapshot_hit=71332`, `snapshot_miss=0`, `sidecar_disabled=71332`, `sidecar_hit=0`, `exception_error=0`. |
+| Injection parity | `snapshot_rows_expected=71332`, `snapshot_rows_injected=71332`, `snapshot_rows_unmatched=0`, hit rate `1.0`. |
+| No-trade stream sanity | `errors=[]` for `AAPL,AMD,AMZN,COIN,GOOGL,MSTR,MU,PLTR,SMCI`. |
+| No-trade log compression | `controlled_java_replay.log` was about `13G`; `gzip -9` produced about `766M`. |
+| `AMD`/`MU` trade baseline `0.30/0.30` | `PARALLEL_FILE_REPLAY completed=2 failed=0 requested=2`; `MU lifecycle_rows=1`, `AMD lifecycle_rows=16`. |
+
+Expanded recorded-events source built from raw DBN:
+
+```text
+runtime/replay/databento-expanded-raw-dbn-recorded-events.ndjson.gz
+```
+
+The source file was gzip-valid and contained the requested expanded universe over 213 sessions. The verified symbols were:
+
+```text
+AAPL,AMD,AMZN,COIN,GOOGL,MSTR,MU,NVDA,PLTR,QQQ,SMCI,SPY,TQQQ,TSLA
+```
+
+The older enriched 30-second cache below was tested and rejected for this expanded replay because it contained zero rows for the requested expanded symbols:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/data_lake_v2/model_training_sets/broader_213d_six_source_enriched_30s_20260619_065347/combined/combined_30s.csv
+```
+
+The matching expanded raw-DBN bar build used for the passing run was:
+
+```text
+/Volumes/DatabentoVault/trading-agent-offload/databento/raw-dbn-bars-builds/databento-expanded-raw-dbn-bars-build-20260802_151311/combined_30s.csv
+```
+
+Nine-symbol transfer validation used this symbol set:
+
+```text
+AMD,MU,AMZN,SMCI,MSTR,COIN,GOOGL,PLTR,AAPL
+```
+
+Whole-range event-carried base directory:
+
+```text
+runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried
+```
+
+Important outputs:
+
+```text
+runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/databento-20250722-20260522-core5-whole-daily-prevclose.ndjson.gz
+runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/setup_micro_counterfactual_20260803_003428/downstream_setup_training_rows/setup_downstream_training_rows_v1.csv
+runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/databento-20250722-20260522-core5-whole-daily-prevclose.event-snapshots-catboost-core.ndjson.gz
+runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/controlled_java_replay_downstream_setup_filter_event_snapshot_notrade/controlled_java_replay.log.gz
+```
+
+The whole-range script completed the no-trade event-carried validation:
+
+```text
+[WHOLE_RANGE] running normal replay for counterfactual labels ...
+BACKTEST_RC=0
+[WHOLE_RANGE] injecting event-carried snapshots ...
+[WHOLE_RANGE] running no-trade event-carried validation
+BACKTEST_RC=0
+[WHOLE_RANGE] skipping event snapshot replay drift compare because RUN_DRIFT=0
+[WHOLE_RANGE] DONE
+```
+
+The no-trade event-carried Java replay completed all nine requested symbols:
+
+```text
+[BACKTEST] completed=9 failed=0 requested=9
+BACKTEST_RC=0
+```
+
+Event-carried telemetry from the compressed no-trade replay log:
+
+```text
+backtest_completed 1
+backtest_rc 1
+exception_error 0
+setup_pass 343
+setup_fail 70989
+micro_pass 240
+micro_fail 1199
+snapshot_hit 71332
+snapshot_miss 0
+sidecar_disabled 71332
+sidecar_hit 0
+VERDICT PASS_BASIC_EVENT_CARRIED_TELEMETRY
+```
+
+Injection parity also passed:
+
+```text
+snapshot_rows_expected 71332
+snapshot_rows_injected 71332
+snapshot_rows_unmatched 0
+snapshot_hit_rate_vs_sidecar 1.0
+multi_snapshot_carrier_events 0
+VERDICT PASS_INJECTION_PARITY
+```
+
+Per-symbol no-trade event-carried telemetry:
+
+```text
+AAPL snapshot_hit=8531  sidecar_disabled=8531  setup_pass=22   setup_fail=8509  micro_pass=8   micro_fail=166
+AMD  snapshot_hit=9765  sidecar_disabled=9765  setup_pass=31   setup_fail=9734  micro_pass=25  micro_fail=89
+AMZN snapshot_hit=11292 sidecar_disabled=11292 setup_pass=41   setup_fail=11251 micro_pass=22  micro_fail=243
+COIN snapshot_hit=2234  sidecar_disabled=2234  setup_pass=0    setup_fail=2234  micro_pass=0   micro_fail=0
+GOOGL snapshot_hit=9377 sidecar_disabled=9377  setup_pass=21   setup_fail=9356  micro_pass=9   micro_fail=149
+MSTR snapshot_hit=3372  sidecar_disabled=3372  setup_pass=0    setup_fail=3372  micro_pass=0   micro_fail=0
+MU   snapshot_hit=8225  sidecar_disabled=8225  setup_pass=3    setup_fail=8222  micro_pass=1   micro_fail=21
+PLTR snapshot_hit=10584 sidecar_disabled=10584 setup_pass=38   setup_fail=10546 micro_pass=35  micro_fail=52
+SMCI snapshot_hit=7952  sidecar_disabled=7952  setup_pass=187  setup_fail=7765  micro_pass=140 micro_fail=479
+```
+
+Stream sanity files reported empty error lists for every requested no-trade replay symbol:
+
+```text
+AAPL errors=[]
+AMD errors=[]
+AMZN errors=[]
+COIN errors=[]
+GOOGL errors=[]
+MSTR errors=[]
+MU errors=[]
+PLTR errors=[]
+SMCI errors=[]
+```
+
+Operational notes from this run:
+
+- The no-trade replay log reached about `13G` before compression and compressed to about `766M` with `gzip -9`.
+- Avoid repeated full-file `grep` scans on large logs. Prefer one-pass Python counters or bounded scans such as `tail -c 30000000 "$LOG" | grep ...`.
+- Interactive `zsh` printed `zsh: command not found: #` for an inline comment. Enable `setopt interactivecomments` or avoid pasting comment lines into the terminal.
+- A full nine-symbol, 213-session no-trade replay is expensive but validated the fixture. Trade-enabled robustness work should start with `AMD,MU` only.
+
+The first `AMD`/`MU` trade-enabled transfer baseline then used the validated event-carried fixture with controlled micro thresholds `0.30/0.30`:
+
+```text
+runtime/local-backtests/databento-expanded-transfer-20250722-20260522-event-carried/parallel_file_replay_amd_mu_trade_micro_0p30_0p30_20260803_153357
+```
+
+Runner-level result:
+
+```text
+PARALLEL_FILE_REPLAY completed=2 failed=0 requested=2
+MU  rc=0 status=completed lifecycle_rows=1
+AMD rc=0 status=completed lifecycle_rows=16
+```
+
+The generated PnL summary showed that the controlled `0.30/0.30` no-retraining transfer baseline was not tradable quality:
+
+```text
+ALL trades=17 pnl=-1966.44 sum_realized_r=-13.275371 win_rate=29.4%
+AMD trades=16 pnl=-1731.44 sum_realized_r=-11.549175 win_rate=31.25%
+MU  trades=1  pnl=-235.00  sum_realized_r=-1.726196 win_rate=0.0%
+AMD long  trades=12 pnl=-1552.44 sum_realized_r=-10.35232
+AMD short trades=4  pnl=-179.00  sum_realized_r=-1.196855
+MU long   trades=1  pnl=-235.00  sum_realized_r=-1.726196
+```
+
+Event-carried trade-mode telemetry still confirmed correct fixture wiring:
+
+```text
+snapshot_hit 17348
+snapshot_miss 0
+sidecar_disabled 17348
+sidecar_hit 0
+stream_sanity AMD errors=[]
+stream_sanity MU errors=[]
+```
+
+Conclusion for this run: the replay infrastructure, raw-DBN fixture, sidecar injection, and event-carried Java path are validated, but the existing Core-5 setup/lifecycle/micro models did **not** transfer with enough quality to justify promotion or more transfer-only investigation. The low trade count, especially `MU` with only one closed trade, plus negative realized R/PnL means the next useful step for `AMD`, `MU`, or future onboarded symbols is retraining and symbol-inclusive calibration, not additional analysis of this no-retraining baseline.
+
+Decision:
+
+- Do not add `AMD`/`MU` calibrated threshold rows from this run.
+- Do not enable `AMD`/`MU` paper/live entries from this transfer result.
+- Treat the result as proof that the expanded file-replay/event-carried pipeline works.
+- Prioritize retraining expanded setup models with the new symbol universe.
+- Generate real OOF setup predictions that include the new symbols.
+- Retrain lifecycle/micro models on the expanded symbol set.
+- Calibrate per-symbol thresholds after retraining, then rerun event-carried no-trade and trade-enabled replay.
+- For future symbol onboarding, expect retraining/calibration to be required; no-retraining transfer should be used only as a quick robustness diagnostic and infrastructure smoke test.
+
 ### 11.6 Backtest artifacts to inspect
 
 Look for:
@@ -1492,7 +2073,9 @@ For `AMD`/`MU` specifically:
 
 - Use existing models for first-pass backtest transfer checks.
 - Do not treat existing models as sufficient for promotion.
-- Retrain expanded setup and lifecycle/micro models if the transfer backtest is promising.
+- The 2026-08-03 no-retraining event-carried transfer test proved the expanded raw-DBN replay path, but the `0.30/0.30` trade baseline was negative (`17` trades, `-1966.44` PnL, `-13.275371` realized R) and `MU` produced only one closed trade.
+- Treat that transfer result as infrastructure validation only, not as evidence that Core-5 models generalize to `AMD`/`MU`.
+- Retrain expanded setup and lifecycle/micro models for `AMD`/`MU` and future symbols before promotion-quality evaluation.
 - Calibrate `AMD`/`MU` thresholds before paper/live.
 - Fix model-routing paths so generated properties do not depend on stale external worktree paths.
 - Launch first with `--max-trades=0`.
