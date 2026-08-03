@@ -50,7 +50,7 @@ trading.ai.regime.volatile.long-exit-threshold=0.58
 trading.ai.regime.volatile.short-exit-threshold=0.60
 trading.shared-capital.enabled=true
 trading.shared-capital.file=runtime/databento/shared-capital.properties
-trading.shared-capital.total-notional=500000
+trading.shared-capital.total-notional=300000
 trading.model.dir=runtime/models/SPY
 trading.databento.option-parents=SPY
 trading.databento.model-routing-csv=runtime/databento/model-routing.csv
@@ -67,7 +67,7 @@ fi
 if [[ ! -f "$repo_root/runtime/databento/shared-capital.properties" ]]; then
   cat > "$repo_root/runtime/databento/shared-capital.properties" <<'EOF'
 # Dedicated shared-capital file for the Databento stack
-trading.shared-capital.available-notional=500000
+trading.shared-capital.available-notional=300000
 trading.shared-capital.last-updated-epoch-ms=0
 EOF
   echo "[BOOTSTRAP] Created runtime/databento/shared-capital.properties"

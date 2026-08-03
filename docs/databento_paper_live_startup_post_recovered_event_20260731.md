@@ -106,6 +106,24 @@ featureSidecar=disabled
 
 Important: `FeatureSnapshotSource=live_normalizer_30s_v1` is a live-computed carrier snapshot, not a recovered historical research row. It exercises the same Java event-carried snapshot path and reduces live/replay feature-source drift, but it should not be labeled as exact recovered research parity.
 
+### Local PostgreSQL intentionally off
+
+This runbook assumes local PostgreSQL may be intentionally stopped during paper/live startup. In that mode, do not require database trade logging. Start bots with file-only trade logs and disable Spring's DB health indicator:
+
+```zsh
+--trading.log.storage-mode=file
+--management.health.db.enabled=false
+```
+
+Expected runtime status in no-DB mode:
+
+```text
+tradeLogStorageMode=file
+tradeLogFileEnabled=true
+tradeLogDatabaseEnabled=false
+/actuator/health status=UP
+```
+
 ## Current live/paper readiness status
 
 The five target bot property files exist:
@@ -124,7 +142,7 @@ They are configured for Databento live market data and shared capital:
 trading.market-data.provider=databento
 trading.shared-capital.enabled=true
 trading.shared-capital.file=runtime/databento/shared-capital.properties
-trading.shared-capital.total-notional=500000
+trading.shared-capital.total-notional=300000
 ```
 
 The shared capital file is:
@@ -136,7 +154,7 @@ runtime/databento/shared-capital.properties
 with expected total pool:
 
 ```text
-total.notional=500000.00
+total.notional=300000.00
 ```
 
 ## Settings needed to match the final 417-trade strategy path
@@ -307,7 +325,7 @@ strategy share quantity = floor(60000 / executable_price)
 strategy internal absolute cap = 500 shares
 broker-side max share cap = 2000 shares
 max_order_notional=300000
-shared_capital.total_notional=500000 across all selected symbol bots
+shared_capital.total_notional=300000 across all selected symbol bots
 ```
 
 Actual entry notional per trade is:
@@ -392,7 +410,8 @@ TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
   --emit-live-feature-snapshots \
   --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
   -- \
-  --trading.model.dir="$SETUP_MODEL_DIR"
+  --trading.model.dir="$SETUP_MODEL_DIR" \
+  --trading.shared-capital.total-notional=300000
 ```
 
 Confirm each symbol preview prints:
@@ -434,17 +453,62 @@ TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
   --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
   --tee \
   -- \
-  --trading.model.dir="$SETUP_MODEL_DIR"
+  --trading.model.dir="$SETUP_MODEL_DIR" \
+  --trading.shared-capital.total-notional=300000 \
+  --trading.log.storage-mode=file \
+  --management.health.db.enabled=false
 ```
 
-Status checks for the five current ports:
+### No-DB health checks after safe no-trade startup
+
+Run these checks after the `--max-trades=0` startup. They validate the intentionally no-DB runtime, the HTTP actuator health, and the trading control status.
 
 ```zsh
 for port in 9137 9210 9180 9219 9164; do
-  echo "===== port $port ====="
-  curl -fsS "http://127.0.0.1:$port/api/control/status" | python3 -m json.tool | head -80
+  echo "===== actuator health port $port ====="
+  curl -sS "http://127.0.0.1:$port/actuator/health" | python3 -m json.tool
+
+  echo
+  echo "===== status port $port ====="
+  curl -fsS "http://127.0.0.1:$port/api/control/status" | python3 -m json.tool | head -120
+  echo
 done
 ```
+
+Required no-trade/no-DB status signals for all five symbols:
+
+```text
+/actuator/health status=UP
+connected=true
+strategyEnabled=true
+killSwitch=false
+currentPosition=0
+position=0
+openOrders=0
+orderInFlight=false
+strategyTradeCount=0
+maxTrades=0
+tradeLogStorageMode=file
+tradeLogFileEnabled=true
+tradeLogDatabaseEnabled=false
+positionSyncComplete=true
+ibkrSharedGatewayConnected=true
+marketDataProvider=databento
+databentoFeedHealthy=true
+databentoFeed.healthy=true
+databentoFeed.gatewayRunning=true
+databentoFeed.restartCount=0
+databentoFeed.restartRecommended=false
+```
+
+Final risk sweep should be empty after the no-DB restart:
+
+```zsh
+grep -hE 'CannotGetJdbcConnectionException|PSQLException|Connection to 127.0.0.1:5432 refused|HikariPool|WATCHDOG|Order hung|Authentication failed|normalizer-fatal|equity-stream-fatal|options-stream-error|featureSidecar=hit|featureSnapshot=miss' \
+  runtime/databento/logs/trading-agent-{NVDA,QQQ,SPY,TQQQ,TSLA}.log | tail -200
+```
+
+If `/actuator/health` is `DOWN` and the grep shows PostgreSQL connection errors, restart with `--trading.log.storage-mode=file --management.health.db.enabled=false`. Do not start controlled paper while bots are still running in `tradeLogStorageMode=both` with PostgreSQL intentionally stopped.
 
 ## Controlled paper start with trades enabled
 
@@ -483,7 +547,10 @@ TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
   --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
   --tee \
   -- \
-  --trading.model.dir="$SETUP_MODEL_DIR"
+  --trading.model.dir="$SETUP_MODEL_DIR" \
+  --trading.shared-capital.total-notional=300000 \
+  --trading.log.storage-mode=file \
+  --management.health.db.enabled=false
 ```
 
 Increase `--max-trades` only after the no-trade and low-trade paper run are healthy.
@@ -493,7 +560,7 @@ Increase `--max-trades` only after the no-trade and low-trade paper run are heal
 ### Effective startup configuration
 
 ```zsh
-grep -hE 'lifecycle_micro_enabled|micro_entry_thresholds|downstream_setup_filter|trade_amount|max_order_notional|sharedCapital' \
+grep -hE 'lifecycle_micro_enabled|micro_entry_thresholds|downstream_setup_filter|trade_amount|max_order_notional|sharedCapital|tradeLogStorageMode|tradeLogDatabaseEnabled' \
   runtime/databento/logs/trading-agent-{NVDA,QQQ,SPY,TQQQ,TSLA}.log | tail -200
 ```
 
@@ -507,7 +574,7 @@ grep -hE 'SETUP_FILTER_PASSES|MICRO_ENTRY_CONFIRMS|featureSnapshot=|featureSidec
 ### Order lifecycle risk
 
 ```zsh
-grep -hE 'WATCHDOG|Order hung|ERROR|Exception|Shared capital reserved|shared capital unavailable' \
+grep -hE 'CannotGetJdbcConnectionException|PSQLException|Connection to 127.0.0.1:5432 refused|HikariPool|WATCHDOG|Order hung|ERROR|Exception|Authentication failed|normalizer-fatal|Shared capital reserved|shared capital unavailable|featureSnapshot=miss|featureSidecar=hit' \
   runtime/databento/logs/trading-agent-{NVDA,QQQ,SPY,TQQQ,TSLA}.log | tail -200
 ```
 
@@ -518,7 +585,9 @@ lifecycle_micro_enabled=true
 micro_entry_thresholds long=0.30 short=0.30
 downstream_setup_filter enabled=true ... features_csv=<none> fail_closed=true
 trade_amount=60000 max_order_notional=300000 max_share_cap=2000
-sharedCapital enabled=true total=500000
+sharedCapital enabled=true total=300000
+tradeLogStorageMode=file
+tradeLogDatabaseEnabled=false
 ```
 
 Expected feature source with `--emit-live-feature-snapshots`:
@@ -589,3 +658,149 @@ tests/test_live_feature_snapshots.py
 ```
 
 The changes add launcher-level support for the downstream setup-filter manifest so paper/live startup can use the same manifest as the recovered backtest without relying on fragile `TRADING_AGENT_JAVA_OPTS`. They also add opt-in live event-carried feature snapshots so the Java downstream setup filter sees `featureSnapshot=hit` in paper/live when the normalizer has produced a live 30-second snapshot for the setup arm epoch.
+
+## Everyday morning startup steps
+
+Use this shorter morning sequence after the full preflight has already passed on this machine and no model/config paths changed overnight. Re-run the full preflight section only when:
+
+- code was rebuilt or updated;
+- model directories, lifecycle bundle, or downstream setup-filter manifest changed;
+- the Databento key or bot properties changed;
+- a previous run ended with watchdog/order/data-feed errors;
+- moving to a new machine/worktree.
+
+Do not skip the no-trade morning gate. It is the daily safety check that replaces repeating the full artifact/model preflight every morning.
+
+### 1. Start from the Databento worktree
+
+```zsh
+cd /Users/filmonghezehey/trading-agent/worktrees/databento
+```
+
+### 2. Confirm no stale reservations or unsafe running bots
+
+```zsh
+./reset_shared_capital.sh --check
+```
+
+Expected morning-safe state before startup:
+
+```text
+reachable=no for previously stopped bots, or reachable bots report position=0 openOrders=0 orderInFlight=false
+total.notional=300000.00
+no reservation.* entries unless a currently running flat bot reports them safely
+```
+
+If stale bots are running from a prior session, stop them safely first:
+
+```zsh
+./stop_all_databento_bots.sh --symbols=NVDA,QQQ,SPY,TQQQ,TSLA --copy-live-logs-on-stop
+./reset_shared_capital.sh --reset
+```
+
+### 3. Launch no-trade morning health gate
+
+Keep `--max-trades=0` for the morning health gate. PostgreSQL is intentionally not required; use file-only logs and disable DB health.
+
+```zsh
+SETUP_MODEL_DIR=runtime/research_runs/catboost_cost_aware_setup_onnx_local_20260624_152854
+LIFECYCLE_MODEL_DIR=runtime/research_runs/lifecycle_micro_external_oof_20260624_120527/model_exports
+ROUTE_MANIFEST=runtime/local-backtests/databento-core5-4week-20260427-20260522-recent/setup_micro_counterfactual_20260627_230823/downstream_setup_filter_onnx_catboost_core_20260628/downstream_setup_filter_route_manifest.json
+
+TRADING_SETUP_MODEL_DIR="$SETUP_MODEL_DIR" \
+TRADING_LIFECYCLE_MODEL_DIR="$LIFECYCLE_MODEL_DIR" \
+TRADING_LIFECYCLE_MICRO_ENABLED=true \
+TRADING_MICRO_LONG_ENTRY_THRESHOLD=0.30 \
+TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
+./start_all_databento_bots.sh \
+  --start \
+  --symbols=NVDA,QQQ,SPY,TQQQ,TSLA \
+  --trade-amount=60000 \
+  --max-order-notional=300000 \
+  --max-share-cap=2000 \
+  --max-trades=0 \
+  --startup-history-seconds=360 \
+  --emit-live-feature-snapshots \
+  --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
+  --tee \
+  -- \
+  --trading.model.dir="$SETUP_MODEL_DIR" \
+  --trading.shared-capital.total-notional=300000 \
+  --trading.log.storage-mode=file \
+  --management.health.db.enabled=false
+```
+
+### 4. Run morning health checks
+
+```zsh
+for port in 9137 9210 9180 9219 9164; do
+  echo "===== actuator health port $port ====="
+  curl -sS "http://127.0.0.1:$port/actuator/health" | python3 -m json.tool
+
+  echo
+  echo "===== status port $port ====="
+  curl -fsS "http://127.0.0.1:$port/api/control/status" | python3 -m json.tool | head -120
+  echo
+done
+```
+
+Required morning `GO` signals:
+
+```text
+/actuator/health status=UP
+connected=true
+strategyEnabled=true
+killSwitch=false
+currentPosition=0
+openOrders=0
+orderInFlight=false
+positionSyncComplete=true
+ibkrSharedGatewayConnected=true
+databentoFeedHealthy=true
+databentoFeed.healthy=true
+databentoFeed.gatewayRunning=true
+databentoFeed.restartRecommended=false
+tradeLogStorageMode=file
+tradeLogFileEnabled=true
+tradeLogDatabaseEnabled=false
+maxTrades=0
+```
+
+Risk sweep should be empty for fresh log lines after the no-DB restart. If historical matches remain in long-lived log files, confirm their timestamps are before the latest restart:
+
+```zsh
+grep -hE 'CannotGetJdbcConnectionException|PSQLException|Connection to 127.0.0.1:5432 refused|HikariPool|WATCHDOG|Order hung|ERROR|Exception|Authentication failed|normalizer-fatal|equity-stream-fatal|options-stream-error|featureSidecar=hit|featureSnapshot=miss' \
+  runtime/databento/logs/trading-agent-{NVDA,QQQ,SPY,TQQQ,TSLA}.log | tail -200
+```
+
+### 5. Move to controlled paper only after the morning gate is clean
+
+Stop the no-trade gate, reset shared capital, then restart with a small trade cap:
+
+```zsh
+./stop_all_databento_bots.sh --symbols=NVDA,QQQ,SPY,TQQQ,TSLA --copy-live-logs-on-stop
+./reset_shared_capital.sh --reset
+
+TRADING_SETUP_MODEL_DIR="$SETUP_MODEL_DIR" \
+TRADING_LIFECYCLE_MODEL_DIR="$LIFECYCLE_MODEL_DIR" \
+TRADING_LIFECYCLE_MICRO_ENABLED=true \
+TRADING_MICRO_LONG_ENTRY_THRESHOLD=0.30 \
+TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
+./start_all_databento_bots.sh \
+  --start \
+  --symbols=NVDA,QQQ,SPY,TQQQ,TSLA \
+  --trade-amount=60000 \
+  --max-order-notional=300000 \
+  --max-share-cap=2000 \
+  --max-trades=2 \
+  --startup-history-seconds=360 \
+  --emit-live-feature-snapshots \
+  --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
+  --tee \
+  -- \
+  --trading.model.dir="$SETUP_MODEL_DIR" \
+  --trading.shared-capital.total-notional=300000 \
+  --trading.log.storage-mode=file \
+  --management.health.db.enabled=false
+```
+

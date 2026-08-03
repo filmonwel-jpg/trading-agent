@@ -88,7 +88,7 @@ DEFAULT_TEMPLATE = {
     "trading.ai.regime.volatile.short-exit-threshold": "0.60",
     "trading.shared-capital.enabled": "true",
     "trading.shared-capital.file": "runtime/databento/shared-capital.properties",
-    "trading.shared-capital.total-notional": "500000",
+    "trading.shared-capital.total-notional": "300000",
     "trading.databento.option-parents": "SPY.OPT",
     "trading.databento.model-routing-csv": "runtime/databento/model-routing.csv",
     "trading.databento.symbol-plan-csv": "training_data/databento_30s/symbol_model_plan.csv",
@@ -427,7 +427,7 @@ def build_symbol_props(symbol: str,
     props.update(shared_feed)
     props["trading.shared-capital.enabled"] = legacy_overrides.get("trading.shared-capital.enabled", props.get("trading.shared-capital.enabled", "true")) if legacy_overrides else props.get("trading.shared-capital.enabled", "true")
     props["trading.shared-capital.file"] = "runtime/databento/shared-capital.properties"
-    props["trading.shared-capital.total-notional"] = legacy_overrides.get("trading.shared-capital.total-notional", props.get("trading.shared-capital.total-notional", "500000")) if legacy_overrides else props.get("trading.shared-capital.total-notional", "500000")
+    props["trading.shared-capital.total-notional"] = legacy_overrides.get("trading.shared-capital.total-notional", props.get("trading.shared-capital.total-notional", "300000")) if legacy_overrides else props.get("trading.shared-capital.total-notional", "300000")
     props["trading.databento.option-parents"] = f"{symbol}.OPT"
     props["trading.databento.model-routing-csv"] = model_routing_property
     props["trading.databento.symbol-plan-csv"] = symbol_plan_property

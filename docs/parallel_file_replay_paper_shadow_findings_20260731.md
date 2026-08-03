@@ -45,7 +45,7 @@ The sizing context at the time of the replay was:
 trading.trade-amount=500000
 trading.risk.max-order-notional=500000
 trading.risk.max-share-cap=2000
-trading.shared-capital.total-notional=500000
+trading.shared-capital.total-notional=300000
 ```
 
 ## Important architecture note
