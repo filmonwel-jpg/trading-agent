@@ -578,6 +578,42 @@ grep -hE 'CannotGetJdbcConnectionException|PSQLException|Connection to 127.0.0.1
   runtime/databento/logs/trading-agent-{NVDA,QQQ,SPY,TQQQ,TSLA}.log | tail -200
 ```
 
+### Important live flow tail, filtered
+
+Use this instead of raw `tail -f` when monitoring a launcher log such as `runtime/databento/launchers/nvda-launch-*.log`. It keeps the startup/feed/order/risk path visible without streaming every line:
+
+```zsh
+latest_launcher_log="$(ls -t runtime/databento/launchers/nvda-launch-*.log | head -1)"
+
+tail -n 300 -F "$latest_launcher_log" | awk '
+/\[RUN\] symbol=|model_dir=|lifecycle_micro_enabled|micro_entry_thresholds|downstream_setup_filter|live_feature_snapshots|trade_amount=|shared_capital|sharedCapital/ ||
+/BOOT|IBKR\.SYNC|DATABENTO|startup-delay|subscribe|subscription_ack|Connected to shared relay|relay_client_registered/ ||
+/SETUP_FILTER_PASSES|MICRO_ENTRY_CONFIRMS|featureSnapshot=|featureSidecar=/ ||
+/Shared capital reserved|Shared capital release|shared capital unavailable/ ||
+/ORDER|Order|Filled|Submitted|Cancelled|ApiCancelled|Inactive/ ||
+/WATCHDOG|Order hung|ERROR|Exception|Authentication failed|normalizer-fatal|equity-stream-fatal|options-stream-error|PSQLException|HikariPool/ {
+  print
+  fflush()
+}'
+```
+
+For normal monitoring after launch, prefer the all-symbol app-log version:
+
+```zsh
+tail -n 200 -F runtime/databento/logs/trading-agent-{NVDA,QQQ,SPY,TQQQ,TSLA}.log | awk '
+/sharedCapital enabled=true|tradeLogStorageMode|tradeLogDatabaseEnabled/ ||
+/model_dir=|lifecycle_micro_enabled|micro_entry_thresholds|downstream_setup_filter|live_feature_snapshots|trade_amount=|max_order_notional/ ||
+/IBKR\.SYNC|position sync completed|brokerPosition=|openOrders=|orderInFlight=/ ||
+/DATABENTO|startup-delay|equity-subscribe|options-subscribe|subscription_ack|Connected to shared relay|relay_client_registered/ ||
+/SETUP_FILTER_PASSES|MICRO_ENTRY_CONFIRMS|featureSnapshot=|featureSidecar=/ ||
+/Shared capital reserved|Shared capital release|shared capital unavailable/ ||
+/ORDER|Order|Filled|Submitted|Cancelled|ApiCancelled|Inactive/ ||
+/WATCHDOG|Order hung|ERROR|Exception|Authentication failed|normalizer-fatal|equity-stream-fatal|options-stream-error|PSQLException|HikariPool/ {
+  print
+  fflush()
+}'
+```
+
 Healthy expected settings:
 
 ```text
