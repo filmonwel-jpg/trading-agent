@@ -2,6 +2,8 @@
 
 Use this when you want to replay a recorded Databento NDJSON/NDJSON.GZ file with multiple symbol bots running at the same time, instead of replaying `NVDA`, `QQQ`, `SPY`, `TQQQ`, and `TSLA` one after another.
 
+For the July 2026 recovered event-carried paper-shadow findings, including the strict micro-vs-setup-only comparison, watchdog analysis, drawdown review, symbol/side breakdown, and paper-pilot recommendation, see [`parallel_file_replay_paper_shadow_findings_20260731.md`](parallel_file_replay_paper_shadow_findings_20260731.md).
+
 This is intended as a paper-trading rehearsal tool:
 
 - all selected symbols are launched concurrently;

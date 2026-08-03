@@ -648,13 +648,18 @@ python3 run_meta_pipeline.py \
   --tune-trials 3000
 ```
 
-8) **Synthetic tuner smoke test** (`smoke_tune_regime_weights.py`)
+9) **Synthetic tuner smoke test** (`smoke_tune_regime_weights.py`)
 
 - **Purpose:** Quick local validation of tuner behavior without production data.
 
 ```bash
 python3 smoke_tune_regime_weights.py
 ```
+
+10) **Databento Core-5 weekly analysis utilities** (`scripts/analyze_core5_weekly_run.py`, `scripts/analyze_databento_core5_weekly_outputs.py`, `scripts/summarize_core5_today_only.py`, `scripts/calculate_core5_today_pnl.py`)
+
+- **Purpose:** Inspect completed Core-5 weekly Databento backtest artifacts, summarize missing outputs/failures, and calculate lifecycle PnL.
+- **Runbook:** See [`docs/databento_core5_weekly_analysis_runbook.md`](docs/databento_core5_weekly_analysis_runbook.md).
 
 #### Recommended execution order
 
