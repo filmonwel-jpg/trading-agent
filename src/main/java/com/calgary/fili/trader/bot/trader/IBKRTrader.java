@@ -163,6 +163,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
     @Value("${trading.databento.python-bin:python3}") private String databentoPythonBin;
     @Value("${trading.databento.normalizer-script:scripts/databento_live_normalizer.py}") private String databentoNormalizerScript;
     @Value("${trading.databento.env-file:runtime/databento.env}") private String databentoEnvFile;
+    @Value("${trading.databento.api.key:}") private String databentoApiKey;
     @Value("${trading.databento.live-gateway:}") private String databentoLiveGatewayOverride;
     @Value("${trading.databento.equity-dataset:DBEQ.BASIC}") private String databentoEquityDataset;
     @Value("${trading.databento.equity-schema:tbbo}") private String databentoEquitySchema;
@@ -1751,6 +1752,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             logDatabentoSidecarConfigErrorOnce(
                 "Databento sidecar not started: missing valid DATABENTO_API_KEY. Set it in the parent environment or in "
                     + Paths.get(databentoEnvFile).toAbsolutePath().normalize()
+                    + ", or set trading.databento.api.key"
             );
             return;
         }
@@ -2239,6 +2241,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             logDatabentoSidecarConfigErrorOnce(
                 "Databento shared relay not started: missing valid DATABENTO_API_KEY. Set it in the parent environment or in "
                     + Paths.get(databentoEnvFile).toAbsolutePath().normalize()
+                    + ", or set trading.databento.api.key"
             );
             return false;
         }
@@ -2593,6 +2596,7 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         logDatabentoSidecarConfigErrorOnce(
             "Databento sidecar disabled: missing valid DATABENTO_API_KEY. Update the parent environment or "
                 + Paths.get(databentoEnvFile).toAbsolutePath().normalize()
+                + ", or set trading.databento.api.key"
         );
         return false;
     }
@@ -2635,10 +2639,19 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         } catch (IOException e) {
             flowError("DATABENTO", "Failed to read sidecar env file path=" + envPath + " reason=" + e.getMessage());
         }
+
+        String configuredApiKey = normalizedDatabentoApiKey(databentoApiKey);
+        if (isUsableDatabentoApiKey(configuredApiKey)) {
+            env.put("DATABENTO_API_KEY", configuredApiKey);
+        }
         return env;
     }
 
     private String effectiveDatabentoApiKey(Map<String, String> sidecarEnv) {
+        String configuredApiKey = normalizedDatabentoApiKey(databentoApiKey);
+        if (isUsableDatabentoApiKey(configuredApiKey)) {
+            return configuredApiKey;
+        }
         String apiKey = System.getenv("DATABENTO_API_KEY");
         if (apiKey != null && !apiKey.isBlank()) {
             return apiKey.trim();
@@ -2648,6 +2661,10 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         }
         String fallback = sidecarEnv.get("DATABENTO_API_KEY");
         return fallback == null ? "" : fallback.trim();
+    }
+
+    private String normalizedDatabentoApiKey(String apiKey) {
+        return stripDatabentoEnvQuotes(apiKey == null ? "" : apiKey.trim()).trim();
     }
 
     private boolean isUsableDatabentoApiKey(String apiKey) {
