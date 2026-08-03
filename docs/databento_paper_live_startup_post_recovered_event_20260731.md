@@ -11,7 +11,7 @@ Downstream setup-filter manifest
 Lifecycle/micro enabled
 Micro entry thresholds long=0.30 short=0.30
 trade_amount=60000
-max_order_notional=500000
+max_order_notional=300000
 parallel symbol execution
 ```
 
@@ -153,7 +153,7 @@ The final replay used:
 
 ```text
 trade_amount=60000
-max_order_notional=500000
+max_order_notional=300000
 max_share_cap=2000
 micro_long_entry_threshold=0.30
 micro_short_entry_threshold=0.30
@@ -163,7 +163,7 @@ So paper/live startup should override:
 
 ```zsh
 --trade-amount=60000
---max-order-notional=500000
+--max-order-notional=300000
 --max-share-cap=2000
 TRADING_MICRO_LONG_ENTRY_THRESHOLD=0.30
 TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30
@@ -306,7 +306,7 @@ trade_amount=60000
 strategy share quantity = floor(60000 / executable_price)
 strategy internal absolute cap = 500 shares
 broker-side max share cap = 2000 shares
-max_order_notional=500000
+max_order_notional=300000
 shared_capital.total_notional=500000 across all selected symbol bots
 ```
 
@@ -368,6 +368,8 @@ done
 
 No `--start` means preview-only.
 
+Keep the explicit `--` separator and pass `--trading.model.dir="$SETUP_MODEL_DIR"` after it. The local startup-data verifier resolves the 30-second setup model directory from this extra Spring argument; `TRADING_SETUP_MODEL_DIR` alone does not override stale `trading.model.dir` values in generated bot properties during that preflight.
+
 ```zsh
 cd /Users/filmonghezehey/trading-agent/worktrees/databento
 
@@ -383,12 +385,14 @@ TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
 ./start_all_databento_bots.sh \
   --symbols=NVDA,QQQ,SPY,TQQQ,TSLA \
   --trade-amount=60000 \
-  --max-order-notional=500000 \
+  --max-order-notional=300000 \
   --max-share-cap=2000 \
   --max-trades=0 \
   --startup-history-seconds=360 \
   --emit-live-feature-snapshots \
-  --downstream-setup-filter-manifest="$ROUTE_MANIFEST"
+  --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
+  -- \
+  --trading.model.dir="$SETUP_MODEL_DIR"
 ```
 
 Confirm each symbol preview prints:
@@ -399,7 +403,7 @@ Confirm each symbol preview prints:
 [RUN] micro_entry_thresholds long=0.30 ... short=0.30 ...
 [RUN] downstream_setup_filter enabled=true manifest=...downstream_setup_filter_route_manifest.json features_csv=<none> fail_closed=true
 [RUN] live_feature_snapshots enabled=true
-[RUN] trade_amount=60000 max_order_notional=500000 max_share_cap=2000
+[RUN] trade_amount=60000 max_order_notional=300000 max_share_cap=2000
 ```
 
 ## Safe no-trade startup verification
@@ -422,13 +426,15 @@ TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
   --start \
   --symbols=NVDA,QQQ,SPY,TQQQ,TSLA \
   --trade-amount=60000 \
-  --max-order-notional=500000 \
+  --max-order-notional=300000 \
   --max-share-cap=2000 \
   --max-trades=0 \
   --startup-history-seconds=360 \
   --emit-live-feature-snapshots \
   --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
-  --tee
+  --tee \
+  -- \
+  --trading.model.dir="$SETUP_MODEL_DIR"
 ```
 
 Status checks for the five current ports:
@@ -469,13 +475,15 @@ TRADING_MICRO_SHORT_ENTRY_THRESHOLD=0.30 \
   --start \
   --symbols=NVDA,QQQ,SPY,TQQQ,TSLA \
   --trade-amount=60000 \
-  --max-order-notional=500000 \
+  --max-order-notional=300000 \
   --max-share-cap=2000 \
   --max-trades=2 \
   --startup-history-seconds=360 \
   --emit-live-feature-snapshots \
   --downstream-setup-filter-manifest="$ROUTE_MANIFEST" \
-  --tee
+  --tee \
+  -- \
+  --trading.model.dir="$SETUP_MODEL_DIR"
 ```
 
 Increase `--max-trades` only after the no-trade and low-trade paper run are healthy.
@@ -509,7 +517,7 @@ Healthy expected settings:
 lifecycle_micro_enabled=true
 micro_entry_thresholds long=0.30 short=0.30
 downstream_setup_filter enabled=true ... features_csv=<none> fail_closed=true
-trade_amount=60000 max_order_notional=500000 max_share_cap=2000
+trade_amount=60000 max_order_notional=300000 max_share_cap=2000
 sharedCapital enabled=true total=500000
 ```
 
