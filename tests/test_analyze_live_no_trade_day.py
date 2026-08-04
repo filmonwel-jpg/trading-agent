@@ -170,6 +170,59 @@ class AnalyzeLiveNoTradeDayTest(unittest.TestCase):
             self.assertEqual(summary.best_entry_margin.side, "long")
             self.assertEqual(result["verdict"], "NO_TRADE_MODEL_OR_ENTRY_GATES_REJECTED")
 
+    def test_time_window_filters_out_prelaunch_runtime_issues_and_post_cutoff_gate_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            log_dir = tmp_path / "logs"
+            trade_dir = tmp_path / "output"
+            write_log(
+                log_dir,
+                "TSLA",
+                [
+                    "2026-08-04T07:29:52.434-06:00 ERROR 66110 --- [trading-agent] [shared-ibkr-gateway-reader] c.c.fili.trader.bot.trader.IBKRTrader    : >>> [ERROR][IBKR.GATEWAY] position-sync-failed reason=Not connected",
+                    "2026-08-04T11:31:30.328-06:00  INFO 89969 --- [trading-agent] [Strategy-Actor-Thread-TSLA] c.c.f.t.bot.strategy.PingPongStrategy    : >>> [FLOW][COND][AI.ENTRY] ENTRY_GATE_OPEN=PASS | symbol=TSLA allowNewEntries=true dataQualityAllowsNewEntries=true tradeCount=0 maxTrades=200 positionSynced=true hardStopExitCount=0 maxHardStopsPerDay=3 hardStopCooldownElapsed=true hardStopCooldownRemainingMs=0",
+                    "2026-08-04T11:31:30.329-06:00  INFO 89969 --- [trading-agent] [Strategy-Actor-Thread-TSLA] c.c.f.t.bot.strategy.PingPongStrategy    : >>> [FLOW][COND][AI.LONG.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=59.0 askOrFallback=326.9 qty=183 prob=0.4113 threshold=0.6560",
+                    "2026-08-04T11:31:30.330-06:00  INFO 89969 --- [trading-agent] [Strategy-Actor-Thread-TSLA] c.c.f.t.bot.strategy.PingPongStrategy    : >>> [FLOW][COND][AI.SHORT.ENTRY] AI_PREDICTS_ENTRY=FAIL | symbol=TSLA rsi=59.0 bidOrFallback=326.7 qty=183 prob=0.4868 threshold=0.6440",
+                    "2026-08-04T11:31:30.330-06:00  INFO 89969 --- [trading-agent] [Strategy-Actor-Thread-TSLA] c.c.f.t.bot.strategy.PingPongStrategy    : >>> [FLOW][COND][AI.ENTRY.ARBITRATION] ENTRY_SIDE_SELECTED=FAIL | symbol=TSLA reason=no_passing_setup_with_positive_qty",
+                    "2026-08-04T13:50:30.280-06:00  INFO 89969 --- [trading-agent] [Strategy-Actor-Thread-TSLA] c.c.f.t.bot.strategy.PingPongStrategy    : >>> [FLOW][COND][AI.ENTRY] ENTRY_GATE_OPEN=FAIL | symbol=TSLA allowNewEntries=false dataQualityAllowsNewEntries=true tradeCount=0 maxTrades=200 positionSynced=true hardStopExitCount=0 maxHardStopsPerDay=3 hardStopCooldownElapsed=true hardStopCooldownRemainingMs=0",
+                ],
+            )
+
+            window = analyzer.build_analysis_window("10:00", "13:50", "2026-08-04")
+            summary = analyzer.analyze_symbol(log_dir, trade_dir, "TSLA", "2026-08-04", window)
+            result = analyzer.build_result([summary], "2026-08-04", log_dir, trade_dir, window)
+
+            self.assertEqual(summary.counts["runtime_issue"], 0)
+            self.assertEqual(summary.counts["entry_gate_fail"], 0)
+            self.assertEqual(summary.counts["entry_gate_pass"], 1)
+            self.assertEqual(summary.counts["entry_arbitration_fail"], 1)
+            self.assertEqual(result["since"], "2026-08-04T10:00:00")
+            self.assertEqual(result["until"], "2026-08-04T13:50:00")
+            self.assertEqual(result["verdict"], "NO_TRADE_MODEL_OR_ENTRY_GATES_REJECTED")
+
+    def test_time_window_filters_trade_csv_rows_with_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            log_dir = tmp_path / "logs"
+            trade_dir = tmp_path / "output"
+            trade_dir.mkdir(parents=True, exist_ok=True)
+            (trade_dir / "trades-NVDA.csv").write_text(
+                "Timestamp,Symbol,Action,Quantity\n"
+                "2026-08-04T09:59:59-06:00,NVDA,BUY,1\n"
+                "2026-08-04T10:00:00-06:00,NVDA,BUY,1\n"
+                "2026-08-04T13:49:59-06:00,NVDA,BUY,1\n"
+                "2026-08-04T13:50:00-06:00,NVDA,BUY,1\n"
+                "2026-08-03T10:00:00-06:00,NVDA,BUY,1\n",
+                encoding="utf-8",
+            )
+
+            window = analyzer.build_analysis_window("10:00", "13:50", "2026-08-04")
+            summary = analyzer.analyze_symbol(log_dir, trade_dir, "NVDA", "2026-08-04", window)
+
+            self.assertEqual(summary.counts["trade_csv_rows"], 2)
+            self.assertEqual(summary.counts["trade_csv_rows_outside_window"], 2)
+            self.assertEqual(summary.counts["trade_csv_rows_other_dates"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

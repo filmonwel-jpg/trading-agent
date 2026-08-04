@@ -52,6 +52,9 @@ TRADE_TIMESTAMP_FIELDS = (
     "close_time",
 )
 TRADE_SYMBOL_FIELDS = ("Symbol", "symbol", "tradeSymbol", "trade_symbol", "Ticker", "ticker")
+TIMESTAMP_PREFIX_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}(?::\d{2})?)")
+COMPACT_TIMESTAMP_PREFIX_RE = re.compile(r"\b(\d{4})(\d{2})(\d{2})[T\s]?(\d{2}:\d{2}(?::\d{2})?)")
+TIME_ONLY_RE = re.compile(r"^(\d{2}:\d{2})(?::(\d{2}))?$")
 
 BENIGN_ERROR_SUBSTRINGS = (
     "HikariPool-1 - Shutdown initiated",
@@ -87,9 +90,16 @@ class TradeCsvSummary:
     matching_rows: int = 0
     total_symbol_rows: int = 0
     other_date_rows: int = 0
+    outside_window_rows: int = 0
     unscoped_rows: int = 0
     malformed_files: int = 0
     files: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AnalysisWindow:
+    since: str | None = None
+    until: str | None = None
 
 
 def parse_symbols(raw: str) -> list[str]:
@@ -144,6 +154,67 @@ def update_best_margin(best: BestMargin, side: str, probability: float, threshol
 
 def compact_date(trading_date: str) -> str:
     return trading_date.replace("-", "")
+
+
+def normalize_time_fragment(raw: str) -> str:
+    text = raw.strip()
+    match = TIME_ONLY_RE.match(text)
+    if not match:
+        raise ValueError(f"Invalid time value '{raw}'. Use HH:MM or HH:MM:SS.")
+    seconds = match.group(2) or "00"
+    return f"{match.group(1)}:{seconds}"
+
+
+def normalize_window_bound(raw: str | None, trading_date: str) -> str | None:
+    if raw is None or not raw.strip():
+        return None
+    text = raw.strip()
+    if TIME_ONLY_RE.match(text):
+        return f"{trading_date}T{normalize_time_fragment(text)}"
+    if match := TIMESTAMP_PREFIX_RE.search(text):
+        bound_date, time_fragment = match.groups()
+        return f"{bound_date}T{normalize_time_fragment(time_fragment)}"
+    if match := COMPACT_TIMESTAMP_PREFIX_RE.search(text):
+        year, month, day, time_fragment = match.groups()
+        return f"{year}-{month}-{day}T{normalize_time_fragment(time_fragment)}"
+    raise ValueError(f"Invalid timestamp value '{raw}'. Use HH:MM, HH:MM:SS, or YYYY-MM-DDTHH:MM:SS.")
+
+
+def build_analysis_window(since: str | None, until: str | None, trading_date: str) -> AnalysisWindow:
+    window = AnalysisWindow(
+        since=normalize_window_bound(since, trading_date),
+        until=normalize_window_bound(until, trading_date),
+    )
+    if window.since is not None and window.until is not None and window.since >= window.until:
+        raise ValueError(f"--since must be earlier than --until; got since={since!r} until={until!r}")
+    return window
+
+
+def timestamp_sort_key(value: str, trading_date: str) -> str | None:
+    if match := TIMESTAMP_PREFIX_RE.search(value):
+        value_date, time_fragment = match.groups()
+        return f"{value_date}T{normalize_time_fragment(time_fragment)}"
+    if match := COMPACT_TIMESTAMP_PREFIX_RE.search(value):
+        year, month, day, time_fragment = match.groups()
+        return f"{year}-{month}-{day}T{normalize_time_fragment(time_fragment)}"
+    if value.strip().startswith(trading_date) or value.strip().startswith(compact_date(trading_date)):
+        return f"{trading_date}T00:00:00"
+    return None
+
+
+def timestamp_in_window(value: str, trading_date: str, window: AnalysisWindow) -> bool:
+    key = timestamp_sort_key(value, trading_date)
+    if key is None:
+        return True
+    if window.since is not None and key < window.since:
+        return False
+    if window.until is not None and key >= window.until:
+        return False
+    return True
+
+
+def log_line_in_scope(line: str, trading_date: str, window: AnalysisWindow) -> bool:
+    return line.startswith(trading_date) and timestamp_in_window(line, trading_date, window)
 
 
 def timestamp_matches_date(value: str, trading_date: str) -> bool:
@@ -325,7 +396,8 @@ def classify_line(summary: SymbolSummary, line: str) -> None:
         add_sample(summary, "runtime_issue", line)
 
 
-def count_trade_csv_rows(trade_dir: Path, symbol: str, trading_date: str) -> TradeCsvSummary:
+def count_trade_csv_rows(trade_dir: Path, symbol: str, trading_date: str, window: AnalysisWindow | None = None) -> TradeCsvSummary:
+    active_window = window or AnalysisWindow()
     summary = TradeCsvSummary()
     if not trade_dir.exists():
         return summary
@@ -345,13 +417,16 @@ def count_trade_csv_rows(trade_dir: Path, symbol: str, trading_date: str) -> Tra
                     if not row_symbol_matches(row, symbol):
                         continue
                     summary.total_symbol_rows += 1
-                    date_match = row_matches_trading_date(row, trading_date)
-                    if date_match is True:
-                        summary.matching_rows += 1
-                    elif date_match is False:
-                        summary.other_date_rows += 1
-                    else:
+                    timestamp = first_present_value(row, TRADE_TIMESTAMP_FIELDS)
+                    if timestamp is None:
                         summary.unscoped_rows += 1
+                    elif timestamp_matches_date(timestamp, trading_date):
+                        if timestamp_in_window(timestamp, trading_date, active_window):
+                            summary.matching_rows += 1
+                        else:
+                            summary.outside_window_rows += 1
+                    else:
+                        summary.other_date_rows += 1
             except csv.Error:
                 summary.malformed_files += 1
                 handle.seek(0)
@@ -360,29 +435,35 @@ def count_trade_csv_rows(trade_dir: Path, symbol: str, trading_date: str) -> Tra
                         continue
                     summary.total_symbol_rows += 1
                     if timestamp_matches_date(line, trading_date):
-                        summary.matching_rows += 1
+                        if timestamp_in_window(line, trading_date, active_window):
+                            summary.matching_rows += 1
+                        else:
+                            summary.outside_window_rows += 1
                     else:
                         summary.unscoped_rows += 1
     return summary
 
 
-def analyze_symbol(log_dir: Path, trade_dir: Path, symbol: str, trading_date: str) -> SymbolSummary:
+def analyze_symbol(log_dir: Path, trade_dir: Path, symbol: str, trading_date: str, window: AnalysisWindow | None = None) -> SymbolSummary:
+    active_window = window or AnalysisWindow()
     summary = SymbolSummary(symbol=symbol)
     files = log_files_for_symbol(log_dir, symbol, trading_date)
     summary.files = [str(path) for path in files]
     for path in files:
         with open_text(path) as handle:
             for line in handle:
-                if not line.startswith(trading_date):
+                if not log_line_in_scope(line, trading_date, active_window):
                     continue
                 summary.total_today_lines += 1
                 classify_line(summary, line)
-    trade_summary = count_trade_csv_rows(trade_dir, symbol, trading_date)
+    trade_summary = count_trade_csv_rows(trade_dir, symbol, trading_date, active_window)
     summary.counts["trade_csv_rows"] = trade_summary.matching_rows
     if trade_summary.total_symbol_rows:
         summary.counts["trade_csv_rows_total"] = trade_summary.total_symbol_rows
     if trade_summary.other_date_rows:
         summary.counts["trade_csv_rows_other_dates"] = trade_summary.other_date_rows
+    if trade_summary.outside_window_rows:
+        summary.counts["trade_csv_rows_outside_window"] = trade_summary.outside_window_rows
     if trade_summary.unscoped_rows:
         summary.counts["trade_csv_rows_unscoped"] = trade_summary.unscoped_rows
     if trade_summary.malformed_files:
@@ -456,13 +537,16 @@ def best_margin_to_dict(best: BestMargin) -> dict[str, object] | None:
     }
 
 
-def build_result(summaries: list[SymbolSummary], trading_date: str, log_dir: Path, trade_dir: Path) -> dict[str, object]:
+def build_result(summaries: list[SymbolSummary], trading_date: str, log_dir: Path, trade_dir: Path, window: AnalysisWindow | None = None) -> dict[str, object]:
     global_counts: Counter[str] = Counter()
     for summary in summaries:
         global_counts.update(summary.counts)
     verdict = verdict_for(global_counts)
+    active_window = window or AnalysisWindow()
     return {
         "date": trading_date,
+        "since": active_window.since,
+        "until": active_window.until,
         "log_dir": str(log_dir),
         "trade_dir": str(trade_dir),
         "verdict": verdict,
@@ -499,6 +583,14 @@ def build_markdown(result: dict[str, object], summaries: list[SymbolSummary]) ->
     lines.append(f"# Live trading day analysis — {result['date']}")
     lines.append("")
     lines.append(f"Verdict: **{result['verdict']}**")
+    if result.get("since") or result.get("until"):
+        lines.append("")
+        lines.append(
+            "Analysis window: "
+            + f"`{result.get('since') or str(result['date']) + 'T00:00:00'}`"
+            + " ≤ log/trade timestamp < "
+            + f"`{result.get('until') or str(result['date']) + 'T23:59:59'}`"
+        )
     lines.append("")
     lines.append("## What counts as real order activity")
     lines.append("")
@@ -579,6 +671,8 @@ def write_outputs(result: dict[str, object], summaries: list[SymbolSummary], out
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", default=date_type.today().isoformat(), help="Trading date to analyze, YYYY-MM-DD")
+    parser.add_argument("--since", default=None, help="Inclusive lower timestamp bound, e.g. 10:00, 10:00:13, or YYYY-MM-DDTHH:MM:SS")
+    parser.add_argument("--until", default=None, help="Exclusive upper timestamp bound, e.g. 13:50, 13:50:00, or YYYY-MM-DDTHH:MM:SS")
     parser.add_argument("--log-dir", type=Path, default=Path("runtime/databento/logs"), help="Directory containing trading-agent-*.log files")
     parser.add_argument("--trade-dir", type=Path, default=Path("runtime/databento/output"), help="Directory containing per-symbol trade CSVs")
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS, help="Comma-separated symbol list")
@@ -591,8 +685,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     symbols = parse_symbols(args.symbols)
-    summaries = [analyze_symbol(args.log_dir, args.trade_dir, symbol, args.date) for symbol in symbols]
-    result = build_result(summaries, args.date, args.log_dir, args.trade_dir)
+    try:
+        window = build_analysis_window(args.since, args.until, args.date)
+    except ValueError as exc:
+        parser.error(str(exc))
+    summaries = [analyze_symbol(args.log_dir, args.trade_dir, symbol, args.date, window) for symbol in symbols]
+    result = build_result(summaries, args.date, args.log_dir, args.trade_dir, window)
     write_outputs(result, summaries, args.output_json, args.output_md)
     print(f"ANALYSIS_JSON={args.output_json}")
     print(f"ANALYSIS_MD={args.output_md}")
