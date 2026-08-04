@@ -259,6 +259,14 @@ public abstract class StrategyEvent {
         }
     }
 
+    public static class SetDataQualityAllowsNewEntriesEvent extends StrategyEvent {
+        public final boolean allow;
+
+        public SetDataQualityAllowsNewEntriesEvent(boolean allow) {
+            this.allow = allow;
+        }
+    }
+
     public static class SetCurrentMarketTimeEvent extends StrategyEvent {
         public final LocalDateTime time;
 

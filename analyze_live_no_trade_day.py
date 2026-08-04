@@ -30,6 +30,7 @@ SETUP_FILTER_RE = re.compile(r"\[AI\.DOWNSTREAM_SETUP_FILTER\].*SETUP_FILTER_PAS
 PROB_THRESHOLD_RE = re.compile(r"\bprob=([0-9.]+).*?\bthreshold=([0-9.]+)")
 ARBITRATION_FAIL_RE = re.compile(r"\[AI\.ENTRY\.ARBITRATION\].*ENTRY_SIDE_SELECTED=FAIL.*?reason=([^\s|]+)")
 ENTRY_GATE_RE = re.compile(r"\[AI\.ENTRY\].*ENTRY_GATE_OPEN=(PASS|FAIL).*?allowNewEntries=([^\s|]+)")
+ENTRY_GATE_DATA_QUALITY_RE = re.compile(r"\bdataQualityAllowsNewEntries=([^\s|]+)")
 MICRO_ENTRY_RE = re.compile(r"\[AI\.MICRO\.(LONG|SHORT)\.ENTRY\].*MICRO_ENTRY_CONFIRMS=(PASS|FAIL)")
 ORDER_SEND_RE = re.compile(r"\[FLOW\]\[DATA\]\[ORDER\.SEND\].*?orderId=([0-9-]+).*?action=([A-Z]+)")
 ORDER_SEND_FILLED_RE = re.compile(r"\bfilled=([0-9]+)\b")
@@ -235,6 +236,11 @@ def classify_line(summary: SymbolSummary, line: str) -> None:
         c[f"entry_gate_{verdict.lower()}"] += 1
         if verdict == "FAIL":
             summary.entry_gate_reasons[f"allowNewEntries={allow_new_entries}"] += 1
+            if data_quality_match := ENTRY_GATE_DATA_QUALITY_RE.search(line):
+                data_quality_allows_new_entries = data_quality_match.group(1)
+                summary.entry_gate_reasons[f"dataQualityAllowsNewEntries={data_quality_allows_new_entries}"] += 1
+                if data_quality_allows_new_entries.lower() == "false":
+                    c["entry_gate_data_quality_false"] += 1
             add_sample(summary, "entry_gate_fail", line)
 
     if match := AI_ENTRY_RE.search(line):
@@ -544,6 +550,8 @@ def build_markdown(result: dict[str, object], summaries: list[SymbolSummary]) ->
         ))
     if global_counts["entry_gate_fail"]:
         lines.append("- Entry gate failures were present; per-symbol details include `allowNewEntries=false` when the strategy was outside its entry window or otherwise gated closed.")
+    if global_counts["entry_gate_data_quality_false"]:
+        lines.append("- Some entry gate failures were caused by `dataQualityAllowsNewEntries=false`, meaning Databento sanity/data-quality temporarily blocked new entries without changing the clock/manual entry gate.")
     lines.append("")
     lines.append("## Samples")
     lines.append("")

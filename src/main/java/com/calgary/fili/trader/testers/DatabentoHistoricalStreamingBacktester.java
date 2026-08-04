@@ -637,6 +637,7 @@ public class DatabentoHistoricalStreamingBacktester extends IBKRTrader {
         System.out.println(
             ">>> [FLOW][INFO][BACKTEST.NO_TRADE_DIAG] entry_gate_blockers"
                 + " allow_new_entries=" + diagnostics.allowNewEntriesBlocked()
+                + " data_quality_new_entries=" + diagnostics.dataQualityNewEntriesBlocked()
                 + " max_trades=" + diagnostics.maxTradesBlocked()
                 + " position_sync=" + diagnostics.positionSyncBlocked()
                 + " hard_stop_cooldown=" + diagnostics.hardStopCooldownBlocked()

@@ -122,6 +122,28 @@ class AnalyzeLiveNoTradeDayTest(unittest.TestCase):
             self.assertEqual(analyzer.real_order_activity_count(summary.counts), 0)
             self.assertEqual(result["verdict"], "NO_TRADE_NO_TODAY_ACTIVITY_SEEN")
 
+    def test_entry_gate_data_quality_blocker_is_counted_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            log_dir = tmp_path / "logs"
+            trade_dir = tmp_path / "output"
+            write_log(
+                log_dir,
+                "NVDA",
+                [
+                    "2026-08-03T11:29:32.036-06:00  INFO 50973 --- [trading-agent] [Strategy-Actor-Thread-NVDA] c.c.f.t.bot.strategy.PingPongStrategy    : >>> [FLOW][COND][AI.ENTRY] ENTRY_GATE_OPEN=FAIL | symbol=NVDA allowNewEntries=true dataQualityAllowsNewEntries=false tradeCount=0 maxTrades=200 positionSynced=true hardStopExitCount=0 maxHardStopsPerDay=3 hardStopCooldownElapsed=true hardStopCooldownRemainingMs=0",
+                ],
+            )
+
+            summary = analyzer.analyze_symbol(log_dir, trade_dir, "NVDA", "2026-08-03")
+            result = analyzer.build_result([summary], "2026-08-03", log_dir, trade_dir)
+
+            self.assertEqual(summary.counts["entry_gate_fail"], 1)
+            self.assertEqual(summary.counts["entry_gate_data_quality_false"], 1)
+            self.assertEqual(summary.entry_gate_reasons["allowNewEntries=true"], 1)
+            self.assertEqual(summary.entry_gate_reasons["dataQualityAllowsNewEntries=false"], 1)
+            self.assertEqual(result["verdict"], "NO_TRADE_MODEL_OR_ENTRY_GATES_REJECTED")
+
     def test_rolled_gzip_logs_are_read_and_best_entry_margin_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

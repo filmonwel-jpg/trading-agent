@@ -1844,9 +1844,11 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         ZonedDateTime barTs = Instant.ofEpochSecond(event.barEpochSec).atZone(ZoneOffset.UTC).withZoneSameInstant(MARKET_ZONE);
         applyMarketSchedule(barTs);
         boolean entryQualityOk = databentoEventAllowsNewEntries(event);
-        if (!entryQualityOk && shopStrategy != null) {
-            databentoFeedHealth.recordRejectedEquityBar(event, System.currentTimeMillis());
-            shopStrategy.setAllowNewEntries(false);
+        if (shopStrategy != null) {
+            shopStrategy.setDataQualityAllowsNewEntries(entryQualityOk);
+            if (!entryQualityOk) {
+                databentoFeedHealth.recordRejectedEquityBar(event, System.currentTimeMillis());
+            }
         }
         flowDataDebug("DATABENTO.BAR", "symbol=" + symbol + " tsEt=" + barTs + " ohlc=" + event.open + "/" + event.high + "/" + event.low + "/" + event.close + " vol=" + event.volume + " bid=" + currentBidPrice + " ask=" + currentAskPrice);
 

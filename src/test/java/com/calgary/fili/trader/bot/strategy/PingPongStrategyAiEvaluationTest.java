@@ -136,6 +136,48 @@ class PingPongStrategyAiEvaluationTest {
     }
 
     @Test
+    void dataQualityEntryGateBlocksAndRecoversWithoutMutatingScheduleGate() throws Exception {
+        IBKRTrader parent = mock(IBKRTrader.class);
+        PingPongStrategy strategy = newStrategy(parent);
+        try {
+            seedFeatureState(strategy);
+            ReflectionTestUtils.setField(strategy, "allowNewEntries", true);
+            ReflectionTestUtils.setField(strategy, "positionSynced", true);
+            ReflectionTestUtils.setField(strategy, "currentPosition", 0);
+            strategy.setAiThresholds(0.68, 0.63, 0.58, 0.60);
+
+            AiPredictor longEntry = mock(AiPredictor.class);
+            AiPredictor shortEntry = mock(AiPredictor.class);
+            AiPredictor longExit = mock(AiPredictor.class);
+            AiPredictor shortExit = mock(AiPredictor.class);
+            when(longEntry.predictProbability(any(float[].class))).thenReturn(0.90);
+            when(shortEntry.predictProbability(any(float[].class))).thenReturn(0.10);
+            configureBasePredictors(strategy, longEntry, shortEntry, longExit, shortExit);
+
+            ReflectionTestUtils.invokeMethod(strategy, "handleSetDataQualityAllowsNewEntries", false);
+            ReflectionTestUtils.invokeMethod(strategy, "askArtificialIntelligence");
+
+            assertTrue((Boolean) ReflectionTestUtils.getField(strategy, "allowNewEntries"));
+            assertFalse((Boolean) ReflectionTestUtils.getField(strategy, "dataQualityAllowsNewEntries"));
+            verify(longEntry, never()).predictProbability(any(float[].class));
+            verify(shortEntry, never()).predictProbability(any(float[].class));
+            verify(parent, never()).placeTrade(anyString(), anyString(), anyDouble(), anyInt(), anyString());
+            assertEquals(1L, strategy.getAiDecisionDiagnostics().dataQualityNewEntriesBlocked());
+
+            ReflectionTestUtils.invokeMethod(strategy, "handleSetDataQualityAllowsNewEntries", true);
+            ReflectionTestUtils.invokeMethod(strategy, "askArtificialIntelligence");
+
+            assertTrue((Boolean) ReflectionTestUtils.getField(strategy, "allowNewEntries"));
+            assertTrue((Boolean) ReflectionTestUtils.getField(strategy, "dataQualityAllowsNewEntries"));
+            verify(longEntry, times(1)).predictProbability(any(float[].class));
+            verify(shortEntry, times(1)).predictProbability(any(float[].class));
+            verify(parent, times(1)).placeTrade("AAPL", "BUY", 100.05, 399, "FAST_LMT");
+        } finally {
+            strategy.stop();
+        }
+    }
+
+    @Test
     void aiDecisionDiagnosticsCaptureBelowThresholdEntryScores() throws Exception {
         IBKRTrader parent = mock(IBKRTrader.class);
         PingPongStrategy strategy = newStrategy(parent);

@@ -100,7 +100,7 @@ public class PingPongStrategy implements TradingStrategy {
     public record AiDecisionDiagnostics(long aiEvaluations, long missingMarketTime, long preMarketBlocked,
                                         long missingPreviousClose, long varianceBlocked, long positionOpenSkipped,
                                         long flatEntryEvaluations, long entryGateOpen, long entryGateClosed,
-                                        long allowNewEntriesBlocked, long maxTradesBlocked,
+                                         long allowNewEntriesBlocked, long dataQualityNewEntriesBlocked, long maxTradesBlocked,
                                         long positionSyncBlocked, long hardStopCooldownBlocked,
                                         long hardStopBudgetBlocked, long buyQuantityBlocked,
                                         long sellQuantityBlocked, long longRsiGateBlocked,
@@ -664,6 +664,7 @@ public class PingPongStrategy implements TradingStrategy {
     private volatile boolean positionSynced = false;
     private volatile boolean inFlightOrder = false;
     private volatile boolean allowNewEntries = true;
+    private volatile boolean dataQualityAllowsNewEntries = true;
     private volatile boolean circuitBreakerTripped = false;
     private int hardStopExitCount = 0;
     private long lastHardStopExitTimeMs = 0L;
@@ -741,6 +742,7 @@ public class PingPongStrategy implements TradingStrategy {
     private long aiEntryGateOpenCount = 0L;
     private long aiEntryGateClosedCount = 0L;
     private long aiAllowNewEntriesBlockedCount = 0L;
+    private long aiDataQualityNewEntriesBlockedCount = 0L;
     private long aiMaxTradesBlockedCount = 0L;
     private long aiPositionSyncBlockedCount = 0L;
     private long aiHardStopCooldownBlockedCount = 0L;
@@ -1823,6 +1825,7 @@ public class PingPongStrategy implements TradingStrategy {
             aiEntryGateOpenCount,
             aiEntryGateClosedCount,
             aiAllowNewEntriesBlockedCount,
+            aiDataQualityNewEntriesBlockedCount,
             aiMaxTradesBlockedCount,
             aiPositionSyncBlockedCount,
             aiHardStopCooldownBlockedCount,
@@ -1915,6 +1918,8 @@ public class PingPongStrategy implements TradingStrategy {
                     handleSetPositionSynced(e.synced);
                 } else if (event instanceof StrategyEvent.SetAllowNewEntriesEvent e) {
                     handleSetAllowNewEntries(e.allow);
+                } else if (event instanceof StrategyEvent.SetDataQualityAllowsNewEntriesEvent e) {
+                    handleSetDataQualityAllowsNewEntries(e.allow);
                 } else if (event instanceof StrategyEvent.SetCurrentMarketTimeEvent e) {
                     handleSetCurrentMarketTime(e.time);
                 } else if (event instanceof StrategyEvent.SetYesterdayCloseEvent e) {
@@ -2034,6 +2039,13 @@ public class PingPongStrategy implements TradingStrategy {
 
     private void handleSetAllowNewEntries(boolean allow) {
         this.allowNewEntries = allow;
+    }
+
+    private void handleSetDataQualityAllowsNewEntries(boolean allow) {
+        if (this.dataQualityAllowsNewEntries != allow) {
+            flowInfo("STRATEGY.STATE", "dataQualityAllowsNewEntries=" + allow + " symbol=" + symbol);
+        }
+        this.dataQualityAllowsNewEntries = allow;
     }
 
     private void handleSetCurrentMarketTime(LocalDateTime time) {
@@ -2520,7 +2532,7 @@ public class PingPongStrategy implements TradingStrategy {
             evaluateMicroExitGuard(microBar, microFeatures);
         }
 
-        if (!MICRO_ENTRY_ENABLED || currentPosition != 0 || !positionSynced || !allowNewEntries || tradeCount >= maxTrades) {
+        if (!MICRO_ENTRY_ENABLED || currentPosition != 0 || !positionSynced || !allowNewEntries || !dataQualityAllowsNewEntries || tradeCount >= maxTrades) {
             return;
         }
         if (!microLongEntryArmed && !microShortEntryArmed) {
@@ -3440,7 +3452,7 @@ public class PingPongStrategy implements TradingStrategy {
         double currentRsi = calculateRsi();
         int currentHour = currentMarketTime.getHour();
         
-        flowAnalyze("AI.INPUT", "symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi) + " position=" + currentPosition + " tradeCount=" + tradeCount + " maxTrades=" + maxTrades + " allowNewEntries=" + allowNewEntries);
+        flowAnalyze("AI.INPUT", "symbol=" + symbol + " rsi=" + String.format("%.2f", currentRsi) + " position=" + currentPosition + " tradeCount=" + tradeCount + " maxTrades=" + maxTrades + " allowNewEntries=" + allowNewEntries + " dataQualityAllowsNewEntries=" + dataQualityAllowsNewEntries);
 
         boolean sessionAllowed = !(currentHour == 9 && currentMarketTime.getMinute() < 30);
         flowCondition("AI.GATE", "SESSION_AFTER_0930", sessionAllowed, "symbol=" + symbol + " time=" + currentMarketTime);
@@ -3620,13 +3632,14 @@ public class PingPongStrategy implements TradingStrategy {
         long hardStopCooldownRemainingMs = Math.max(0L, postHardStopEntryCooldownMs - (nowMs - lastHardStopExitTimeMs));
         boolean hardStopCooldownElapsed = lastHardStopExitTimeMs <= 0L || hardStopCooldownRemainingMs == 0L;
         boolean hardStopBudgetAvailable = hardStopExitCount < maxHardStopsPerDay;
-        boolean entryGateOpen = allowNewEntries && tradeCount < maxTrades && positionSynced && hardStopCooldownElapsed && hardStopBudgetAvailable;
+        boolean entryGateOpen = allowNewEntries && dataQualityAllowsNewEntries && tradeCount < maxTrades && positionSynced && hardStopCooldownElapsed && hardStopBudgetAvailable;
         flowCondition(
             "AI.ENTRY",
             "ENTRY_GATE_OPEN",
             entryGateOpen,
             "symbol=" + symbol
                 + " allowNewEntries=" + allowNewEntries
+                + " dataQualityAllowsNewEntries=" + dataQualityAllowsNewEntries
                 + " tradeCount=" + tradeCount
                 + " maxTrades=" + maxTrades
                 + " positionSynced=" + positionSynced
@@ -3636,7 +3649,7 @@ public class PingPongStrategy implements TradingStrategy {
                 + " hardStopCooldownRemainingMs=" + hardStopCooldownRemainingMs
         );
         if (!entryGateOpen) {
-            recordClosedEntryGate(allowNewEntries, tradeCount, maxTrades, positionSynced, hardStopCooldownElapsed, hardStopBudgetAvailable);
+            recordClosedEntryGate(allowNewEntries, dataQualityAllowsNewEntries, tradeCount, maxTrades, positionSynced, hardStopCooldownElapsed, hardStopBudgetAvailable);
         }
         if (entryGateOpen) {
             aiEntryGateOpenCount++;
@@ -4180,12 +4193,15 @@ public class PingPongStrategy implements TradingStrategy {
         return selected;
     }
 
-    private void recordClosedEntryGate(boolean allowEntries, int tradesSoFar, int maxAllowedTrades,
+    private void recordClosedEntryGate(boolean allowEntries, boolean dataQualityAllowsEntries, int tradesSoFar, int maxAllowedTrades,
                                        boolean synced, boolean hardStopCooldownElapsed,
                                        boolean hardStopBudgetAvailable) {
         aiEntryGateClosedCount++;
         if (!allowEntries) {
             aiAllowNewEntriesBlockedCount++;
+        }
+        if (!dataQualityAllowsEntries) {
+            aiDataQualityNewEntriesBlockedCount++;
         }
         if (tradesSoFar >= maxAllowedTrades) {
             aiMaxTradesBlockedCount++;
@@ -4660,6 +4676,7 @@ public class PingPongStrategy implements TradingStrategy {
             circuitBreakerTripped = false;
             tradeCount = 0;
             allowNewEntries = true;
+            dataQualityAllowsNewEntries = true;
             hardStopExitCount = 0;
             lastHardStopExitTimeMs = 0L;
             dayHigh = 0.0;
@@ -4836,6 +4853,9 @@ public class PingPongStrategy implements TradingStrategy {
     public void setAllowNewEntries(boolean allow) {
         eventQueue.offer(new StrategyEvent.SetAllowNewEntriesEvent(allow));
     }
+    public void setDataQualityAllowsNewEntries(boolean allow) {
+        eventQueue.offer(new StrategyEvent.SetDataQualityAllowsNewEntriesEvent(allow));
+    }
     public void setCurrentMarketTime(LocalDateTime time) {
         eventQueue.offer(new StrategyEvent.SetCurrentMarketTimeEvent(time));
     }
@@ -4856,7 +4876,7 @@ public class PingPongStrategy implements TradingStrategy {
 
     public boolean isDirectionalRegime() { return false; }
     public boolean isRegimeAllowsTrading() { return enabled && !circuitBreakerTripped && tradeCount < maxTrades; }
-    public boolean isArmed() { return allowNewEntries && currentPosition == 0; }
+    public boolean isArmed() { return allowNewEntries && dataQualityAllowsNewEntries && currentPosition == 0; }
     public boolean isCircuitBreakerTripped() { return circuitBreakerTripped; }
     public boolean isVolatile() { return lastDetectedRegime == MarketRegime.VOLATILE; }
     public void setGapPercentage(double gapPercentage) {}
