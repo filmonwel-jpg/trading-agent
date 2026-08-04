@@ -1063,6 +1063,10 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
         requestPositions(PositionSyncMode.PRESERVE_BAR_FORWARDING, "strategy-refresh");
     }
 
+    public void requestPositions(String reason) {
+        requestPositions(PositionSyncMode.PRESERVE_BAR_FORWARDING, reason);
+    }
+
     private void requestPositions(PositionSyncMode mode, String reason) {
         String normalizedReason = (reason == null || reason.isBlank()) ? "ibkr-trader-requestPositions" : reason;
         boolean preserveBarForwarding = mode == PositionSyncMode.PRESERVE_BAR_FORWARDING && positionSyncComplete;
@@ -1074,6 +1078,10 @@ public class IBKRTrader implements CommandLineRunner, EWrapper {
             // Keep bars/features flowing during opportunistic resyncs, but stop new entries until broker state is
             // re-confirmed. Cold-start/reconnect still uses the stricter full gate above.
             shopStrategy.setPositionSynced(false);
+        }
+        if (useSharedIbkrGateway() && !isSharedIbkrGatewayConnected()) {
+            ensureSharedIbkrGatewayConnected(false);
+            registerSymbolWithSharedGateway();
         }
         String initialTransport = isSharedIbkrGatewayConnected() ? "shared-gateway" : ((client != null && client.isConnected()) ? "direct-ibkr" : "unavailable");
         beginPositionSyncAttempt(mode, normalizedReason, preserveBarForwarding, initialTransport);

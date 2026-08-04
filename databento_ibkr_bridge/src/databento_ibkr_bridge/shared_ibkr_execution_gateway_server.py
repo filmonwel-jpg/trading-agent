@@ -440,9 +440,19 @@ class SharedIbkrGatewayProtocolServer:
         active_call_elapsed_ms = 0.0
         if active_call is not None:
             active_call_elapsed_ms = round((time.monotonic() - float(active_call.get("started_at", time.monotonic()))) * 1000.0, 1)
+        gateway_connected_flag = bool(getattr(self.gateway, "_connected", False))
+        dry_run = bool(getattr(self.gateway, "dry_run", False))
+        live_connected = getattr(self.gateway, "is_live_connected", None)
+        connected = bool(live_connected()) if callable(live_connected) else gateway_connected_flag
+        ib_client_connected = None
+        ib_client_check = getattr(self.gateway, "_ib_client_is_connected", None)
+        if not dry_run and callable(ib_client_check):
+            ib_client_connected = bool(ib_client_check())
         return {
-            "connected": bool(getattr(self.gateway, "_connected", False)),
-            "dry_run": bool(getattr(self.gateway, "dry_run", False)),
+            "connected": connected,
+            "gatewayConnectedFlag": gateway_connected_flag,
+            "ibClientConnected": ib_client_connected,
+            "dry_run": dry_run,
             "degraded": bool(getattr(self.gateway, "_degraded_reason", "")),
             "degradedReason": str(getattr(self.gateway, "_degraded_reason", "") or ""),
             "recovering": bool(getattr(self.gateway, "_recovering", False)),

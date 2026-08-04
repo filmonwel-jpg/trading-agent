@@ -210,6 +210,13 @@ public class TradingControlController {
         return response;
     }
 
+    @PostMapping("/position-sync")
+    public Map<String, Object> positionSync(@RequestParam(name = "reason", defaultValue = "manual-control") String reason) {
+        String normalizedReason = (reason == null || reason.isBlank()) ? "manual-control" : reason.trim();
+        trader.requestPositions(normalizedReason);
+        return response("position-sync-requested reason=" + normalizedReason);
+    }
+
     @PostMapping("/flatten")
     public Map<String, Object> flatten() {
         // Flatten is intentionally exposed as an operator endpoint because it is the main emergency/manual recovery

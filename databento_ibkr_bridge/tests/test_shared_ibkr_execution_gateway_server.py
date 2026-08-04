@@ -135,6 +135,33 @@ class SharedIbkrExecutionGatewayServerTest(unittest.TestCase):
         self.assertTrue(any(event.event_type == GatewayEventType.ERROR and "position-sync-failed" in event.detail for event in events))
         self.assertFalse(any(event.event_type == GatewayEventType.POSITION_SYNC_COMPLETED for event in events))
 
+    def test_live_request_position_sync_connection_error_degrades_gateway(self) -> None:
+        gateway = SharedIBKRExecutionGateway.from_config(
+            self._build_config(
+                Path(self.temp_dir.name),
+                dry_run=False,
+                recovery_cooldown_seconds=0.05,
+                recovery_max_cooldown_seconds=0.05,
+            )
+        )
+        fake_ib = _FakeIBClient(positions_error=ConnectionError("Not connected"))
+        gateway._connected = True
+        gateway._ib = fake_ib
+        gateway.register_symbol("AMD")
+        gateway.drain_events()
+
+        with self.assertRaises(ConnectionError):
+            gateway.request_position_sync()
+        snapshot = gateway.snapshot()
+        events = gateway.drain_events()
+
+        self.assertFalse(snapshot.connected)
+        self.assertTrue(snapshot.degraded)
+        self.assertIn("request_position_sync.req_positions", snapshot.degraded_reason)
+        self.assertTrue(fake_ib.disconnected)
+        self.assertIsNotNone(snapshot.next_recovery_attempt_in_seconds)
+        self.assertFalse(any(event.event_type == GatewayEventType.POSITION_SYNC_COMPLETED for event in events))
+
     def test_submit_order_coerces_entries_to_fast_limit_and_default_exits_to_market(self) -> None:
         gateway = SharedIBKRExecutionGateway.from_config(self.cfg, dry_run=True)
         gateway.connect()
@@ -820,11 +847,13 @@ class _FakeIBClient:
         positions: list[_FakePosition] | None = None,
         positions_error: Exception | None = None,
         require_event_loop_for_positions: bool = False,
+        connected: bool = True,
     ) -> None:
         self.qualify_delay_seconds = qualify_delay_seconds
         self.connect_error = connect_error
         self.positions_error = positions_error
         self.require_event_loop_for_positions = require_event_loop_for_positions
+        self.connected = connected
         self.connect_calls = 0
         self.qualify_calls = 0
         self.place_calls = 0
@@ -847,6 +876,10 @@ class _FakeIBClient:
         self.connect_thread_name = threading.current_thread().name
         if self.connect_error is not None:
             raise self.connect_error
+        self.connected = True
+
+    def isConnected(self) -> bool:
+        return self.connected and not self.disconnected
 
     def qualifyContracts(self, contract):
         self.qualify_calls += 1
@@ -884,6 +917,7 @@ class _FakeIBClient:
 
     def disconnect(self) -> None:
         self.disconnected = True
+        self.connected = False
 
 
 class _FakeIBFactory:

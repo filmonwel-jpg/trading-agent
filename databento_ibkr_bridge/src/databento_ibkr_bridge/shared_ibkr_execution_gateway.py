@@ -128,6 +128,11 @@ class SharedIBKRExecutionGateway:
         self._reset_live_ib_executor()
         self._emit(GatewayEventType.DISCONNECTED, detail="gateway-disconnected")
 
+    def is_live_connected(self) -> bool:
+        if self.dry_run:
+            return self._connected
+        return self._connected and self._ib_client_is_connected()
+
     def register_symbol(self, registration: SymbolRegistration | str) -> SymbolExecutionState:
         if isinstance(registration, str):
             registration = SymbolRegistration(symbol=registration)
@@ -158,10 +163,11 @@ class SharedIBKRExecutionGateway:
         req_id = next(self._request_id_counter)
         detail = (command.reason if command else "") or "position-sync"
         self._emit(GatewayEventType.POSITION_SYNC_REQUESTED, req_id=req_id, detail=detail)
-        if self.dry_run or self._ib is None:
+        if self.dry_run:
             for symbol, state in sorted(self._symbols.items()):
                 self.record_position(symbol, position=state.position, avg_cost=state.avg_cost, req_id=req_id, detail="position-sync-dry-run", force_event=True)
         else:
+            self._require_connected()
             with self._track_operation("request_position_sync.refresh_positions", log_start=True, log_success=True):
                 self._refresh_positions(req_id=req_id, force_registered=True)
         self._emit(
@@ -648,7 +654,7 @@ class SharedIBKRExecutionGateway:
             for event in self._recent_events[-200:]
         ]
         return GatewaySnapshot(
-            connected=self._connected,
+            connected=self.is_live_connected(),
             dry_run=self.dry_run,
             degraded=bool(self._degraded_reason),
             degraded_reason=self._degraded_reason,
@@ -774,6 +780,10 @@ class SharedIBKRExecutionGateway:
             detail = f"timeout-after-{timeout:.3f}s"
             self._mark_gateway_degraded(stage=stage, detail=detail, symbol=symbol)
             raise TimeoutError(f"shared IBKR live call timed out stage={stage} symbol={symbol or '<global>'} timeoutSeconds={timeout:.3f}") from exc
+        except Exception as exc:
+            if self._is_ib_disconnect_exception(exc) or (self._connected and not self._ib_client_is_connected()):
+                self._mark_gateway_degraded(stage=stage, detail=self._format_exception_detail(exc), symbol=symbol)
+            raise
 
     def _execute_tracked_ib_call(self, stage: str, symbol: str, callback):
         self._ensure_current_thread_event_loop()
@@ -793,7 +803,40 @@ class SharedIBKRExecutionGateway:
             with contextlib.suppress(Exception):
                 ib.disconnect()
             raise
+        if not self._ib_client_is_connected(ib):
+            with contextlib.suppress(Exception):
+                ib.disconnect()
+            raise ConnectionError("IB client connect returned but isConnected=false")
         return ib
+
+    def _ib_client_is_connected(self, ib: Any | None = None) -> bool:
+        live_ib = self._ib if ib is None else ib
+        if live_ib is None:
+            return False
+        for source in (live_ib, getattr(live_ib, "client", None)):
+            if source is None:
+                continue
+            for attr_name in ("isConnected", "connected"):
+                attr = getattr(source, attr_name, None)
+                if attr is None:
+                    continue
+                try:
+                    value = attr() if callable(attr) else attr
+                except Exception:
+                    return False
+                if value is not None:
+                    return bool(value)
+        # Test doubles and some wrappers may not expose an explicit connectivity accessor. If a live IB object exists
+        # and no accessor is available, preserve the previous optimistic behavior until a broker call fails.
+        return True
+
+    def _is_ib_disconnect_exception(self, exc: Exception) -> bool:
+        text = f"{exc.__class__.__name__}: {exc}".strip().lower()
+        return any(marker in text for marker in ("connectionerror", "not connected", "disconnected", "connection closed", "connection reset"))
+
+    def _format_exception_detail(self, exc: Exception) -> str:
+        detail = str(exc).strip()
+        return exc.__class__.__name__ if not detail else f"{exc.__class__.__name__}: {detail}"
 
     def _mark_gateway_degraded(self, *, stage: str, detail: str, symbol: str = "") -> None:
         summary = f"stage={stage} detail={detail}"
@@ -853,7 +896,9 @@ class SharedIBKRExecutionGateway:
         state.request_ids["account_updates"] = next(self._request_id_counter)
 
     def _require_connected(self) -> None:
-        if not self._connected:
+        if not self.is_live_connected():
+            if self._connected and not self.dry_run and not self._degraded_reason:
+                self._mark_gateway_degraded(stage="connection-check", detail="ib-client-not-connected")
             if self._degraded_reason:
                 next_attempt = self._next_recovery_delay_seconds()
                 if next_attempt is None:

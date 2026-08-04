@@ -71,6 +71,19 @@ class SharedIbkrGatewayHealthTest(unittest.TestCase):
         self.assertGreaterEqual(result.ping_latency_ms or 0.0, 2000.0)
         self.assertGreaterEqual(result.snapshot_latency_ms or 0.0, 2000.0)
 
+    def test_health_payload_reports_stale_ib_client_as_disconnected(self) -> None:
+        server = SharedIbkrGatewayProtocolServer(self.cfg, dry_run=True)
+        self.addCleanup(server._server.server_close)
+        server.gateway.dry_run = False
+        server.gateway._connected = True
+        server.gateway._ib = _DisconnectedIBClient()
+
+        payload = server._health_payload()
+
+        self.assertFalse(payload["connected"])
+        self.assertTrue(payload["gatewayConnectedFlag"])
+        self.assertFalse(payload["ibClientConnected"])
+
     def _shutdown_server(self, server: SharedIbkrGatewayProtocolServer, server_thread: threading.Thread) -> None:
         try:
             server.shutdown()
@@ -184,6 +197,11 @@ class SharedIbkrGatewayHealthTest(unittest.TestCase):
             shared_ibkr_gateway_recovery_cooldown_seconds=5.0,
             shared_ibkr_gateway_recovery_max_cooldown_seconds=60.0,
         )
+
+
+class _DisconnectedIBClient:
+    def isConnected(self) -> bool:
+        return False
 
 
 if __name__ == "__main__":
